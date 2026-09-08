@@ -585,7 +585,7 @@ fn jenkinsfile(opts: &JobOpts) -> String {
 {cred_open}          lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
             sh '''
               set -euo pipefail
-              export PATH="/usr/local/bin:/opt/homebrew/bin:${{HOME}}/.local/bin:${{HOME}}/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${{PATH}}"
+              export PATH="/usr/local/bin:/opt/homebrew/bin:${{HOME}}/.local/bin:${{HOME}}/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:${{PATH}}"
               export PYTHONPATH=.
               test -d "harbor_tasks/${{TASK}}"
               command -v docker >/dev/null

@@ -1,13 +1,13 @@
 use crate::config::MacK3dConfig;
 use crate::error::Result;
-use crate::platform::ensure_macos;
+use crate::platform::ensure_supported_os;
 use crate::runtime::docker;
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::kubectl;
 use crate::runtime::{jenkins, Tools};
 
 pub async fn run(config: &MacK3dConfig) -> Result<()> {
-    ensure_macos()?;
+    ensure_supported_os()?;
 
     let tools = match Tools::from_config(config) {
         Ok(t) => t,
@@ -27,7 +27,10 @@ pub async fn run(config: &MacK3dConfig) -> Result<()> {
     };
 
     let docker_status = docker::status(&tools.docker).await;
-    println!("Docker Desktop:  {docker_status}");
+    println!(
+        "{}:  {docker_status}",
+        crate::platform::docker_display_name()
+    );
 
     let info = k3d::inspect(&tools.k3d, &config.cluster.name).await?;
     println!(

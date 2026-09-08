@@ -2,7 +2,9 @@
 
 ## Overview
 
-`mac-k3d` is a Rust CLI that orchestrates external tools on macOS to provide a local Kubernetes development environment. It does not embed Docker, k3s, or Jenkins — it shells out to installed binaries and manages configuration/state.
+`mac-k3d` is a Rust CLI that orchestrates external tools on **macOS and Linux** to provide a local Kubernetes / LoLBench eval environment. It does not embed Docker, k3s, or Jenkins — it shells out to installed binaries and manages configuration/state.
+
+Platform-specific behavior lives in `src/platform/{macos,linux}.rs` (Docker Desktop vs Engine, Homebrew vs apt, LaunchAgent vs systemd --user).
 
 ```mermaid
 flowchart TB
@@ -69,16 +71,17 @@ Each subcommand is a module with:
 
 Commands shell out to external tools via a shared `runtime` module (planned).
 
-### 4. Platform guard (`src/platform.rs`)
+### 4. Platform adapters (`src/platform/`)
 
-- Enforces macOS-only execution for commands that interact with Docker Desktop.
-- Future: detect Apple Silicon vs Intel for image/arch hints.
+- `ensure_supported_os()` — allows macOS and Linux.
+- Facades for volume roots, package install, Docker ensure/quit, agent daemon, labels, PATH extras.
 
 ### 5. External dependencies
 
 | Tool | Purpose | Required |
 |------|---------|----------|
-| Docker Desktop | Container runtime | Yes |
+| Docker Desktop | Container runtime (macOS) | Yes (macOS) |
+| Docker Engine | Container runtime (Linux) | Yes (Linux) |
 | docker CLI | Health checks, image pulls | Yes |
 | k3d | Create/manage k3s cluster | Yes |
 | kubectl | Cluster interaction | Yes |

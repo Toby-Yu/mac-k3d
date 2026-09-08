@@ -8,7 +8,7 @@ use crate::commands;
 #[command(
     name = "mac-k3d",
     version,
-    about = "Manage k3d + Docker Desktop on macOS (optional Jenkins)",
+    about = "Manage k3d + Docker on macOS and Linux (optional Jenkins)",
     long_about = None
 )]
 pub struct Cli {
@@ -29,7 +29,7 @@ pub enum Command {
     /// Verify prerequisites and prepare the local environment
     Prepare(commands::PrepareArgs),
 
-    /// Start Docker Desktop, k3d cluster, and optional Jenkins
+    /// Start Docker, k3d cluster, and optional Jenkins
     Start(commands::StartArgs),
 
     /// Apply configuration (kubeconfig, port-forwards, Jenkins setup)

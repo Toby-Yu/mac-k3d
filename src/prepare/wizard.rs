@@ -61,12 +61,20 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
     let jenkins_enabled = matches!(role, MacRole::Controller);
     let wants_lolbench = !matches!(role, MacRole::Standalone)
         || Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Set up LoLBench / Harbor on this Mac?")
+            .with_prompt(format!(
+                "Set up LoLBench / Harbor on this {}?",
+                crate::platform::machine_noun()
+            ))
             .default(false)
             .interact()
             .map_err(|_| Error::Cancelled)?;
 
-    let docker = prompt_dependency("Docker Desktop", discovered.docker.as_ref(), true, true)?;
+    let docker = prompt_dependency(
+        crate::platform::docker_display_name(),
+        discovered.docker.as_ref(),
+        true,
+        true,
+    )?;
     let k3d = prompt_dependency("k3d", discovered.k3d.as_ref(), true, false)?;
     let kubectl = prompt_dependency("kubectl", discovered.kubectl.as_ref(), true, false)?;
     let helm = if jenkins_enabled {
@@ -106,7 +114,7 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
     let cpu_cores = resources::logical_cpu_cores();
     let mut jenkins_agent_cfg = JenkinsAgentConfig {
         cpu_cores,
-        labels: vec!["macos".into(), "docker".into(), "lolbench".into()],
+        labels: crate::platform::default_agent_labels(),
         ..JenkinsAgentConfig::default()
     };
     let mut worker_creds: Option<WorkerAgentPrompt> = None;
@@ -140,6 +148,7 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
 
     let mut config = MacK3dConfig {
         role: node_role,
+        platform: Some(crate::platform::platform_label().into()),
         cluster: ClusterConfig {
             name: cluster_name,
             agents,
@@ -193,8 +202,9 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         );
         if let Some(docker_dir) = config.storage.docker_dir() {
             println!(
-                "Recommended Docker data path: {} (move manually in Docker Desktop if desired).",
-                docker_dir.display()
+                "Recommended Docker data path: {} (configure {} data-root if desired).",
+                docker_dir.display(),
+                crate::platform::docker_display_name()
             );
         }
     }
@@ -258,7 +268,7 @@ fn prompt_role() -> Result<MacRole> {
         "CI worker (Jenkins agent only)",
     ];
     let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("What is this Mac's role?")
+        .with_prompt(crate::platform::role_prompt())
         .items(&options)
         .default(0)
         .interact()
@@ -285,10 +295,11 @@ fn prompt_dependency(
             "Use this installation (recommended)".to_string(),
             "Specify a different binary path".to_string(),
         ];
+        let pkg = crate::platform::package_manager_label();
         if is_docker {
-            options.push("Install via Homebrew (not recommended if already installed)".to_string());
+            options.push(format!("Install via {pkg} (not recommended if already installed)"));
         } else {
-            options.push("Install via Homebrew".to_string());
+            options.push(format!("Install via {pkg}"));
         }
         if !required {
             options.push("Skip".to_string());
@@ -311,7 +322,7 @@ fn prompt_dependency(
                     .interact_text()
                     .map_err(|_| Error::Cancelled)?;
                 let app = if is_docker {
-                    Some(PathBuf::from("/Applications/Docker.app"))
+                    crate::platform::docker_app_default()
                 } else {
                     None
                 };
@@ -321,7 +332,7 @@ fn prompt_dependency(
                 source: DependencySource::Install,
                 binary: None,
                 app: if is_docker {
-                    Some(PathBuf::from("/Applications/Docker.app"))
+                    crate::platform::docker_app_default()
                 } else {
                     None
                 },
@@ -337,8 +348,9 @@ fn prompt_dependency(
 
     println!("\n{label}: not found");
 
+    let pkg = crate::platform::package_manager_label();
     let mut options = vec![
-        "Install via Homebrew".to_string(),
+        format!("Install via {pkg}"),
         "Specify path to existing binary".to_string(),
     ];
     if !required {
@@ -357,7 +369,7 @@ fn prompt_dependency(
             source: DependencySource::Install,
             binary: None,
             app: if is_docker {
-                Some(PathBuf::from("/Applications/Docker.app"))
+                crate::platform::docker_app_default()
             } else {
                 None
             },
@@ -368,7 +380,7 @@ fn prompt_dependency(
                 .interact_text()
                 .map_err(|_| Error::Cancelled)?;
             let app = if is_docker {
-                Some(PathBuf::from("/Applications/Docker.app"))
+                crate::platform::docker_app_default()
             } else {
                 None
             };
@@ -429,13 +441,17 @@ fn prompt_harbor(discovered: Option<&DiscoveredTool>, has_uv: bool, has_pipx: bo
     } else if has_pipx {
         println!("  pipx is available (pipx install harbor)");
     } else {
-        println!("  neither uv nor pipx found; install will try Homebrew → uv first");
+        println!("  {}", crate::platform::harbor_bootstrap_hint());
     }
 
+    let skip_msg = format!(
+        "Skip (LoLBench jobs will not work on this {})",
+        crate::platform::machine_noun()
+    );
     let options = [
-        "Install via uv / pipx (recommended)",
-        "Specify path to existing binary",
-        "Skip (LoLBench jobs will not work on this Mac)",
+        "Install via uv / pipx (recommended)".to_string(),
+        "Specify path to existing binary".to_string(),
+        skip_msg,
     ];
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("harbor action")
@@ -621,10 +637,10 @@ fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgent
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
 
-    let labels_default = "macos docker lolbench";
+    let labels_default = crate::platform::default_agent_labels().join(" ");
     let labels_str: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Agent labels (space-separated)")
-        .default(labels_default.into())
+        .default(labels_default)
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
     let labels: Vec<String> = labels_str
@@ -839,7 +855,9 @@ fn print_dep(label: &str, entry: &DependencyEntry) {
             .map(|p| format!("existing ({})", p.display()))
             .unwrap_or_else(|| "existing".into()),
         DependencySource::Install if label.contains("harbor") => "install via uv/pipx".into(),
-        DependencySource::Install => "install via Homebrew".into(),
+        DependencySource::Install => {
+            format!("install via {}", crate::platform::package_manager_label())
+        }
         DependencySource::Skip => "skip".into(),
     };
     println!("{label}:        {detail}");

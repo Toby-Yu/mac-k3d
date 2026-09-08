@@ -5,7 +5,7 @@ use clap::Args;
 use crate::cli::JenkinsMode;
 use crate::config::MacK3dConfig;
 use crate::error::Result;
-use crate::platform::ensure_macos;
+use crate::platform::ensure_supported_os;
 use crate::runtime::docker::{self, DockerStatus};
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::kubectl;
@@ -18,7 +18,7 @@ pub struct StartArgs {
     #[arg(long, value_enum)]
     pub jenkins: Option<JenkinsMode>,
 
-    /// Skip waiting for Docker Desktop to become ready
+    /// Skip waiting for Docker to become ready
     #[arg(long)]
     pub no_wait_docker: bool,
 
@@ -28,18 +28,24 @@ pub struct StartArgs {
 }
 
 pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
-    ensure_macos()?;
+    ensure_supported_os()?;
 
     let tools = Tools::from_config(config)?;
 
     match docker::status(&tools.docker).await {
         DockerStatus::Running => {
-            println!("Docker Desktop is already running.");
+            println!(
+                "{} is already running.",
+                crate::platform::docker_display_name()
+            );
         }
         DockerStatus::Stopped | DockerStatus::Missing => {
             docker::open_desktop(&tools.docker_app).await?;
             if args.no_wait_docker {
-                tracing::warn!("skipping Docker Desktop readiness wait");
+                tracing::warn!(
+                    "skipping {} readiness wait",
+                    crate::platform::docker_display_name()
+                );
             } else {
                 let timeout = Duration::from_secs(config.docker.startup_timeout_secs.max(1));
                 docker::wait_ready(&tools.docker, timeout).await?;

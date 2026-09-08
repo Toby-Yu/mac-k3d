@@ -4,7 +4,7 @@ use clap::Args;
 
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
-use crate::platform::ensure_macos;
+use crate::platform::ensure_supported_os;
 use crate::prepare::{self, ExistingConfigAction};
 
 #[derive(Debug, Args)]
@@ -31,7 +31,7 @@ pub async fn run(
     config: &MacK3dConfig,
     config_path: Option<&Path>,
 ) -> Result<()> {
-    ensure_macos()?;
+    ensure_supported_os()?;
 
     let config_path: PathBuf = config_path
         .map(PathBuf::from)

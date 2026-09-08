@@ -1,0 +1,40 @@
+# Example controller config.
+# mac-k3d prepare -i   then mac-k3d start && mac-k3d config --show-jenkins
+
+role: controller
+platform: linux   # or macos
+
+cluster:
+  name: mac-k3d
+  agents: 0
+
+jenkins:
+  enabled: true
+  namespace: jenkins
+  release_name: jenkins
+  host_port: 9080
+
+storage:
+  base_dir: /var/lib/mac-k3d
+
+dependencies:
+  docker:
+    source: existing
+    binary: /usr/bin/docker
+  k3d:
+    source: existing
+    binary: /usr/local/bin/k3d
+  kubectl:
+    source: existing
+    binary: /usr/bin/kubectl
+  helm:
+    source: existing
+    binary: /usr/local/bin/helm
+
+jenkins_job:
+  default_harness: oracle
+  default_task: ruff_1
+  default_model: openrouter/deepseek/deepseek-v4-pro
+
+resources:
+  cpu_cores_label: CPU_CORES

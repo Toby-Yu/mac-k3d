@@ -7,29 +7,10 @@ const GB: u64 = 1024 * 1024 * 1024;
 
 /// Logical CPU count for CPU_CORES registration.
 pub fn logical_cpu_cores() -> u32 {
-    Command::new("sysctl")
-        .args(["-n", "hw.logicalcpu"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .parse()
-                .ok()
-        })
-        .or_else(|| {
-            Command::new("sysctl")
-                .args(["-n", "hw.ncpu"])
-                .output()
-                .ok()
-                .and_then(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .trim()
-                        .parse()
-                        .ok()
-                })
-        })
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
         .unwrap_or(1)
+        .max(1)
 }
 
 /// Ensure free space on the volume containing `path` is at least `min_gb`.

@@ -4,7 +4,7 @@ use clap::Args;
 
 use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
-use crate::platform::ensure_macos;
+use crate::platform::ensure_supported_os;
 use crate::prepare::{jenkins_agent, jenkins_credentials, jenkins_job};
 use crate::runtime::{jenkins, kubectl, k3d, Tools};
 
@@ -36,7 +36,7 @@ pub struct ConfigArgs {
 }
 
 pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
-    ensure_macos()?;
+    ensure_supported_os()?;
 
     let tools = Tools::from_config(config)?;
 

@@ -424,16 +424,32 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         .clone()
         .unwrap_or_else(default_remote_fs);
 
-    download_agent_jar(&url, &jar)?;
+    // Controller may not be up yet during first prepare — do not abort the whole wizard.
+    let jar_ok = match download_agent_jar(&url, &jar) {
+        Ok(()) => true,
+        Err(e) => {
+            println!(
+                "Note: could not download agent.jar from {url} ({e}).\n\
+                 Jenkins controller is probably not running yet.\n\
+                 Config will still be saved. After `mac-k3d start` / Jenkins is up, run:\n\
+                   mac-k3d config -c <this-worker-config>"
+            );
+            false
+        }
+    };
 
-    let secret = try_register_node(
-        &url,
-        &name,
-        &remote_fs,
-        &config.jenkins_agent.labels,
-        config.jenkins_agent.api_user.as_deref(),
-        config.jenkins_agent.api_token.as_deref(),
-    )?;
+    let secret = if jar_ok {
+        try_register_node(
+            &url,
+            &name,
+            &remote_fs,
+            &config.jenkins_agent.labels,
+            config.jenkins_agent.api_user.as_deref(),
+            config.jenkins_agent.api_token.as_deref(),
+        )?
+    } else {
+        None
+    };
     let secret_placeholder = secret.unwrap_or_else(|| "REPLACE_ME".into());
 
     let java_bin = config
@@ -444,7 +460,6 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         .filter(|p| p.exists())
         .map(|p| p.display().to_string())
         .filter(|s| {
-            // Prefer configured path only if it actually runs.
             std::process::Command::new(s)
                 .arg("-version")
                 .output()
@@ -467,19 +482,26 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         &secret_placeholder,
         &java_bin,
     )?;
-    println!("Wrote agent launch script: {} (java: {java_bin})", script.display());
+    println!(
+        "Wrote agent launch script: {} (java: {java_bin})",
+        script.display()
+    );
 
-    resources::register_agent_cpu_cores(
-        &url,
-        &name,
-        &config.resources.cpu_cores_label,
-        config.jenkins_agent.cpu_cores,
-        config.jenkins_agent.api_user.as_deref(),
-        config.jenkins_agent.api_token.as_deref(),
-    )?;
-
-    // Background + KeepAlive via launchd until teardown/clean.
-    crate::prepare::agent_service::install_and_start(&script, &remote_fs)?;
+    if jar_ok {
+        resources::register_agent_cpu_cores(
+            &url,
+            &name,
+            &config.resources.cpu_cores_label,
+            config.jenkins_agent.cpu_cores,
+            config.jenkins_agent.api_user.as_deref(),
+            config.jenkins_agent.api_token.as_deref(),
+        )?;
+        crate::prepare::agent_service::install_and_start(&script, &remote_fs)?;
+    } else {
+        println!(
+            "Skipped agent daemon start until agent.jar is available from the controller."
+        );
+    }
 
     Ok(())
 }

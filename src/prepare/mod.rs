@@ -57,7 +57,7 @@ pub fn validate(config: &MacK3dConfig) -> Result<()> {
                 } else if is_required {
                     problems.push(format!("{name} has source=existing but no binary path"));
                 }
-                if name == "docker" {
+                if name == "docker" && crate::platform::requires_docker_app() {
                     if let Some(app) = &entry.app {
                         if !app.exists() {
                             problems.push(format!(
@@ -145,7 +145,12 @@ pub fn validate(config: &MacK3dConfig) -> Result<()> {
 }
 
 fn required_dependencies(config: &MacK3dConfig) -> Vec<&'static str> {
-    let mut deps = vec!["docker", "k3d", "kubectl"];
+    let mut deps = vec!["docker"];
+    // k3d/kubectl only required when this machine hosts a local cluster.
+    if !matches!(config.role, NodeRole::Worker) {
+        deps.push("k3d");
+        deps.push("kubectl");
+    }
     if config.jenkins.enabled || matches!(config.role, NodeRole::Controller) {
         deps.push("helm");
     }

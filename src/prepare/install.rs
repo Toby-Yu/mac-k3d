@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::config::{DependencyEntry, DependencySource};
 use crate::error::{Error, Result};
+use crate::platform;
 use crate::prepare::discovery::{self, DiscoveredTool};
 use crate::prepare::path_env;
 
@@ -10,11 +11,16 @@ use crate::prepare::path_env;
 pub fn install_and_discover(name: &str) -> Result<DependencyEntry> {
     match name {
         "harbor" => install_harbor(),
-        "java" => install_via_brew(&["install", "--cask", "temurin"], "java"),
-        "docker" => install_via_brew(&["install", "--cask", "docker"], "docker"),
-        "k3d" => install_via_brew(&["install", "k3d"], "k3d"),
-        "kubectl" => install_via_brew(&["install", "kubectl"], "kubectl"),
-        "helm" => install_via_brew(&["install", "helm"], "helm"),
+        "java" | "docker" | "k3d" | "kubectl" | "helm" => {
+            platform::install_package(name)?;
+            discover_single(name)
+                .map(|t| tool_to_entry(&t))
+                .ok_or_else(|| {
+                    Error::DependencyMissing(format!(
+                        "{name} installed but binary not found on PATH"
+                    ))
+                })
+        }
         other => Err(Error::Config(format!(
             "unknown dependency for install: {other}"
         ))),
@@ -22,7 +28,6 @@ pub fn install_and_discover(name: &str) -> Result<DependencyEntry> {
 }
 
 fn install_harbor() -> Result<DependencyEntry> {
-    // uv installs shims into ~/.local/bin; put it on PATH for this process first.
     path_env::ensure_user_local_bin_in_process()?;
 
     if discovery::which("uv").is_some() {
@@ -31,18 +36,25 @@ fn install_harbor() -> Result<DependencyEntry> {
     } else if discovery::which("pipx").is_some() {
         tracing::info!("installing harbor via pipx");
         run_cmd("pipx", &["install", "harbor"])?;
-    } else if brew_available() {
-        tracing::info!("installing uv via Homebrew, then harbor");
-        run_cmd("brew", &["install", "uv"])?;
+    } else if platform::package_install_available() {
+        tracing::info!("bootstrapping uv, then harbor");
+        platform::install_package("uv")?;
         path_env::ensure_user_local_bin_in_process()?;
+        // uv may land in ~/.local/bin or ~/.cargo/bin after curl install.
+        if discovery::which("uv").is_none() {
+            if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                let _ = path_env::prepend_to_process_path(&home.join(".cargo").join("bin"));
+                let _ = path_env::prepend_to_process_path(&home.join(".local").join("bin"));
+            }
+        }
         run_cmd("uv", &["tool", "install", "harbor"])?;
     } else {
-        return Err(Error::DependencyMissing(
-            "harbor: need uv, pipx, or Homebrew to install".into(),
-        ));
+        return Err(Error::DependencyMissing(format!(
+            "harbor: need uv, pipx, or {} to install",
+            platform::package_manager_label()
+        )));
     }
 
-    // Persist PATH in shell RC only after a successful install (prompt once).
     path_env::ensure_user_local_bin(true)?;
 
     discover_harbor()
@@ -65,21 +77,6 @@ fn discover_harbor() -> Option<DiscoveredTool> {
     })
 }
 
-fn install_via_brew(brew_args: &[&str], name: &str) -> Result<DependencyEntry> {
-    if !brew_available() {
-        return Err(Error::DependencyMissing(format!(
-            "Homebrew not found; install {name} manually"
-        )));
-    }
-    tracing::info!(dependency = name, "installing via Homebrew");
-    run_cmd("brew", brew_args)?;
-    discover_single(name)
-        .map(|t| tool_to_entry(&t))
-        .ok_or_else(|| {
-            Error::DependencyMissing(format!("{name} installed but binary not found on PATH"))
-        })
-}
-
 fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     let status = Command::new(program).args(args).status().map_err(|e| {
         Error::CommandFailed {
@@ -97,7 +94,14 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
 }
 
 pub fn brew_available() -> bool {
-    discovery::which("brew").is_some()
+    #[cfg(target_os = "macos")]
+    {
+        discovery::which("brew").is_some()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 fn discover_single(name: &str) -> Option<DiscoveredTool> {
@@ -140,7 +144,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn brew_available_on_macos_ci() {
+    fn package_manager_probe() {
+        let _ = platform::package_install_available();
         let _ = brew_available();
     }
 }

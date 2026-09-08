@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::{DependenciesConfig, DependencyEntry, DependencySource};
+use crate::platform;
 
 /// Result of scanning the system for installed tools.
 #[derive(Debug, Default)]
@@ -38,46 +39,59 @@ pub fn discover_all() -> DiscoveredDeps {
 }
 
 fn discover_docker() -> Option<DiscoveredTool> {
-    let app = PathBuf::from("/Applications/Docker.app");
-    let app_exists = app.exists();
+    let app = platform::docker_app_default().filter(|p| p.exists());
 
     let binary = which("docker").or_else(|| {
-        ["/usr/local/bin/docker", "/opt/homebrew/bin/docker"]
+        ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/usr/bin/docker"]
             .map(PathBuf::from)
             .into_iter()
             .find(|p| p.exists())
     });
 
-    match (app_exists, binary) {
-        (false, None) => None,
+    match (app.as_ref(), binary) {
+        (None, None) => None,
         (_, Some(binary)) => Some(DiscoveredTool {
             binary,
-            app: app_exists.then_some(app),
+            app,
             version_hint: None,
         }),
-        (true, None) => Some(DiscoveredTool {
+        (Some(app), None) if platform::requires_docker_app() => Some(DiscoveredTool {
             binary: PathBuf::from("/usr/local/bin/docker"),
-            app: Some(app),
+            app: Some(app.clone()),
             version_hint: None,
         }),
+        (Some(_), None) => None,
     }
 }
 
 fn discover_java() -> Option<DiscoveredTool> {
-    // Prefer a real JDK from java_home; /usr/bin/java is often Apple's stub.
-    if let Ok(output) = Command::new("/usr/libexec/java_home").output() {
-        if output.status.success() {
-            let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !home.is_empty() {
-                let binary = PathBuf::from(&home).join("bin/java");
-                if java_runtime_works(&binary) {
-                    return Some(DiscoveredTool {
-                        binary,
-                        app: None,
-                        version_hint: Some(home),
-                    });
+    // macOS: prefer a real JDK from java_home; /usr/bin/java is often Apple's stub.
+    if cfg!(target_os = "macos") {
+        if let Ok(output) = Command::new("/usr/libexec/java_home").output() {
+            if output.status.success() {
+                let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !home.is_empty() {
+                    let binary = PathBuf::from(&home).join("bin/java");
+                    if java_runtime_works(&binary) {
+                        return Some(DiscoveredTool {
+                            binary,
+                            app: None,
+                            version_hint: Some(home),
+                        });
+                    }
                 }
             }
+        }
+    }
+
+    if let Ok(home) = std::env::var("JAVA_HOME") {
+        let binary = PathBuf::from(&home).join("bin/java");
+        if java_runtime_works(&binary) {
+            return Some(DiscoveredTool {
+                binary,
+                app: None,
+                version_hint: Some(home),
+            });
         }
     }
 
@@ -159,11 +173,9 @@ pub fn find_lolbench_checkouts() -> Vec<PathBuf> {
         candidates.push(home.join("LoLBench-Preview"));
     }
 
-    if let Ok(entries) = std::fs::read_dir("/Volumes") {
-        for entry in entries.flatten() {
-            let p = entry.path().join("github/LoLBench-Preview");
-            candidates.push(p);
-        }
+    for root in platform::scan_extra_mount_roots() {
+        candidates.push(root.join("github/LoLBench-Preview"));
+        candidates.push(root.join("LoLBench-Preview"));
     }
 
     for path in candidates {

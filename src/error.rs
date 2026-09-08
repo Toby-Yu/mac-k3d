@@ -16,7 +16,7 @@ pub enum Error {
     #[error("setup cancelled by user")]
     Cancelled,
 
-    #[error("platform not supported: macOS required")]
+    #[error("platform not supported: macOS or Linux required")]
     UnsupportedPlatform,
 
     #[error("command failed: {cmd}")]

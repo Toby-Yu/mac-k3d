@@ -63,7 +63,7 @@ Heavy artifacts should live on a volume with enough free space. Small config/sta
 
 ### Volume selection
 
-1. Enumerate mounted volumes (`/`, `/Volumes/*`).
+1. Enumerate mounted volumes (`/` plus OS extras: macOS `/Volumes/*`, Linux `/mnt`, `/media`, `/data*`).
 2. Compute available space per volume.
 3. **Default**: volume with the most free space.
 4. Present top candidates; allow custom path.
@@ -79,12 +79,12 @@ Discover first; never uninstall without consent.
 
 | Name | Required | Discovery / install |
 |------|----------|---------------------|
-| Docker Desktop | Yes | `/Applications/Docker.app`, `which docker` / Homebrew cask |
-| k3d | Yes | `which k3d` / `brew install k3d` |
-| kubectl | Yes | `which kubectl` / `brew install kubectl` |
-| helm | Controller | `which helm` / `brew install helm` |
+| Docker Desktop / Engine | Yes | macOS: `Docker.app` / brew cask; Linux: `which docker` / `apt install docker.io` |
+| k3d | Controller / standalone | `which k3d` / brew or curl install script |
+| kubectl | Controller / standalone | `which kubectl` / brew or apt/curl |
+| helm | Controller | `which helm` / brew or get-helm-3 |
 | harbor | Worker / LoLBench | `which harbor` / `uv tool install harbor` or `pipx install harbor` |
-| java | Worker (Jenkins agent) | `which java`, `/usr/libexec/java_home` / Temurin via brew |
+| java | Worker (Jenkins agent) | macOS: `java_home`; Linux: `JAVA_HOME` / `which java` / Temurin or openjdk |
 | uv or pipx | If installing Harbor | `which uv` / `which pipx` |
 
 ### Harbor install prompt
@@ -116,7 +116,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ## Part 3: Role
 
 ```text
-What is this Mac's role?
+What is this machine's role?   # macOS wizard may still say "Mac"
 
   [1] Local development only (no Jenkins)
   [2] CI controller (Jenkins in k3d)
@@ -125,7 +125,7 @@ What is this Mac's role?
 Choice [1]:
 ```
 
-Stored as `role: standalone | controller | worker` and `jenkins.enabled` (true only for controller).
+Stored as `role: standalone | controller | worker` and `jenkins.enabled` (true only for controller). Config may also record `platform: macos | linux`.
 
 ---
 
@@ -214,8 +214,12 @@ Then prepare:
 
    - Create node if missing: name, remote FS, labels (`macos docker lolbench`), executors, launch method **Inbound**.
    - Read connection secret from `slave-agent.jnlp`.
-4. Writes a local launch script and installs a **LaunchAgent** (`com.mac-k3d.jenkins-agent`) with `KeepAlive` so the agent runs in the background until `teardown` / `clean`.
+4. Writes a local launch script and installs a persistent agent daemon:
+   - **macOS:** LaunchAgent `com.mac-k3d.jenkins-agent` with `KeepAlive`
+   - **Linux:** systemd user unit `mac-k3d-jenkins-agent.service` (use `loginctl enable-linger $USER`)
 5. **Creates Lockable Resources** on the controller: `{agent}-core-1` … `{agent}-core-N` with labels `CPU_CORES {agent}` (N = logical CPU count), via Jenkins Script Console API when `api_user` / `api_token` are set.
+
+Default agent labels are OS-aware: `macos docker lolbench` or `linux docker lolbench`.
 
 `api_user` / `api_token` are saved in config (plaintext for now; encrypt later). `mac-k3d config` on a worker re-runs agent registration **and** Lockable Resources create using those fields. The token needs permission to run `/scriptText` (admin is fine).
 
@@ -301,11 +305,13 @@ resources:
 | `src/prepare/volumes.rs` | Mounts, free space, disk minimum check |
 | `src/prepare/discovery.rs` | docker/k3d/kubectl/helm/harbor/java/uv/pipx + LoLBench path search |
 | `src/prepare/wizard.rs` | Prompts including role, LoLBench, worker Jenkins URL |
-| `src/prepare/install.rs` | brew, `uv tool install harbor`, `pipx install harbor` |
+| `src/prepare/install.rs` | OS package install via `platform` (brew / apt+curl), Harbor via uv/pipx |
 | `src/prepare/lolbench.rs` | clone / release unpack helpers |
 | `src/prepare/jenkins_agent.rs` | download agent.jar, REST create node, write launch script |
 | `src/prepare/jenkins_job.rs` | create Pipeline job `lolbench_one_task` on controller |
 | `src/prepare/resources.rs` | CPU_CORES detection + Jenkins lockable-resource API (controller) |
+| `src/prepare/agent_service.rs` | Thin wrapper → LaunchAgent (macOS) or systemd --user (Linux) |
+| `src/platform/{macos,linux}.rs` | OS adapters for mounts, packages, Docker, agent daemon |
 
 ---
 

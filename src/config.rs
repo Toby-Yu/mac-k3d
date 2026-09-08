@@ -11,6 +11,9 @@ use crate::error::{Error, Result};
 pub struct MacK3dConfig {
     /// Machine role from prepare wizard.
     pub role: NodeRole,
+    /// Host OS recorded by prepare (`macos` | `linux`); informational.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
     pub cluster: ClusterConfig,
     pub jenkins: JenkinsConfig,
     pub docker: DockerConfig,
@@ -202,6 +205,7 @@ impl Default for MacK3dConfig {
     fn default() -> Self {
         Self {
             role: NodeRole::Standalone,
+            platform: None,
             cluster: ClusterConfig {
                 name: "mac-k3d".into(),
                 agents: 0,
@@ -226,11 +230,7 @@ impl Default for MacK3dConfig {
             jenkins_agent: JenkinsAgentConfig {
                 controller_url: None,
                 name: None,
-                labels: vec![
-                    "macos".into(),
-                    "docker".into(),
-                    "lolbench".into(),
-                ],
+                labels: crate::platform::default_agent_labels(),
                 remote_fs: None,
                 agent_jar: None,
                 cpu_cores: 0,
