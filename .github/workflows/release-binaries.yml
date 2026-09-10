@@ -29,9 +29,6 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: mac-k3d-linux-aarch64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            asset: mac-k3d-darwin-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
             asset: mac-k3d-darwin-aarch64

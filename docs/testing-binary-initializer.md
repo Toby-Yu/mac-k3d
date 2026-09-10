@@ -80,7 +80,7 @@ Role **CI worker**, Jenkins URL `:9080`, apply now (`config` only; **not** `star
 
 ## T6 — macOS (checklist)
 
-Download `mac-k3d-darwin-aarch64` (or x86_64), `xattr -d com.apple.quarantine`, run in Terminal.app. Let setup install Docker Desktop if asked; open the first GUI window.
+Download `mac-k3d-darwin-aarch64`, `xattr -d com.apple.quarantine`, run in Terminal.app. Let setup install Docker Desktop if asked; open the first GUI window.
 
 **Expected:** same wizard; LaunchAgent `com.mac-k3d.jenkins-agent` after token + `config`; Jenkins node online. Double-click of an unsigned binary is **not** supported. Mac can be signed off later than Linux.
 
