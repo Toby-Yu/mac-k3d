@@ -8,42 +8,9 @@ For topology and scheduling design, see [deployment.md](deployment.md). For conf
 
 ## Prerequisites
 
-### macOS
+**Users:** download a Release binary and run `mac-k3d setup`. The wizard installs Docker (and k3d/kubectl/helm/Java) when you choose **Install**. See [initializer-new-machine.md](initializer-new-machine.md).
 
-| Requirement | Notes |
-|-------------|-------|
-| macOS 13+ | Apple Silicon or Intel |
-| Docker Desktop | Container runtime |
-| k3d / kubectl | Cluster management (controller/standalone) |
-| Helm | Required only on the Jenkins controller |
-
-```bash
-brew install --cask docker
-brew install k3d kubectl helm
-```
-
-### Linux (Ubuntu/Debian)
-
-| Requirement | Notes |
-|-------------|-------|
-| Docker Engine | `docker.io` or docker-ce; user in `docker` group |
-| k3d / kubectl / helm | Controller/standalone only |
-| systemd --user | Jenkins agent persistence |
-| linger | `loginctl enable-linger $USER` so agents survive logout |
-
-```bash
-sudo apt-get update
-sudo apt-get install -y docker.io openjdk-17-jre-headless
-sudo usermod -aG docker "$USER"
-# log out/in, then:
-curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-# kubectl/helm: see prepare auto-install or official docs
-loginctl enable-linger "$USER"
-```
-
-Or let `mac-k3d prepare` install via apt/curl when prompted.
-
-Open Docker once and ensure `docker info` succeeds before continuing.
+If auto-install fails: Linux `sudo apt-get install -y docker.io` then log out/in; macOS Homebrew + `brew install --cask docker` (or Docker Desktop from docker.com) and open the app.
 
 ---
 

@@ -160,6 +160,12 @@ fn apt_install(packages: &[&str]) -> Result<()> {
     }
 }
 
+fn current_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "unknown".into())
+}
+
 fn install_docker_engine() -> Result<()> {
     if let Err(e) = apt_install(&["docker.io"]) {
         tracing::warn!(error = %e, "apt install docker.io failed");
@@ -172,11 +178,31 @@ fn install_docker_engine() -> Result<()> {
     let _ = Command::new("sudo")
         .args(["systemctl", "enable", "--now", "docker"])
         .status();
-    println!(
-        "Note: if `docker info` fails with permission denied, run:\n  \
-         sudo usermod -aG docker \"$USER\"\n  then log out and back in."
-    );
+    let user = current_user();
+    if user != "unknown" && user != "root" {
+        let _ = run_cmd("sudo", &["usermod", "-aG", "docker", &user]);
+        let _ = Command::new("loginctl")
+            .args(["enable-linger", &user])
+            .status();
+    }
+    let info_ok = Command::new("docker")
+        .arg("info")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !info_ok {
+        return Err(Error::Validation(format!(
+            "Docker Engine is installed, but this shell cannot talk to it yet \
+             (usually the docker group is not active until a new login).\n{}",
+            docker_not_ready_hint()
+        )));
+    }
     Ok(())
+}
+
+pub fn docker_not_ready_hint() -> &'static str {
+    "Log out of the desktop completely, log back in, then run `mac-k3d setup` again \
+     so your docker group applies. Check: groups | grep docker; sudo systemctl status docker"
 }
 
 fn install_k3d_curl() -> Result<()> {
@@ -351,5 +377,12 @@ mod tests {
         assert!(unit_path()
             .to_string_lossy()
             .contains("mac-k3d-jenkins-agent.service"));
+    }
+
+    #[test]
+    fn docker_hint_mentions_logout() {
+        let h = docker_not_ready_hint();
+        assert!(h.contains("Log out"), "{h}");
+        assert!(h.contains("mac-k3d setup"), "{h}");
     }
 }

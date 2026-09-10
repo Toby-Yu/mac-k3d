@@ -1,31 +1,32 @@
 # mac-k3d
 
-A Rust CLI for preparing, starting, configuring, tearing down, and cleaning up a local development / CI eval environment on **macOS and Linux**:
+Turn a **new Linux or Mac** into a **Jenkins controller or worker**. Download a GitHub Release binary; it installs Docker and the rest.
 
-- **Docker** — Docker Desktop (macOS) or Docker Engine (Linux)
-- **k3d** — lightweight Kubernetes (k3s in Docker); required for controller/standalone
-- **Jenkins** (optional) — CI/CD in-cluster on controllers; agents on workers. Job `lolbench_one_task` supports `EVAL_MODE=binary` (iCode `-full-` tarball) or `source` (git + uv in the job). See [docs/icode-ci-new-machine.md](docs/icode-ci-new-machine.md).
-
-## Requirements
-
-### macOS
-- Docker Desktop
-- Homebrew (for auto-install of tools)
-- [k3d](https://k3d.io/), [kubectl](https://kubernetes.io/docs/tasks/tools/) (controller/standalone)
-
-### Linux (Ubuntu/Debian tested)
-- Docker Engine (`docker.io` or docker-ce); user in `docker` group
-- `apt` for auto-install (other distros: install tools manually / specify paths)
-- systemd --user for Jenkins agent (run `loginctl enable-linger $USER` so agents survive logout)
-- k3d / kubectl / helm for controller/standalone roles
-
-Optional (Jenkins controller): [Helm](https://helm.sh/)
+- **Controller** — Docker → k3d → Jenkins UI (`http://localhost:9080`)
+- **Worker** — Docker + Java + Jenkins inbound agent (not a k3d node)
 
 Users do **not** need Rust. Developers who build from source do.
 
+## Requirements
+
+The binary installs Docker, k3d, kubectl, helm, and Java when you choose **Install** in the wizard (`apt` on Ubuntu/Debian, Homebrew on macOS).
+
+Leftovers it cannot hide:
+
+- **Linux:** one logout after the `docker` group is added, then re-run `mac-k3d setup`
+- **macOS:** first Docker Desktop window (and Homebrew if missing)
+- **sudo** / brew for package install
+- **Worker:** paste a Jenkins API token from the UI
+
+If auto-install fails, install Docker yourself and re-run setup ([docs/initializer-new-machine.md](docs/initializer-new-machine.md)).
+
 ## Install (users)
 
-Download the asset for your OS/arch from the GitHub **Releases** page (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-x86_64`, or `mac-k3d-darwin-aarch64`):
+1. Download the asset for your OS/arch from this repo’s GitHub **Releases** page (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-x86_64`, or `mac-k3d-darwin-aarch64`).
+2. `chmod +x` (macOS: also `xattr -d com.apple.quarantine`).
+3. Run `./mac-k3d` or `./mac-k3d setup -c ~/.config/mac-k3d/config.yaml` (controller) / `worker.yaml` (worker).
+4. Choose the role; let it **Install** Docker if asked.
+5. Controller: open `http://localhost:9080`. Worker: paste API token, then `mac-k3d config -c worker.yaml` if needed.
 
 ```bash
 chmod +x mac-k3d-linux-x86_64
@@ -37,7 +38,7 @@ mkdir -p ~/.local/bin
 cp mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
 ```
 
-Open **Terminal** (do not rely on double-click). Then follow [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
+Open **Terminal** (do not rely on double-click). Full walkthrough: [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
 
 ## Install (developers)
 

@@ -68,6 +68,11 @@ pub fn docker_display_name() -> &'static str {
     os::docker_display_name()
 }
 
+/// What to do when `docker info` has no Server after install (Linux logout, macOS Desktop).
+pub fn docker_not_ready_hint() -> &'static str {
+    os::docker_not_ready_hint()
+}
+
 pub fn package_manager_label() -> &'static str {
     os::package_manager_label()
 }

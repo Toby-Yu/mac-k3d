@@ -62,14 +62,10 @@ pub async fn wait_ready(docker: &Path, timeout: Duration) -> Result<()> {
             return Ok(());
         }
         if start.elapsed() >= timeout {
-            let hint = if cfg!(target_os = "linux") {
-                " (check: sudo systemctl status docker; sudo usermod -aG docker $USER)"
-            } else {
-                ""
-            };
             return Err(Error::Validation(format!(
-                "{name} did not become ready within {}s{hint}",
-                timeout.as_secs()
+                "{name} did not become ready within {}s. {}",
+                timeout.as_secs(),
+                platform::docker_not_ready_hint()
             )));
         }
         tokio::time::sleep(Duration::from_secs(2)).await;

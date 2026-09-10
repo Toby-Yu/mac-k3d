@@ -72,10 +72,66 @@ pub fn package_install_available() -> bool {
     which("brew").is_some()
 }
 
-pub fn install_package(name: &str) -> Result<()> {
+pub fn docker_not_ready_hint() -> &'static str {
+    "Open Docker Desktop and wait until the menu-bar whale is idle, then re-run `mac-k3d setup`. \
+     Download: https://www.docker.com/products/docker-desktop/"
+}
+
+fn prepend_brew_paths() {
+    let extra = ["/opt/homebrew/bin", "/usr/local/bin"];
+    let old = std::env::var("PATH").unwrap_or_default();
+    let mut parts: Vec<String> = extra.iter().map(|s| (*s).to_string()).collect();
+    if !old.is_empty() {
+        parts.push(old);
+    }
+    std::env::set_var("PATH", parts.join(":"));
+}
+
+fn ensure_homebrew() -> Result<()> {
+    if package_install_available() {
+        return Ok(());
+    }
+    println!(
+        "Homebrew not found (needed to install Docker Desktop from this binary).\n\
+         https://brew.sh\n\
+         Or install Docker Desktop: https://www.docker.com/products/docker-desktop/"
+    );
+    if !atty::is(atty::Stream::Stdin) {
+        return Err(Error::DependencyMissing(
+            "Homebrew not found; install from https://brew.sh then re-run mac-k3d setup".into(),
+        ));
+    }
+    let ok = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+        .with_prompt("Run the official Homebrew install script now?")
+        .default(true)
+        .interact()
+        .map_err(|_| Error::Cancelled)?;
+    if !ok {
+        return Err(Error::DependencyMissing(
+            "Homebrew not found; install from https://brew.sh or Docker Desktop from docker.com"
+                .into(),
+        ));
+    }
+    println!("Installing Homebrew (may ask for your password)…");
+    run_shell(
+        r#"NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
+    )?;
+    prepend_brew_paths();
     if !package_install_available() {
+        return Err(Error::DependencyMissing(
+            "Homebrew install finished but `brew` is not on PATH; open a new terminal and re-run mac-k3d setup"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn install_package(name: &str) -> Result<()> {
+    if name == "docker" {
+        ensure_homebrew()?;
+    } else if !package_install_available() {
         return Err(Error::DependencyMissing(format!(
-            "Homebrew not found; install {name} manually"
+            "Homebrew not found; install {name} from https://brew.sh"
         )));
     }
     let args: Vec<&str> = match name {
@@ -92,7 +148,21 @@ pub fn install_package(name: &str) -> Result<()> {
         }
     };
     tracing::info!(dependency = name, "installing via Homebrew");
-    run_cmd("brew", &args)
+    if let Err(e) = run_cmd("brew", &args) {
+        if name == "docker" {
+            return Err(Error::DependencyMissing(
+                "Homebrew could not install Docker Desktop. Download: https://www.docker.com/products/docker-desktop/"
+                    .into(),
+            ));
+        }
+        return Err(e);
+    }
+    if name == "docker" {
+        println!("Opening Docker Desktop…");
+        let _ = Command::new("open").args(["-a", "Docker"]).status();
+        println!("{}\n", docker_not_ready_hint());
+    }
+    Ok(())
 }
 
 pub fn harbor_bootstrap_hint() -> &'static str {
@@ -319,6 +389,23 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+fn run_shell(script: &str) -> Result<()> {
+    let status = Command::new("bash")
+        .args(["-lc", script])
+        .status()
+        .map_err(|e| Error::CommandFailed {
+            cmd: "bash -lc (brew install)".into(),
+            source: e.into(),
+        })?;
+    if !status.success() {
+        return Err(Error::CommandFailed {
+            cmd: "bash -lc (brew install)".into(),
+            source: anyhow::anyhow!("exit code {:?}", status.code()),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +420,12 @@ mod tests {
         assert!(plist_path()
             .to_string_lossy()
             .contains("com.mac-k3d.jenkins-agent.plist"));
+    }
+
+    #[test]
+    fn docker_hint_mentions_desktop() {
+        let h = docker_not_ready_hint();
+        assert!(h.contains("Docker Desktop"), "{h}");
+        assert!(h.contains("mac-k3d setup"), "{h}");
     }
 }
