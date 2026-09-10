@@ -393,7 +393,7 @@ fn job_config_xml(opts: &JobOpts) -> String {
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>iCode eval: EVAL_MODE=binary (GitCode -full- tarball) or source (git + uv). See docs/icode-ci-new-machine.md.</description>
+  <description>iCode eval: EVAL_MODE=binary (GitCode -full- tarball) or source (git + uv). See docs/lolbench-jenkins.md.</description>
   <keepDependencies>false</keepDependencies>
   <properties>
     <hudson.model.ParametersDefinitionProperty>

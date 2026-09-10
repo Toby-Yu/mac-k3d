@@ -1,8 +1,8 @@
 # Initializer testing (Mac + Linux)
 
-Use this document to **verify** the one CLI initializer (`mac-k3d setup` / `prepare`) on macOS and Linux.
+This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Binary-initializer (`setup`, Release asset): [testing-binary-initializer.md](testing-binary-initializer.md).
 
-**Sign-off for the binary-only bootstrap is T0–T3 and T5–T6 only.** Do **not** require I0–I8 from [testing-icode-ci.md](testing-icode-ci.md). That file stays as a later iCode job reference.
+Use this document to **verify** the one CLI initializer (`mac-k3d prepare`) on macOS and Linux (step numbers **0–7** stay stable).
 
 If you are a **new user** bringing up a blank computer (not running the test checklist), use [initializer-new-machine.md](initializer-new-machine.md) instead.
 
@@ -12,29 +12,29 @@ Related design: [prepare-wizard.md](prepare-wizard.md), [setup.md](setup.md), [c
 
 ## What the initializer is for
 
-`mac-k3d` is **not** a multi-node Kubernetes farm. It bootstraps **CI machines** for Jenkins evals (iCode runs on the agent; Harbor/LoLBench is optional).
+`mac-k3d` is **not** a multi-node Kubernetes farm. It bootstraps **CI machines** for LoLBench evals:
 
 
 | Role                         | Job                                                   | How it is achieved                                              |
 | ---------------------------- | ----------------------------------------------------- | --------------------------------------------------------------- |
-| **CLI on PATH**              | Same binary on macOS and Linux                        | GitHub Release `mac-k3d-{os}-{arch}` or `cargo build --release` |
+| **CLI on PATH**              | Same binary on macOS and Linux                        | `cargo install --path .` → `~/.cargo/bin/mac-k3d`               |
 | **Platform gate**            | Linux and macOS allowed; other OS rejected            | `prepare --init-config` (Step 1)                                |
 | **Validate without prompts** | Fleet / CI path                                       | `prepare --non-interactive` (Step 2; fresh YAML `exit=1` is OK) |
-| **Worker host**              | Eval box: Docker, Java, Jenkins inbound agent         | `setup` / `prepare -i -c worker.yaml`, role **CI worker** (Step 3) |
-| **Controller host**          | Jenkins in local k3d                                  | `setup` / `prepare -i -c config.yaml`, role **CI controller** (Step 4) |
+| **Worker host**              | Eval box: Docker, Harbor, Java, LoLBench, agent files | `prepare -i -c worker.yaml`, role **CI worker** (Step 3)        |
+| **Controller host**          | Jenkins in local k3d                                  | `prepare -i -c config.yaml`, role **CI controller** (Step 4)    |
 | **Dual config**              | One binary, two YAML files, no clobber                | Step 5                                                          |
 | **Disk hard-fail**           | Under-disk must fail clearly                          | `--disk-min-gb 99999` (Step 6)                                  |
 | **Runtime**                  | Docker + k3d + Jenkins UI                             | `mac-k3d start` then `status` (Step 7A)                         |
 | **Jenkins agent online**     | Node + `agent.jar` + systemd/LaunchAgent              | Jenkins token + `mac-k3d config -c worker.yaml` (Step 7B)       |
 
 
-Lifecycle: `setup` **or** `prepare` **→** `start` **(controller only) →** `config` **(agent) →** `status` **/** `teardown` **/** `clean`.
+Lifecycle: `prepare` **→** `start` **(controller only) →** `config` **(agent) →** `status` **/** `teardown` **/** `clean`.
 
-Workers do **not** join the controller’s k3d cluster. They run a **Jenkins inbound agent**. iCode job checks are **out of scope** for this sign-off.
+Workers do **not** join the controller’s k3d cluster. They run a **Jenkins inbound agent** and execute Harbor/LoLBench on **host Docker**.
 
 ```text
 Controller:  Docker → k3d → Jenkins :9080  (job lolbench_one_task)
-Worker:      Docker + Java + agent.jar  → connects to Jenkins URL
+Worker:      Docker + Harbor + Java + agent.jar  → connects to Jenkins URL
 ```
 
 On **one lab PC** you can run **both** roles with two files:
@@ -44,63 +44,7 @@ On **one lab PC** you can run **both** roles with two files:
 
 ---
 
-## Binary initializer (T0–T6)
 
-User-facing path is a **prebuilt binary**, not rustup. Until a `v*` tag publishes GitHub Release assets, testers use `target/release/mac-k3d` as a stand-in. Developers still use cargo.
-
-**This sign-off is T0–T3 and T5–T6.** T4 / I0–I8 are not required.
-
-### T0 — unit / build (developer)
-
-```bash
-cd /path/to/mac-k3d
-cargo test
-cargo build --release
-./target/release/mac-k3d --version
-./target/release/mac-k3d --help   # must list setup
-```
-
-**Expected:** tests green; version `mac-k3d 0.4.x` (or later); help includes `setup`.
-
-### T1 — binary as a user (Linux lab)
-
-Copy the release binary to a PATH **without** `~/.cargo/bin`:
-
-```bash
-cp target/release/mac-k3d /tmp/mac-k3d-user
-chmod +x /tmp/mac-k3d-user
-env -i HOME="$HOME" USER="$USER" PATH="/usr/bin:/bin:/tmp" /tmp/mac-k3d-user --help
-```
-
-**Expected:** help lists `setup`; no rustc/cargo required. A TTY `./mac-k3d` starts the wizard (Controller / Worker / standalone).
-
-### T2 — controller setup from binary
-
-Role **CI controller**, apply now (`setup` installs Docker if needed).
-
-**Expected:** start succeeds; k3d up; Jenkins pod Running; UI `http://localhost:9080`; `mac-k3d status` healthy. If Docker was just installed, a clear **log out, log in, run `mac-k3d setup` again** error is **PASS** for this attempt (re-run after login).
-
-### T3 — worker setup from binary
-
-Role **CI worker**, Jenkins URL `:9080`, apply now (`config` only; **not** `start`).
-
-**Expected:** agent unit **or** a clear “need token” / “log out for docker” message. No LoLBench clone required; Harbor/uv **not** required. When a token is present: Linux `mac-k3d-jenkins-agent.service` active (linger enabled) or macOS LaunchAgent `com.mac-k3d.jenkins-agent`; node **online** in Jenkins. `start -c worker.yaml` is rejected.
-
-### T4 — iCode Jenkins job (not part of this sign-off)
-
-See **[testing-icode-ci.md](testing-icode-ci.md)** (I0–I8) only if you later want iCode evals. Do not block machine-bootstrap sign-off on those checks.
-
-### T5 — isolation / non-regression
-
-`prepare` / `start` / `config` still work. Dual-role one-PC: `-c config.yaml` vs `-c worker.yaml`. Do not touch other OS accounts. Worker `start` still rejected.
-
-### T6 — macOS (checklist)
-
-Download `mac-k3d-darwin-aarch64` (or x86_64), `xattr -d com.apple.quarantine`, run in Terminal.app. Let setup install Docker Desktop if asked; open the first GUI window.
-
-**Expected:** same wizard; LaunchAgent `com.mac-k3d.jenkins-agent` after token + `config`; Jenkins node online. Double-click of an unsigned binary is **not** supported. Mac can be signed off later than Linux.
-
----
 
 ## Linux lab (proven)
 
@@ -121,12 +65,9 @@ Ubuntu 26.04, account **Toby**, 2026-09-09. Goal: one CLI initializes Linux the 
 | 7B          | 2026-09-10: API token in `worker.yaml`; `config -c worker.yaml`; node `mac-Michael-Ubuntu` registered; 16 `CPU_CORES` locks; `mac-k3d-jenkins-agent.service` **active (running)** |
 
 
-**Binary-only sign-off (2026-09-10, Linux, `mac-k3d 0.4.0`):** T0 `cargo test` 42 passed, `cargo build --release`; T1 `/tmp/mac-k3d-user --help` lists `setup`; T2 `ci-controller` running, Jenkins `http://localhost:9080` HTTP 200; T3 `start -c worker.yaml` rejected, `mac-k3d-jenkins-agent.service` active; T5 dual YAML unchanged. T6 macOS later. I0–I8 not required.
+**Linux extras that blocked 7A until fixed:** user in group `docker`, then a **full new login** (old `systemd --user` kept stale groups). `docker info` must show a **Server** section. `newgrp`/`sg` may be missing (`util-linux-extra`).
 
-
-**Linux extras that blocked 7A until fixed:** user in group `docker`, then a **full new login** (old `systemd --user` kept stale groups). `docker info` must show a **Server** section. `newgrp`/`sg` may be missing (`util-linux-extra`). `setup` now runs `usermod` + linger; if `docker info` still fails it tells you to log out and re-run `mac-k3d setup`.
-
-**Binary bootstrap sign-off** is **T0–T3** and **T5–T6** (not I0–I8). The numbered Steps 0–7 below are the older prepare lab log.
+Initializer **sign-off** is Steps **0–6**. Step 7 is runtime. Step **7B** (agent daemon) needs a Jenkins API token after UI login.
 
 ---
 
@@ -140,9 +81,19 @@ Use this when the goal is “this computer should run LoLBench jobs,” not only
 
 Controller URL must be reachable (example: `http://jenkins-host:9080` or `http://localhost:9080` on a lab PC).
 
-1. **CLI + Docker** — users: GitHub Release binary (see T1), then `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` (lets the binary install Docker). If Linux `docker info` fails: **log out and log in**, re-run setup. Developers: `cargo build --release`.
+1. **OS access to Docker**
+  - **Linux:** `sudo usermod -aG docker "$USER"`, then **log out and log in** (quit lingering user systemd / Cursor if `groups` still lacks `docker`). Check `groups | grep docker` and `docker info` (Server section). `loginctl enable-linger "$USER"` once.
+  - **macOS:** Docker Desktop running; `docker info` works.
+2. **Install CLI** (Rust/cargo via rustup):
 
-2. **Interactive worker prepare** (if you did not use `setup`):
+```bash
+cd /path/to/mac-k3d
+cargo install --path .
+. "$HOME/.cargo/env"   # if `mac-k3d` is not found
+which mac-k3d
+```
+
+1. **Interactive worker prepare**
 
 ```bash
 mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
@@ -249,18 +200,24 @@ exit=1
 
 ## Step 0 — Install CLI onto PATH
 
-**Users:** download a GitHub Release binary (see T1). **Developers:**
-
 ```bash
 cd /path/to/mac-k3d
-cargo test
-cargo build --release
-# optional: cargo install --path .   # puts mac-k3d on ~/.cargo/bin
-./target/release/mac-k3d --help
+cargo install --path .
+which mac-k3d
+mac-k3d --help
 ```
 
-| Purpose | Prove the same CLI that users download |
-| Expect | help lists `setup`; `--version` prints `mac-k3d` |
+| Purpose | Put `mac-k3d` in `~/.cargo/bin` so the command works by name |
+| Expect | `which` shows `.../.cargo/bin/mac-k3d`; help says macOS and Linux |
+
+`cargo build --release` alone is **not** enough for `mac-k3d` on PATH — that only builds `./target/release/mac-k3d`.
+
+Optional while developing:
+
+```bash
+cargo test
+cargo install --path .
+```
 
 ---
 

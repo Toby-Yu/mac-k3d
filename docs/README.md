@@ -7,11 +7,11 @@
 | [configuration.md](configuration.md) | Config file schema and state layout |
 | [deployment.md](deployment.md) | Single-Mac and multi-Mac topology, including physical LAN cabling |
 | [setup.md](setup.md) | Step-by-step setup for single- and multi-Mac environments |
-| [initializer-new-machine.md](initializer-new-machine.md) | User guide: download a Release binary, run setup; Docker is installed by the binary |
+| [binary-initializer-new-machine.md](binary-initializer-new-machine.md) | User guide: download a Release binary, run setup; Docker is installed by the binary |
+| [testing-binary-initializer.md](testing-binary-initializer.md) | Sign-off T0–T3 / T5–T6 for the binary-initializer path |
+| [initializer-new-machine.md](initializer-new-machine.md) | v0.3.0 user guide: `cargo install` + `prepare` on a blank Linux or Mac |
 | [prepare-wizard.md](prepare-wizard.md) | Interactive `prepare` questionnaire design |
-| [testing-initializer.md](testing-initializer.md) | Sign-off T0–T3 / T5–T6 (machine bootstrap). iCode I0–I8 is a separate doc |
-| [icode-ci-new-machine.md](icode-ci-new-machine.md) | User guide: Jenkins iCode evals (`EVAL_MODE=binary` or `source`) |
-| [testing-icode-ci.md](testing-icode-ci.md) | Pass/fail checks for iCode Jenkins job (binary + source) |
+| [testing-initializer.md](testing-initializer.md) | v0.3.0 initializer tests (Mac + Linux), steps 0–7 |
 | [lolbench-jenkins.md](lolbench-jenkins.md) | Short pointer: `lolbench_one_task` + `EVAL_MODE` |
 | [secrets.md](secrets.md) | CI secrets: configure once on Jenkins controller, use on all agents |
 

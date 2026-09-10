@@ -18,7 +18,7 @@ Leftovers it cannot hide:
 - **sudo** / brew for package install
 - **Worker:** paste a Jenkins API token from the UI
 
-If auto-install fails, install Docker yourself and re-run setup ([docs/initializer-new-machine.md](docs/initializer-new-machine.md)).
+If auto-install fails, install Docker yourself and re-run setup ([docs/binary-initializer-new-machine.md](docs/binary-initializer-new-machine.md)).
 
 ## Install (users)
 
@@ -38,7 +38,9 @@ mkdir -p ~/.local/bin
 cp mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
 ```
 
-Open **Terminal** (do not rely on double-click). Full walkthrough: [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
+Open **Terminal** (do not rely on double-click). Full walkthrough: [docs/binary-initializer-new-machine.md](docs/binary-initializer-new-machine.md).
+
+v0.3.0 cargo/`prepare` path: [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
 
 ## Install (developers)
 
@@ -89,11 +91,11 @@ See [docs/configuration.md](docs/configuration.md) for the full schema.
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
 - [Setup guide](docs/setup.md)
-- [Initialize a new Linux or Mac](docs/initializer-new-machine.md)
+- [Binary-initializer (new machine)](docs/binary-initializer-new-machine.md)
+- [Binary-initializer testing](docs/testing-binary-initializer.md)
+- [Initialize a new Linux or Mac (v0.3.0)](docs/initializer-new-machine.md)
 - [Prepare wizard](docs/prepare-wizard.md)
-- [Initializer testing checklist](docs/testing-initializer.md)
-- [iCode CI (user)](docs/icode-ci-new-machine.md)
-- [iCode CI testing](docs/testing-icode-ci.md)
+- [Initializer testing checklist (v0.3.0)](docs/testing-initializer.md)
 - [Jenkins job `lolbench_one_task`](docs/lolbench-jenkins.md)
 - [Secrets (Jenkins credentials on controller)](docs/secrets.md)
 

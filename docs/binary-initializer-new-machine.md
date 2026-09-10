@@ -1,97 +1,64 @@
-# Initialize a new Linux or Mac computer
+# Initialize a new Linux or Mac (binary-initializer)
 
-This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Binary-initializer (`setup`, Release asset): [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
+This is the **binary-initializer** path (`setup`, GitHub Release asset). The **v0.3.0 / initializer** path (`cargo install`, `prepare`) is [initializer-new-machine.md](initializer-new-machine.md).
 
-**Users:** follow the command lists below to set up a blank machine.
+**Users:** download a Release binary from this repo and run it. The binary installs Docker (and the rest) when you choose **Install**.
 
-**Developers:** pass/fail checks live in [testing-initializer.md](testing-initializer.md). This page does not describe how to verify the initializer.
+**Developers:** pass/fail checks live in [testing-binary-initializer.md](testing-binary-initializer.md). This page does not describe how to verify the initializer.
 
 One CLI (`mac-k3d`) on Linux and macOS.
 
 | You want this machine to… | Follow |
 |---------------------------|--------|
 | Host Jenkins (UI + job queue) | [A. Controller](#a-controller--host-jenkins) |
-| Run LoLBench / Harbor jobs (Jenkins agent) | [B. Worker](#b-worker--jenkins-agent) |
+| Run Jenkins agent jobs | [B. Worker](#b-worker--jenkins-agent) |
 | Do both on **this** PC | [C. One PC, both roles](#c-one-pc-both-roles) |
 
 Workers are Jenkins **agents**. They do not join the controller’s Kubernetes cluster.
 
 ```text
-Controller:  Docker → k3d → Jenkins  (usually http://HOST:9080)
-Worker:      Docker + Harbor + Java + agent  → that Jenkins URL
+GitHub Release  mac-k3d-{os}-{arch}
+        →  chmod +x && ./mac-k3d   (or setup)
+        →  wizard: controller | worker
+        →  binary installs Docker + the rest
+        →  controller: k3d + Jenkins
+           worker: Java agent connected to Jenkins URL
 ```
+
+You do **not** need Rust. You do **not** install Docker yourself first unless auto-install fails (see [If auto-install fails](#if-auto-install-fails)).
+
+Until a four-arch pre-release exists, testers may use `target/release/mac-k3d` as a stand-in. Do not commit built blobs.
 
 ---
 
-## Before any role
+## 1. Download the binary
 
-Run once on a new computer. Then go to **A** or **B**.
-
-| Step | Linux | macOS |
-|------|--------|--------|
-| Rust / `cargo` on PATH | rustup, then `. "$HOME/.cargo/env"` | **Same** |
-| Docker | Engine (`docker.io`) + `docker` group | **Docker Desktop** — install and **open** the app |
-| Keep Jenkins agent running after logout | `loginctl enable-linger "$USER"` | **Skip** — `mac-k3d config` installs a LaunchAgent |
-
-Do **not** run `loginctl` or `usermod` on a Mac. Those are Linux-only.
-
-### Linux
+Get the matching GitHub Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-x86_64`, or `mac-k3d-darwin-aarch64`). Prefer a **pre-release** such as `v0.4.0-rc.1` on this branch; **Latest** may still be v0.3.0. Open **Terminal** (double-click is not supported).
 
 ```bash
-# 1. Rust (cargo lives in ~/.cargo/bin; this line puts it on PATH in *this* terminal)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-. "$HOME/.cargo/env"
-
-# 2. Docker Engine + permission to use it without sudo
-sudo apt-get update
-sudo apt-get install -y docker.io
-sudo usermod -aG docker "$USER"
-# log out of the desktop completely, log back in, open a new terminal
-
-# 3. PATH again (new terminal) + keep user systemd running after logout
-#    (needed so the Jenkins agent service stays up on a worker)
-. "$HOME/.cargo/env"
-loginctl enable-linger "$USER"
-
-# 4. Check Docker
-docker info   # must show a Server section
+chmod +x ./mac-k3d-linux-x86_64
+# macOS unsigned download:
+#   xattr -d com.apple.quarantine ./mac-k3d-darwin-aarch64
+mkdir -p ~/.local/bin
+cp ./mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
+export PATH="$HOME/.local/bin:$PATH"
+which mac-k3d
+mac-k3d --help    # must list `setup`
 ```
 
-### macOS
+First-run (TTY): `mac-k3d` or `mac-k3d setup` starts the wizard, then offers to apply start/config.
 
-```bash
-# 1. Rust — same as Linux
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-. "$HOME/.cargo/env"
+When Docker is not found, choose **Install**. The binary runs `apt` (Linux) or Homebrew cask (macOS). It may ask for `sudo`.
 
-# 2. Docker Desktop (not docker.io). Homebrew optional:
-brew install --cask docker
-# or install from https://www.docker.com/products/docker-desktop/
+Honest leftovers the binary cannot hide:
 
-# 3. Open the app once and wait until the menu-bar whale is idle
-open -a Docker
-docker info   # must succeed before mac-k3d start / worker setup
-
-# No usermod, no loginctl. The worker agent later uses a LaunchAgent (KeepAlive).
-```
-
-If Homebrew is missing, install it from [https://brew.sh](https://brew.sh) or download Docker Desktop from Docker’s site.
-
-### Then install the CLI (both OS)
-
-```bash
-git clone https://github.com/MichaelLing83/mac-k3d.git   # or your fork
-cd mac-k3d
-cargo install --path .
-. "$HOME/.cargo/env"
-which mac-k3d   # expect ~/.cargo/bin/mac-k3d
-```
-
-Use **Use this installation** in the wizard when a tool is already found. Let the wizard install the rest (k3d, kubectl, helm, Harbor, Java).
-
-If `mac-k3d` is not found: `. "$HOME/.cargo/env"`.
+- **Linux:** one **logout / login** after the `docker` group is added, then re-run `mac-k3d setup`.
+- **macOS:** first **Docker Desktop** window (and Homebrew if it is missing).
+- **Worker:** paste a Jenkins **API token** from the UI, then `mac-k3d config -c worker.yaml` if the first pass had no token.
 
 Do **not** pick “Local development only” if you need Jenkins or an agent.
+
+Developers building from git still use `cargo build --release` (see [testing-binary-initializer.md](testing-binary-initializer.md)).
 
 ---
 
@@ -102,17 +69,16 @@ Storage: about **60 GB** free. Jenkins UI port: **9080**.
 If another program already uses **8080**, after prepare edit `~/.config/mac-k3d/config.yaml` and change `cluster.ports` `host: 8080` to e.g. `18080`. Leave `jenkins.host_port: 9080`.
 
 ```bash
-# 1. Write controller config (wizard)
-mac-k3d prepare -i -c ~/.config/mac-k3d/config.yaml
+# 1. Write controller config and apply (wizard → start → config)
+mac-k3d setup -c ~/.config/mac-k3d/config.yaml
 
-# 2. Create k3d + install Jenkins (first run can take several minutes)
-mac-k3d start -c ~/.config/mac-k3d/config.yaml
-
-# 3. Print Jenkins URL and initial admin password
-mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
+# Power-user split:
+# mac-k3d prepare -i -c ~/.config/mac-k3d/config.yaml
+# mac-k3d start -c ~/.config/mac-k3d/config.yaml
+# mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
 ```
 
-Open **http://localhost:9080** (or `http://<this-machine>:9080`). Username **admin**. Password from step 3. Do not commit the password.
+Open **http://localhost:9080** (or `http://<this-machine>:9080`). Username **admin**. Password from `mac-k3d config --show-jenkins` if `setup` already printed it. Do not commit the password.
 
 **Wizard (step 1) — choose:**
 
@@ -120,12 +86,12 @@ Open **http://localhost:9080** (or `http://<this-machine>:9080`). Username **adm
 |--------|--------|
 | Base directory | Recommended path with enough space |
 | Role | **CI controller (Jenkins in k3d)** |
-| Docker / k3d / kubectl / **helm** | Use existing, or install |
-| Harbor / LoLBench | Optional (job can use a LoLBench path if you set one) |
+| Docker / k3d / kubectl / **helm** | **Install** if not found, or use existing |
+| Harbor / LoLBench | Skip (not required) |
 | Cluster name | Default is fine |
 | k3d agent nodes | `0` |
 | Jenkins UI host port | `9080` |
-| Job defaults | `oracle` / `ruff_1` / default model is fine |
+| Job defaults | Defaults are fine |
 | Enter CI secrets now? | **no** unless you already have keys ([secrets.md](secrets.md)) |
 | Write configuration? | **yes** |
 
@@ -142,7 +108,8 @@ The worker **node** is created in Jenkins and the local agent process starts onl
 ### 1. Write worker config (wizard)
 
 ```bash
-mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
+mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
+# or: mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 ```
 
 If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **9080**). That is OK. Config still saves. Finish **A**, then continue below.
@@ -153,10 +120,10 @@ If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **9080**). That i
 |--------|--------|
 | Base directory | Recommended path with enough space |
 | Role | **CI worker (Jenkins agent only)** |
-| Docker / k3d / kubectl / java | Use existing, or install |
-| Harbor | Install via uv/pipx, or use existing |
+| Docker / java | **Install** if not found, or use existing |
+| k3d / kubectl | **Skip** unless you want a local cluster |
+| Harbor / LoLBench | **No** (optional only for oracle/debug) |
 | Add `~/.local/bin` to PATH | **yes** if asked |
-| LoLBench | Clone, or an existing checkout |
 | Jenkins controller URL | e.g. `http://192.168.1.10:9080` or `http://localhost:9080` on this PC |
 | API user / token | Fill in if Jenkins is already up; **empty** if not |
 | Agent name / labels / remote root | Defaults are fine |
@@ -206,11 +173,10 @@ Use the **worker** file, not `config.yaml`. Expect: download `agent.jar`, regist
 **Linux**
 
 ```bash
-loginctl enable-linger "$USER"
 systemctl --user status mac-k3d-jenkins-agent.service
 ```
 
-Want **`Active: active (running)`**. If `status` pauses, press **`q`**.
+Want **`Active: active (running)`**. If `status` pauses, press **`q`**. (`setup` already runs `loginctl enable-linger` when it installs Docker.)
 
 **macOS** — no `loginctl`. `config` installs LaunchAgent `com.mac-k3d.jenkins-agent`:
 
@@ -222,11 +188,21 @@ launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>&1 | head -20
 
 In the Jenkins UI: **Manage Jenkins → Nodes** (or **Build Executor Status** on the left). The agent name from YAML (for example `mac-Michael-Ubuntu`) should be **online**.
 
-Then this machine can take queued jobs (`lolbench_one_task`) when an executor and locks are free.
+Then this machine can take queued jobs when an executor and locks are free.
 
-Optional smoke test (**no LLM cost**): open job **lolbench_one_task** → **Build with Parameters** → **HARNESS** `oracle`, **TASK** `ruff_1`. Do not add OpenRouter/OpenAI keys unless you intend to pay for model runs.
+Do **not** run `mac-k3d start -c ~/.config/mac-k3d/worker.yaml` to start the agent. The agent is `setup`/`prepare` + token + `config`.
 
-Do **not** run `mac-k3d start -c ~/.config/mac-k3d/worker.yaml` to start the agent. The agent is `prepare` + token + `config`.
+### Add another worker (Nth machine)
+
+One **controller**. Each new Mac or Linux box is another **worker**. They do not join the controller’s k3d cluster.
+
+On the new computer:
+
+1. Download the matching Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-x86_64`, or `mac-k3d-darwin-aarch64`). No Rust.
+2. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` — role **CI worker**; let it install Docker if asked; Harbor/LoLBench **No**; Jenkins URL `http://<controller-ip>:9080`.
+3. Use a **distinct** agent name (the wizard default includes the hostname).
+4. Create or reuse a Jenkins API token; put `api_user` / `api_token` in that machine’s `worker.yaml`.
+5. `mac-k3d config -c ~/.config/mac-k3d/worker.yaml` — node **online** in Jenkins.
 
 ---
 
@@ -235,17 +211,15 @@ Do **not** run `mac-k3d start -c ~/.config/mac-k3d/worker.yaml` to start the age
 Two files: `config.yaml` (controller) and `worker.yaml` (worker). Run in this order. After Jenkins is up, create the node with **B** steps 2–5 (token, `worker.yaml`, worker `config`, Nodes UI).
 
 ```bash
-# 1. Before any role (Linux: rustup + docker.io + linger; macOS: rustup + Docker Desktop; then cargo install)
+# 1. Download the mac-k3d binary (section 1)
 
 # 2. Controller
-mac-k3d prepare -i -c ~/.config/mac-k3d/config.yaml
-mac-k3d start -c ~/.config/mac-k3d/config.yaml
-mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
+mac-k3d setup -c ~/.config/mac-k3d/config.yaml
 # log in at http://localhost:9080  (admin + printed password)
 
 # 3. Worker (URL http://localhost:9080)
-mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
-# put api_user / api_token in worker.yaml, then:
+mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
+# put api_user / api_token in worker.yaml if prompted/empty, then:
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
@@ -261,15 +235,26 @@ mac-k3d clean -c ~/.config/mac-k3d/config.yaml --yes
 
 ---
 
+## If auto-install fails
+
+Install Docker yourself, then re-run `mac-k3d setup`.
+
+- **Linux:** `sudo apt-get install -y docker.io`, then log out and in so the `docker` group applies. `docker info` must show a Server section.
+- **macOS:** Homebrew from [https://brew.sh](https://brew.sh), then `brew install --cask docker`, or download [Docker Desktop](https://www.docker.com/products/docker-desktop/) and open it.
+
+Do **not** run `loginctl` or `usermod` on a Mac. Those are Linux-only.
+
+---
+
 ## If a command fails
 
 | Message | What to do |
 |---------|------------|
-| `mac-k3d: command not found` | `. "$HOME/.cargo/env"` then `cargo install --path .` |
-| `permission denied` on `docker.sock` | Linux only: finish `usermod`, **log out and in**; if it still fails, `systemctl --user exit` then sign in |
+| `mac-k3d: command not found` | Copy the release binary to `~/.local/bin/mac-k3d` and add that dir to PATH |
+| `permission denied` on `docker.sock` / log out for docker | Linux: **log out and in**, then `mac-k3d setup` again |
 | `docker info` fails / no Server | Linux: docker group + new login. macOS: open **Docker Desktop** and wait until it is idle |
 | `loginctl: command not found` | macOS — ignore; use LaunchAgent after worker `config` |
-| `agent.jar` / curl port 9080 | Finish controller `start`, then worker `config` |
+| `agent.jar` / curl port 9080 / need token | Finish controller `start`, paste API token, then worker `config` |
 | `REPLACE_ME` / unit not started | Token missing or still `api_token: null`; edit `worker.yaml` and re-run worker `config` |
 | `mac-k3d-jenkins-agent.service` could not be found | You ran `config` on **controller** YAML, or Jenkins was down / no token. Use `-c worker.yaml` after step 2 |
 | `failed to bind host port … 8080` | In controller YAML set host port `8080` → `18080`; keep Jenkins on `9080` |

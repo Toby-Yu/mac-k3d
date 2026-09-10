@@ -7,10 +7,7 @@ The Pipeline created by `mac-k3d start` / `config` runs **iCode** on a worker wi
 
 It does **not** restore LoLBench `harbor run`. This repo does not implement iCode.
 
-**Users:** [icode-ci-new-machine.md](icode-ci-new-machine.md)  
-**Tests:** [testing-icode-ci.md](testing-icode-ci.md)
-
-After changing the generator in `src/prepare/jenkins_job.rs`, re-run:
+Parameters for the generated job are listed below. After changing the generator in `src/prepare/jenkins_job.rs`, re-run:
 
 ```bash
 mac-k3d config -c ~/.config/mac-k3d/config.yaml

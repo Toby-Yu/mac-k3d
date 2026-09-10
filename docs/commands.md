@@ -89,7 +89,7 @@ mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 4. Confirm agent files under the worker remote root / downloads, and that the node appears (or launch script is ready) on the controller.
 5. Do **not** `clean --purge-config` the default controller config while testing the worker file.
 
-`mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is optional (second local k3d); workers only need the host agent + Docker. iCode evals (`EVAL_MODE`): [icode-ci-new-machine.md](icode-ci-new-machine.md).
+`mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is optional (second local k3d); workers only need the host agent + Docker. Job parameters: [lolbench-jenkins.md](lolbench-jenkins.md).
 
 ### Behavior
 
@@ -173,7 +173,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with `EVAL_MODE` (`binary` / `source`), `ICODE_RELEASE`, `ICODE_GIT_URL`, `TASK`, `ICODE_ARGS`. Parameter defaults come from `jenkins_job.*`. See [icode-ci-new-machine.md](icode-ci-new-machine.md).
+4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with `EVAL_MODE` (`binary` / `source`), `ICODE_RELEASE`, `ICODE_GIT_URL`, `TASK`, `ICODE_ARGS`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md).
 5. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
