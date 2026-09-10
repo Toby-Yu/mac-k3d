@@ -190,7 +190,7 @@ After Jenkins is up (`mac-k3d start` / `config`), prepare records intent and tho
 2. Create / ensure a resource **type/label** `CPU_CORES` on the controller (workers create capacity; plugin is on the controller).
 3. Create Pipeline job **`lolbench_one_task`** if missing (inline Jenkinsfile; see [lolbench-jenkins.md](lolbench-jenkins.md)).
 4. **CI secrets + job defaults** (see [secrets.md](secrets.md)):
-   - Prepare prompts for `jenkins_job.default_harness` / `default_task` / `default_model` (YAML).
+   - Prepare prompts for `jenkins_job.default_eval_mode` / `default_task` / `default_icode_release` / `default_icode_git_url` / `default_icode_git_ref` / `default_icode_args` (YAML).
    - Prepare optionally collects API keys / PATs into `~/.config/mac-k3d/credentials.pending.yaml` (mode 0600) — **not** into `config.yaml`.
    - `config` creates Jenkins Secret text credentials and binds present IDs into the job (`icode` → DeepSeek + GitCode, etc.).
 

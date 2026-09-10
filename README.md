@@ -1,11 +1,10 @@
 # mac-k3d
 
-A Rust CLI for preparing, starting, configuring, tearing down, and cleaning up a local development / LoLBench eval environment on **macOS and Linux**:
+A Rust CLI for preparing, starting, configuring, tearing down, and cleaning up a local development / CI eval environment on **macOS and Linux**:
 
 - **Docker** — Docker Desktop (macOS) or Docker Engine (Linux)
 - **k3d** — lightweight Kubernetes (k3s in Docker); required for controller/standalone
-- **Jenkins** (optional) — CI/CD in-cluster on controllers; agents on workers
-- **Harbor / LoLBench** — host-side eval tooling on workers
+- **Jenkins** (optional) — CI/CD in-cluster on controllers; agents on workers. Job `lolbench_one_task` supports `EVAL_MODE=binary` (iCode `-full-` tarball) or `source` (git + uv in the job). See [docs/icode-ci-new-machine.md](docs/icode-ci-new-machine.md).
 
 ## Requirements
 
@@ -22,7 +21,25 @@ A Rust CLI for preparing, starting, configuring, tearing down, and cleaning up a
 
 Optional (Jenkins controller): [Helm](https://helm.sh/)
 
-## Install
+Users do **not** need Rust. Developers who build from source do.
+
+## Install (users)
+
+Download the asset for your OS/arch from the GitHub **Releases** page (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-x86_64`, or `mac-k3d-darwin-aarch64`):
+
+```bash
+chmod +x mac-k3d-linux-x86_64
+# macOS (unsigned GitHub binary):
+#   xattr -d com.apple.quarantine ./mac-k3d-darwin-aarch64
+./mac-k3d-linux-x86_64          # TTY → setup wizard (controller or worker)
+# optional:
+mkdir -p ~/.local/bin
+cp mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
+```
+
+Open **Terminal** (do not rely on double-click). Then follow [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
+
+## Install (developers)
 
 ```bash
 cargo install --path .
@@ -38,34 +55,23 @@ cargo build --release
 ## Quick start
 
 ```bash
-# Verify prerequisites and write default config
-mac-k3d prepare --init-config
+# First-run wizard, then start (controller) or config (worker)
+mac-k3d setup
 
-# Interactive initializer (Mac or Linux)
+# Power-user split (same as before)
 mac-k3d prepare
-
-# Start cluster (optionally with Jenkins) — controller / standalone
 mac-k3d start
-mac-k3d start --jenkins in-cluster
-
-# Merge kubeconfig and show service URLs
 mac-k3d config --show-jenkins
-
-# Check status
 mac-k3d status
-
-# Stop without deleting data
 mac-k3d teardown
-
-# Remove cluster and artifacts
 mac-k3d clean --yes
 ```
 
 ### Worker (eval box) only
 
 ```bash
-mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
-# Role: CI worker — Docker, Harbor, Java, Jenkins agent
+mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
+# Role: CI worker — Docker, Java, Jenkins agent (Harbor optional)
 mac-k3d prepare --non-interactive -c ~/.config/mac-k3d/worker.yaml
 ```
 
@@ -85,7 +91,9 @@ See [docs/configuration.md](docs/configuration.md) for the full schema.
 - [Initialize a new Linux or Mac](docs/initializer-new-machine.md)
 - [Prepare wizard](docs/prepare-wizard.md)
 - [Initializer testing checklist](docs/testing-initializer.md)
-- [LoLBench Jenkins job (`lolbench_one_task`)](docs/lolbench-jenkins.md)
+- [iCode CI (user)](docs/icode-ci-new-machine.md)
+- [iCode CI testing](docs/testing-icode-ci.md)
+- [Jenkins job `lolbench_one_task`](docs/lolbench-jenkins.md)
 - [Secrets (Jenkins credentials on controller)](docs/secrets.md)
 
 ## License

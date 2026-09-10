@@ -49,7 +49,9 @@ Open Docker once and ensure `docker info` succeeds before continuing.
 
 ## Install mac-k3d
 
-From the repository:
+**Users:** download a GitHub Release binary (`mac-k3d-{os}-{arch}`), `chmod +x`, run it in Terminal (`mac-k3d setup`). See [initializer-new-machine.md](initializer-new-machine.md). Rust is not required.
+
+**Developers** from the repository:
 
 ```bash
 git clone https://github.com/MichaelLing83/mac-k3d.git

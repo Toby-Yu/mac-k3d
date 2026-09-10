@@ -10,7 +10,9 @@
 | [initializer-new-machine.md](initializer-new-machine.md) | User guide: initialize a **blank** Linux or Mac as worker or controller |
 | [prepare-wizard.md](prepare-wizard.md) | Interactive `prepare` questionnaire design |
 | [testing-initializer.md](testing-initializer.md) | Step-by-step initializer tests (Mac + Linux), expected exits |
-| [lolbench-jenkins.md](lolbench-jenkins.md) | `lolbench_one_task` Jenkins job (one LoLBench task per build) |
+| [icode-ci-new-machine.md](icode-ci-new-machine.md) | User guide: Jenkins iCode evals (`EVAL_MODE=binary` or `source`) |
+| [testing-icode-ci.md](testing-icode-ci.md) | Pass/fail checks for iCode Jenkins job (binary + source) |
+| [lolbench-jenkins.md](lolbench-jenkins.md) | Short pointer: `lolbench_one_task` + `EVAL_MODE` |
 | [secrets.md](secrets.md) | CI secrets: configure once on Jenkins controller, use on all agents |
 
 ## Goals
@@ -18,7 +20,7 @@
 1. **Single entry point** — One CLI to manage Docker, k3d, and optional Jenkins on **macOS and Linux**.
 2. **Idempotent operations** — Safe to re-run `prepare`, `start`, and `config`.
 3. **Sensible defaults** — Works out of the box; config file overrides when needed.
-4. **Clear lifecycle** — Distinct phases: prepare → start → config → teardown → clean.
+4. **Clear lifecycle** — `setup` (wizard + apply) or prepare → start (controller only) → config → teardown → clean.
 5. **Platform adapters** — macOS (Docker Desktop, Homebrew, LaunchAgent) vs Linux (Docker Engine, apt, systemd --user).
 
 ## Non-goals (v1)

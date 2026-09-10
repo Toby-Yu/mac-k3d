@@ -230,9 +230,12 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `default_harness` | `oracle` | `lolbench_one_task` HARNESS parameter default (first choice) |
-| `default_task` | `ruff_1` | TASK parameter default |
-| `default_model` | `openrouter/deepseek/deepseek-v4-pro` | MODEL parameter default |
+| `default_task` | `ruff_1` | Exported as `TASK` / `ICODE_TASK` |
+| `default_eval_mode` | `binary` | `binary` (GitCode `-full-` tarball) or `source` (git + uv in the job) |
+| `default_icode_release` | *(empty)* | Default `ICODE_RELEASE` (full tarball URL/path or stub `icode`; test target v0.1.41) |
+| `default_icode_git_url` | *(empty)* | Default `ICODE_GIT_URL` for source mode |
+| `default_icode_git_ref` | `main` | Default git ref for source mode |
+| `default_icode_args` | *(empty)* | Argv after `./icode` |
 
 ## Environment variables
 

@@ -11,6 +11,39 @@ Logging uses `tracing`; override with `RUST_LOG=debug`.
 
 ---
 
+## `setup`
+
+First-run for a downloadable binary: interactive wizard, then apply.
+
+```bash
+mac-k3d                 # TTY only: same as setup
+mac-k3d setup
+mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
+mac-k3d setup --disk-min-gb 20
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--disk-min-gb N` | Override minimum free disk (GB) for prepare |
+
+Global `-c / --config` is honored.
+
+### Behavior
+
+1. Run `prepare` (wizard if no config / TTY; existing-config menu if a file already exists).
+2. Prompt **Continue and apply now?**
+3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, job `lolbench_one_task`).
+4. **Worker:** `config` only (Jenkins agent). Does **not** run `start`.
+5. Print role, config path, Jenkins URL, agent unit/LaunchAgent name.
+
+If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
+
+Keep `prepare` / `start` / `config` for power users.
+
+---
+
 ## `prepare`
 
 Verify prerequisites and generate configuration via an interactive wizard.
@@ -56,7 +89,7 @@ mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 4. Confirm agent files under the worker remote root / downloads, and that the node appears (or launch script is ready) on the controller.
 5. Do **not** `clean --purge-config` the default controller config while testing the worker file.
 
-`mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is optional (second local k3d); LoLBench only needs the host agent + Docker/Harbor.
+`mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is optional (second local k3d); workers only need the host agent + Docker. iCode evals (`EVAL_MODE`): [icode-ci-new-machine.md](icode-ci-new-machine.md).
 
 ### Behavior
 
@@ -83,6 +116,8 @@ If `config.yaml` already exists and stdin is a TTY, `prepare` (without `-i`) pro
 ## `start`
 
 Start Docker Desktop (if needed), create or start the k3d cluster, optionally deploy Jenkins.
+
+**Worker YAML is rejected** (`role: worker`): use `mac-k3d config` / `setup` instead. Workers are not a k3d cluster.
 
 ```bash
 mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
@@ -138,7 +173,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with harness map (`icode` / `dsh` / `chrys` / built-ins), credential bindings for IDs that exist, and parameter defaults from `jenkins_job.*`. When `lolbench.path` is set, the job uses that local checkout (`LOLBENCH_PATH`); otherwise it clones via `LOLBENCH_GIT_URL`.
+4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with `EVAL_MODE` (`binary` / `source`), `ICODE_RELEASE`, `ICODE_GIT_URL`, `TASK`, `ICODE_ARGS`. Parameter defaults come from `jenkins_job.*`. See [icode-ci-new-machine.md](icode-ci-new-machine.md).
 5. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
