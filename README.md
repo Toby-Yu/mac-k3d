@@ -82,6 +82,7 @@ See [docs/configuration.md](docs/configuration.md) for the full schema.
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
 - [Setup guide](docs/setup.md)
+- [Initialize a new Linux or Mac](docs/initializer-new-machine.md)
 - [Prepare wizard](docs/prepare-wizard.md)
 - [Initializer testing checklist](docs/testing-initializer.md)
 - [LoLBench Jenkins job (`lolbench_one_task`)](docs/lolbench-jenkins.md)

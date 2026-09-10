@@ -7,6 +7,7 @@
 | [configuration.md](configuration.md) | Config file schema and state layout |
 | [deployment.md](deployment.md) | Single-Mac and multi-Mac topology, including physical LAN cabling |
 | [setup.md](setup.md) | Step-by-step setup for single- and multi-Mac environments |
+| [initializer-new-machine.md](initializer-new-machine.md) | User guide: initialize a **blank** Linux or Mac as worker or controller |
 | [prepare-wizard.md](prepare-wizard.md) | Interactive `prepare` questionnaire design |
 | [testing-initializer.md](testing-initializer.md) | Step-by-step initializer tests (Mac + Linux), expected exits |
 | [lolbench-jenkins.md](lolbench-jenkins.md) | `lolbench_one_task` Jenkins job (one LoLBench task per build) |
