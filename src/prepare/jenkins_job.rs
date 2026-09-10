@@ -10,44 +10,49 @@ pub const LOLBENCH_ONE_TASK: &str = "lolbench_one_task";
 /// Options used when rendering / updating `lolbench_one_task`.
 #[derive(Debug, Clone)]
 pub struct JobOpts {
-    /// Absolute path to LoLBench-Preview on the agent Mac (`lolbench.path`).
-    /// When set, the job uses this checkout instead of cloning.
-    pub lolbench_path: Option<String>,
-    pub lolbench_git_url: String,
-    pub default_harness: String,
     pub default_task: String,
-    pub default_model: String,
+    pub default_eval_mode: String,
+    pub default_icode_release: String,
+    pub default_icode_git_url: String,
+    pub default_icode_git_ref: String,
+    pub default_icode_args: String,
     /// Credential IDs present in Jenkins (only these are bound in the Pipeline).
     pub credential_ids: Vec<String>,
 }
 
 impl JobOpts {
     pub fn from_config(config: &crate::config::MacK3dConfig, credential_ids: Vec<String>) -> Self {
-        let git_url = if config.lolbench.git_url.trim().is_empty() {
-            crate::config::MacK3dConfig::default().lolbench.git_url
-        } else {
-            config.lolbench.git_url.clone()
-        };
-        let lolbench_path = config
-            .lolbench
-            .path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .filter(|s| !s.trim().is_empty());
+        let mut release = config.jenkins_job.default_icode_release.trim().to_string();
+        if release.is_empty() {
+            // Older YAML used default_binary_target for a raw file path.
+            release = config.jenkins_job.default_binary_target.trim().to_string();
+        }
+        let git_ref = config.jenkins_job.default_icode_git_ref.trim();
         Self {
-            lolbench_path,
-            lolbench_git_url: git_url,
-            default_harness: config.jenkins_job.default_harness.clone(),
-            default_task: config.jenkins_job.default_task.clone(),
-            default_model: config.jenkins_job.default_model.clone(),
+            default_task: if config.jenkins_job.default_task.trim().is_empty() {
+                "ruff_1".into()
+            } else {
+                config.jenkins_job.default_task.clone()
+            },
+            default_eval_mode: normalize_eval_mode(&config.jenkins_job.default_eval_mode),
+            default_icode_release: release,
+            default_icode_git_url: config.jenkins_job.default_icode_git_url.clone(),
+            default_icode_git_ref: if git_ref.is_empty() {
+                "main".into()
+            } else {
+                git_ref.to_string()
+            },
+            default_icode_args: config.jenkins_job.default_icode_args.clone(),
             credential_ids,
         }
     }
+}
 
-    fn uses_local_checkout(&self) -> bool {
-        self.lolbench_path
-            .as_ref()
-            .is_some_and(|p| !p.trim().is_empty())
+fn normalize_eval_mode(s: &str) -> String {
+    if s.trim().eq_ignore_ascii_case("source") {
+        "source".into()
+    } else {
+        "binary".into()
     }
 }
 
@@ -159,6 +164,9 @@ fn update_job_script(
     cookie_file: &Path,
     opts: &JobOpts,
 ) -> Result<()> {
+    if update_job_config_xml(base, auth, crumb, cookie_file, opts).is_ok() {
+        return Ok(());
+    }
     let script = jenkinsfile(opts);
     let b64 = base64_encode(script.as_bytes());
     let groovy = format!(
@@ -206,6 +214,48 @@ println('updated-script')
     let body = String::from_utf8_lossy(&output.stdout).to_string();
     if !output.status.success() || !body.contains("updated-script") {
         return Err(Error::Config(truncate(&body, 300)));
+    }
+    Ok(())
+}
+
+fn update_job_config_xml(
+    base: &str,
+    auth: &str,
+    crumb: &Option<(String, String)>,
+    cookie_file: &Path,
+    opts: &JobOpts,
+) -> Result<()> {
+    let xml = job_config_xml(opts);
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "-b",
+        &cookie_file.display().to_string(),
+        "-c",
+        &cookie_file.display().to_string(),
+        "-u",
+        auth,
+        "-H",
+        "Content-Type: text/xml",
+        "-X",
+        "POST",
+        &format!("{base}/job/{LOLBENCH_ONE_TASK}/config.xml"),
+        "--data-binary",
+        &xml,
+        "-w",
+        "\n%{http_code}",
+    ]);
+    if let Some((field, value)) = crumb {
+        cmd.args(["-H", &format!("{field}: {value}")]);
+    }
+    let output = cmd.output().map_err(|e| Error::CommandFailed {
+        cmd: "curl job config.xml".into(),
+        source: e.into(),
+    })?;
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let code = raw.lines().last().unwrap_or("").trim().to_string();
+    if code != "200" && code != "201" && code != "204" {
+        return Err(Error::Config(format!("config.xml HTTP {code}")));
     }
     Ok(())
 }
@@ -300,40 +350,16 @@ fn wait_for_jenkins(base: &str, auth: &str, timeout: Duration) -> Result<()> {
     }
 }
 
-fn harness_choices(default_harness: &str) -> Vec<&'static str> {
-    let all = [
-        "oracle",
-        "icode",
-        "dsh",
-        "chrys",
-        "opencode",
-        "codex",
-        "claude-code",
-        "nop",
-    ];
-    let mut out = Vec::new();
-    if all.contains(&default_harness) {
-        out.push(match default_harness {
-            "oracle" => "oracle",
-            "icode" => "icode",
-            "dsh" => "dsh",
-            "chrys" => "chrys",
-            "opencode" => "opencode",
-            "codex" => "codex",
-            "claude-code" => "claude-code",
-            "nop" => "nop",
-            _ => "oracle",
-        });
+fn groovy_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+fn eval_mode_choices(default_mode: &str) -> (&'static str, &'static str) {
+    if default_mode == "source" {
+        ("source", "binary")
+    } else {
+        ("binary", "source")
     }
-    for h in all {
-        if !out.contains(&h) {
-            out.push(h);
-        }
-    }
-    if out.is_empty() {
-        out.push("oracle");
-    }
-    out
 }
 
 fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
@@ -350,7 +376,6 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
     if binds.is_empty() {
         return (String::new(), String::new());
     }
-    // Indent inside `dir(...) {` under Evaluate steps.
     let open = format!("          withCredentials([{}]) {{\n", binds.join(", "));
     let close = "          }\n".to_string();
     (open, close)
@@ -359,87 +384,63 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
 fn job_config_xml(opts: &JobOpts) -> String {
     let script = jenkinsfile(opts);
     let task_xml = xml_escape(&opts.default_task);
-    let model_xml = xml_escape(&opts.default_model);
-    let harnesses = harness_choices(&opts.default_harness);
-    let harness_xml: String = harnesses
-        .iter()
-        .map(|h| format!("              <string>{h}</string>"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let source_params = if opts.uses_local_checkout() {
-        let path_xml = xml_escape(opts.lolbench_path.as_deref().unwrap_or("").trim());
-        format!(
-            r#"        <hudson.model.StringParameterDefinition>
-          <name>LOLBENCH_PATH</name>
-          <description>Absolute path to LoLBench-Preview on the agent Mac (from lolbench.path)</description>
-          <defaultValue>{path_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>"#
-        )
-    } else {
-        let git_xml = xml_escape(opts.lolbench_git_url.trim());
-        format!(
-            r#"        <hudson.model.StringParameterDefinition>
-          <name>LOLBENCH_GIT_URL</name>
-          <defaultValue>{git_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>LOLBENCH_GIT_REF</name>
-          <defaultValue>main</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>"#
-        )
-    };
+    let release_xml = xml_escape(&opts.default_icode_release);
+    let git_url_xml = xml_escape(&opts.default_icode_git_url);
+    let git_ref_xml = xml_escape(&opts.default_icode_git_ref);
+    let args_xml = xml_escape(&opts.default_icode_args);
+    let (mode_first, mode_second) = eval_mode_choices(&opts.default_eval_mode);
 
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>One LoLBench task per build (created by mac-k3d). See docs/lolbench-jenkins.md.</description>
+  <description>iCode eval: EVAL_MODE=binary (GitCode -full- tarball) or source (git + uv). See docs/icode-ci-new-machine.md.</description>
   <keepDependencies>false</keepDependencies>
   <properties>
     <hudson.model.ParametersDefinitionProperty>
       <parameterDefinitions>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>EVAL_MODE</name>
+          <description>binary: GitCode -full- tarball; source: git clone + uv sync in the job workspace</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>{mode_first}</string>
+              <string>{mode_second}</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>TASK</name>
-          <description>LoLBench task id (harbor_tasks/TASK)</description>
+          <description>Case id exported as TASK and ICODE_TASK (not a Harbor path)</description>
           <defaultValue>{task_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>HARNESS</name>
-          <description>Harbor agent or custom LoLBench adapter alias</description>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{harness_xml}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
         <hudson.model.StringParameterDefinition>
-          <name>MODEL</name>
-          <description>provider/model (ignored for oracle/nop/icode/dsh)</description>
-          <defaultValue>{model_xml}</defaultValue>
+          <name>ICODE_RELEASE</name>
+          <description>binary mode: icode-OS-ARCH-full-vX.Y.Z.tar.gz URL or path, or a stub icode executable</description>
+          <defaultValue>{release_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>SUITE</name>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-              <string>union</string>
-              <string>orig</string>
-              <string>aug</string>
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>ICODE_GIT_URL</name>
+          <description>source mode: iCode git URL (private clone uses gitcode-pat)</description>
+          <defaultValue>{git_url_xml}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>ICODE_GIT_REF</name>
+          <description>source mode: branch or tag</description>
+          <defaultValue>{git_ref_xml}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>ICODE_ARGS</name>
+          <description>Extra argv after ./icode (smoke: --help)</description>
+          <defaultValue>{args_xml}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>AGENT_LABEL</name>
           <defaultValue>lolbench</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>MAX_RETRIES</name>
-          <defaultValue>2</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
@@ -448,7 +449,6 @@ fn job_config_xml(opts: &JobOpts) -> String {
           <defaultValue>4</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
-{source_params}
       </parameterDefinitions>
     </hudson.model.ParametersDefinitionProperty>
   </properties>
@@ -472,86 +472,13 @@ fn xml_escape(s: &str) -> String {
 }
 
 fn jenkinsfile(opts: &JobOpts) -> String {
-    let task = opts.default_task.replace('\\', "\\\\").replace('\'', "\\'");
-    let model = opts.default_model.replace('\\', "\\\\").replace('\'', "\\'");
-    let harnesses = harness_choices(&opts.default_harness);
-    let harness_list = harnesses
-        .iter()
-        .map(|h| format!("'{h}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let task = groovy_escape(&opts.default_task);
+    let release = groovy_escape(&opts.default_icode_release);
+    let git_url = groovy_escape(&opts.default_icode_git_url);
+    let git_ref = groovy_escape(&opts.default_icode_git_ref);
+    let icode_args = groovy_escape(&opts.default_icode_args);
+    let (mode_first, mode_second) = eval_mode_choices(&opts.default_eval_mode);
     let (cred_open, cred_close) = with_credentials_block(&opts.credential_ids);
-
-    let (source_params, prepare_stage, work_dir_expr, archive_root) =
-        if opts.uses_local_checkout() {
-            let path = opts
-                .lolbench_path
-                .as_deref()
-                .unwrap_or("")
-                .trim()
-                .replace('\\', "\\\\")
-                .replace('\'', "\\'");
-            (
-                format!(
-                    "    string(name: 'LOLBENCH_PATH', defaultValue: '{path}', description: 'Absolute LoLBench-Preview path on the agent Mac')"
-                ),
-                r#"    stage('Prepare') {
-      steps {
-        sh '''
-          set -euo pipefail
-          test -d "${LOLBENCH_PATH}"
-          test -d "${LOLBENCH_PATH}/harbor_tasks"
-        '''
-      }
-    }"#
-                .to_string(),
-                "params.LOLBENCH_PATH".to_string(),
-                // archiveArtifacts is workspace-relative; copy via shell first.
-                r#"sh '''
-        set +e
-        rm -rf "${WORKSPACE}/_lolbench_artifacts"
-        mkdir -p "${WORKSPACE}/_lolbench_artifacts"
-        if [ -d "${LOLBENCH_PATH}/${JOBS_DIR}" ]; then
-          cp -R "${LOLBENCH_PATH}/${JOBS_DIR}" "${WORKSPACE}/_lolbench_artifacts/"
-        fi
-      '''
-      archiveArtifacts artifacts: "_lolbench_artifacts/**/verifier/*.json", allowEmptyArchive: true"#
-                    .to_string(),
-            )
-        } else {
-            let git = opts
-                .lolbench_git_url
-                .trim()
-                .replace('\\', "\\\\")
-                .replace('\'', "\\'");
-            (
-                format!(
-                    "    string(name: 'LOLBENCH_GIT_URL', defaultValue: '{git}')\n    string(name: 'LOLBENCH_GIT_REF', defaultValue: 'main')"
-                ),
-                r#"    stage('Checkout') {
-      steps {
-        checkout([
-          $class: 'GitSCM',
-          branches: [[name: "*/${params.LOLBENCH_GIT_REF}"]],
-          userRemoteConfigs: [[url: params.LOLBENCH_GIT_URL]],
-          extensions: [[$class: 'CloneOption', shallow: true, depth: 1, noTags: true]]
-        ])
-      }
-    }"#
-                .to_string(),
-                "env.WORKSPACE".to_string(),
-                r#"archiveArtifacts artifacts: "${env.JOBS_DIR}/**/verifier/*.json", allowEmptyArchive: true"#
-                    .to_string(),
-            )
-        };
-
-    // readFile is relative to the Jenkins workspace unless given an absolute path.
-    let reward_read = if opts.uses_local_checkout() {
-        r#"def line = readFile("${params.LOLBENCH_PATH}/lolbench.properties").trim()"#
-            .to_string()
-    } else {
-        r#"def line = readFile('lolbench.properties').trim()"#.to_string()
-    };
 
     format!(
         r#"pipeline {{
@@ -562,110 +489,135 @@ fn jenkinsfile(opts: &JobOpts) -> String {
   }}
 
   parameters {{
-    string(name: 'TASK', defaultValue: '{task}', description: 'LoLBench task id (harbor_tasks/<TASK>)')
-    choice(name: 'HARNESS', choices: [{harness_list}], description: 'Harbor agent or custom adapter alias')
-    string(name: 'MODEL', defaultValue: '{model}', description: 'provider/model (ignored for oracle/nop/icode/dsh)')
-    choice(name: 'SUITE', choices: ['union', 'orig', 'aug'])
+    choice(name: 'EVAL_MODE', choices: ['{mode_first}', '{mode_second}'], description: 'binary: GitCode -full- tarball; source: git + uv sync')
+    string(name: 'TASK', defaultValue: '{task}', description: 'Case id exported as TASK and ICODE_TASK')
+    string(name: 'ICODE_RELEASE', defaultValue: '{release}', description: 'binary: icode-OS-ARCH-full-vX.Y.Z.tar.gz URL or path, or a stub icode')
+    string(name: 'ICODE_GIT_URL', defaultValue: '{git_url}', description: 'source: iCode git URL')
+    string(name: 'ICODE_GIT_REF', defaultValue: '{git_ref}', description: 'source: branch or tag')
+    string(name: 'ICODE_ARGS', defaultValue: '{icode_args}', description: 'Extra argv after ./icode (smoke: --help)')
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
-    string(name: 'MAX_RETRIES', defaultValue: '2')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'CPU_CORES lock quantity')
-{source_params}
-  }}
-
-  environment {{
-    JOBS_DIR = "harbor_runs/jenkins-${{env.BUILD_NUMBER}}/${{params.TASK}}"
-    HARBOR_JOB_NAME = "${{params.TASK}}_${{params.HARNESS}}_${{params.SUITE}}_${{env.BUILD_NUMBER}}"
   }}
 
   stages {{
-{prepare_stage}
     stage('Evaluate') {{
       steps {{
-        dir({work_dir_expr}) {{
-{cred_open}          lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
-            sh '''
-              set -euo pipefail
-              export PATH="/usr/local/bin:/opt/homebrew/bin:${{HOME}}/.local/bin:${{HOME}}/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:${{PATH}}"
-              export PYTHONPATH=.
-              test -d "harbor_tasks/${{TASK}}"
-              command -v docker >/dev/null
-              command -v harbor >/dev/null
-              docker info >/dev/null
-              harbor --version
+        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
+{cred_open}          sh '''
+            set -euo pipefail
+            export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
+            command -v docker >/dev/null
+            docker info >/dev/null
 
-              mkdir -p "${{JOBS_DIR}}"
-              agent_spec="$HARNESS"
-              model_args=()
-              ae_args=()
-              extra=()
-              case "$HARNESS" in
-                icode)
-                  agent_spec="agents.icode_agent:ICodeAgent"
-                  extra+=(--allow-agent-host api.deepseek.com --agent-setup-timeout-multiplier 10)
-                  [ -n "${{DEEPSEEK_API_KEY:-}}" ] && ae_args+=(--ae "DEEPSEEK_API_KEY=${{DEEPSEEK_API_KEY}}")
-                  [ -n "${{GITCODE_TOKEN:-}}" ] && ae_args+=(--ae "GITCODE_TOKEN=${{GITCODE_TOKEN}}")
-                  ;;
-                dsh)
-                  agent_spec="agents.dsh_agent:DshAgent"
-                  extra+=(--allow-agent-host api.deepseek.com --agent-setup-timeout-multiplier 10)
-                  [ -n "${{DEEPSEEK_API_KEY:-}}" ] && ae_args+=(--ae "DEEPSEEK_API_KEY=${{DEEPSEEK_API_KEY}}")
-                  ;;
-                chrys)
-                  agent_spec="agents.chrys_agent:ChrysAgent"
-                  extra+=(--agent-setup-timeout-multiplier 10)
-                  [ -n "${{OPENROUTER_API_KEY:-}}" ] && ae_args+=(--ae "OPENROUTER_API_KEY=${{OPENROUTER_API_KEY}}")
-                  [ -n "${{GITHUB_TOKEN:-}}" ] && ae_args+=(--ae "GITHUB_TOKEN=${{GITHUB_TOKEN}}")
-                  [ -n "$MODEL" ] && [ "$MODEL" != "-" ] && model_args=(-m "$MODEL")
-                  ;;
-                oracle|nop)
-                  ;;
-                *)
-                  [ -n "$MODEL" ] && [ "$MODEL" != "-" ] && model_args=(-m "$MODEL")
-                  [ -n "${{OPENROUTER_API_KEY:-}}" ] && ae_args+=(--ae "OPENROUTER_API_KEY=${{OPENROUTER_API_KEY}}")
-                  [ -n "${{OPENAI_API_KEY:-}}" ] && ae_args+=(--ae "OPENAI_API_KEY=${{OPENAI_API_KEY}}")
-                  [ -n "${{ANTHROPIC_API_KEY:-}}" ] && ae_args+=(--ae "ANTHROPIC_API_KEY=${{ANTHROPIC_API_KEY}}")
-                  ;;
-              esac
-              [ "$MAX_RETRIES" != "0" ] && extra+=(--max-retries "$MAX_RETRIES")
+            work="${{WORKSPACE}}/icode-in"
+            rm -rf "$work"
+            mkdir -p "$work"
+            icode=""
+            mode="${{EVAL_MODE:-binary}}"
 
-              harbor run \
-                -p "harbor_tasks/${{TASK}}" \
-                -a "${{agent_spec}}" ${{model_args[@]+"${{model_args[@]}}"}} \
-                ${{ae_args[@]+"${{ae_args[@]}}"}} \
-                --job-name "${{HARBOR_JOB_NAME}}" \
-                --jobs-dir "${{JOBS_DIR}}" \
-                --no-delete -n 1 -y \
-                --ve "LOLBENCH_SUITE=${{SUITE}}" \
-                "${{extra[@]}}"
-            '''
-          }}
+            run_icode() {{
+              if [ -z "$icode" ] || [ ! -e "$icode" ]; then
+                echo "could not find icode executable" >&2
+                exit 1
+              fi
+              chmod +x "$icode" || true
+              export TASK
+              export ICODE_TASK="${{TASK:-}}"
+              # iCode README documents ./icode --help and ./icode tui; extra flags via ICODE_ARGS.
+              # shellcheck disable=SC2086
+              "$icode" ${{ICODE_ARGS:-}}
+            }}
+
+            case "$mode" in
+              source)
+                if [ -z "${{ICODE_GIT_URL:-}}" ]; then
+                  echo "ICODE_GIT_URL is required when EVAL_MODE=source" >&2
+                  exit 1
+                fi
+                srcdir="$work/src"
+                ref="${{ICODE_GIT_REF:-main}}"
+                clone_url="${{ICODE_GIT_URL}}"
+                if [ -n "${{GITCODE_TOKEN:-}}" ]; then
+                  case "$clone_url" in
+                    https://*)
+                      rest="${{clone_url#https://}}"
+                      clone_url="https://oauth2:${{GITCODE_TOKEN}}@${{rest}}"
+                      ;;
+                  esac
+                fi
+                git clone --depth 1 --branch "$ref" "$clone_url" "$srcdir"
+                git -C "$srcdir" remote set-url origin "${{ICODE_GIT_URL}}"
+                if ! command -v uv >/dev/null; then
+                  curl -LsSf https://astral.sh/uv/install.sh | sh
+                  export PATH="${{HOME}}/.local/bin:${{PATH}}"
+                fi
+                command -v uv >/dev/null
+                ( cd "$srcdir" && uv sync )
+                if [ -x "$srcdir/.venv/bin/icode" ] || [ -f "$srcdir/.venv/bin/icode" ]; then
+                  icode="$srcdir/.venv/bin/icode"
+                elif [ -x "$srcdir/icode" ] || [ -f "$srcdir/icode" ]; then
+                  icode="$srcdir/icode"
+                else
+                  icode="$(find "$srcdir" -type f -name icode | head -n 1)"
+                fi
+                run_icode
+                ;;
+              *)
+                if [ -z "${{ICODE_RELEASE:-}}" ]; then
+                  echo "ICODE_RELEASE is required (full .tar.gz URL/path, or path to icode)" >&2
+                  exit 1
+                fi
+
+                src="${{ICODE_RELEASE}}"
+                case "$src" in
+                  http://*|https://*)
+                    if [ -n "${{GITCODE_TOKEN:-}}" ]; then
+                      curl -fsSL -H "PRIVATE-TOKEN: ${{GITCODE_TOKEN}}" "$src" -o "$work/release.bin"
+                    else
+                      curl -fsSL "$src" -o "$work/release.bin"
+                    fi
+                    src="$work/release.bin"
+                    ;;
+                esac
+
+                if [ ! -e "$src" ]; then
+                  echo "ICODE_RELEASE not found: $src" >&2
+                  exit 1
+                fi
+
+                base="$(basename "$src")"
+                case "$base" in
+                  *-full-*) ;;
+                  icode-*.tar.gz|icode-*.tgz)
+                    echo "Warning: $base does not look like a -full- archive; slim tarballs may hit PyPI." >&2
+                    ;;
+                esac
+
+                case "$src" in
+                  *.tar.gz|*.tgz)
+                    mkdir -p "$work/extract"
+                    tar -xzf "$src" -C "$work/extract"
+                    if [ -x "$work/extract/icode" ] || [ -f "$work/extract/icode" ]; then
+                      icode="$work/extract/icode"
+                    else
+                      icode="$(find "$work/extract" -type f -name icode | head -n 1)"
+                    fi
+                    ;;
+                  *)
+                    icode="$src"
+                    ;;
+                esac
+                run_icode
+                ;;
+            esac
+          '''
 {cred_close}        }}
       }}
     }}
     stage('Report') {{
       steps {{
-        dir({work_dir_expr}) {{
-          sh '''
-            python3 - <<'PY'
-import json, glob, os, pathlib
-jobs_dir = os.environ["JOBS_DIR"]
-paths = glob.glob(f"{{jobs_dir}}/**/verifier/reward.json", recursive=True)
-if not paths:
-    raise SystemExit(f"no reward.json under {{jobs_dir}}")
-data = json.load(open(paths[0]))
-reward = data.get("reward")
-pathlib.Path("lolbench.properties").write_text(f"REWARD={{reward}}" + chr(10))
-print(data)
-PY
-          '''
-        }}
         script {{
-          {reward_read}
-          def reward = line.contains('=') ? line.split('=', 2)[1].trim() : line
-          currentBuild.description = "${{params.TASK}} | ${{params.HARNESS}} | ${{params.MODEL}} | reward=${{reward}}"
-          if (reward != '1.0') {{
-            currentBuild.result = 'UNSTABLE'
-          }}
+          currentBuild.description = "${{params.TASK}} | ${{params.EVAL_MODE}} | release=${{params.ICODE_RELEASE}} | git=${{params.ICODE_GIT_URL}}"
         }}
       }}
     }}
@@ -673,19 +625,18 @@ PY
 
   post {{
     always {{
-      {archive_root}
+      archiveArtifacts artifacts: "**/reward.json", allowEmptyArchive: true
     }}
   }}
 }}
 "#,
+        mode_first = mode_first,
+        mode_second = mode_second,
         task = task,
-        model = model,
-        harness_list = harness_list,
-        source_params = source_params,
-        prepare_stage = prepare_stage,
-        work_dir_expr = work_dir_expr,
-        reward_read = reward_read,
-        archive_root = archive_root,
+        release = release,
+        git_url = git_url,
+        git_ref = git_ref,
+        icode_args = icode_args,
         cred_open = cred_open,
         cred_close = cred_close,
     )
@@ -778,58 +729,74 @@ mod tests {
 
     fn sample_opts() -> JobOpts {
         JobOpts {
-            lolbench_path: Some("/Volumes/1TB.large/github/LoLBench-Preview".into()),
-            lolbench_git_url: "https://github.com/example/LoLBench-Preview.git".into(),
-            default_harness: "icode".into(),
             default_task: "ruff_1".into(),
-            default_model: "openrouter/deepseek/deepseek-v4-pro".into(),
-            credential_ids: vec![
-                "deepseek-api-key".into(),
-                "gitcode-pat".into(),
-            ],
-        }
-    }
-
-    fn sample_opts_git() -> JobOpts {
-        JobOpts {
-            lolbench_path: None,
-            ..sample_opts()
+            default_eval_mode: "binary".into(),
+            default_icode_release:
+                "https://gitcode.com/example/icode-linux-x86_64-full-v0.1.41.tar.gz".into(),
+            default_icode_git_url: "https://gitcode.com/example/icode.git".into(),
+            default_icode_git_ref: "main".into(),
+            default_icode_args: "--help".into(),
+            credential_ids: vec!["deepseek-api-key".into(), "gitcode-pat".into()],
         }
     }
 
     #[test]
-    fn jenkinsfile_uses_local_path_when_configured() {
+    fn jenkinsfile_dual_mode_binary_and_source() {
         let jf = jenkinsfile(&sample_opts());
-        assert!(jf.contains("LOLBENCH_PATH"));
-        assert!(jf.contains("/Volumes/1TB.large/github/LoLBench-Preview"));
-        assert!(jf.contains("dir(params.LOLBENCH_PATH)"));
-        assert!(jf.contains("stage('Prepare')"));
-        assert!(!jf.contains("GitSCM"));
-        assert!(jf.contains("agents.icode_agent:ICodeAgent"));
-        assert!(jf.contains("withCredentials"));
-        assert!(jf.contains("harbor_runs/jenkins-"));
+        assert!(jf.contains("EVAL_MODE"));
+        assert!(jf.contains("choice(name: 'EVAL_MODE'"));
+        assert!(jf.contains("ICODE_RELEASE"));
+        assert!(jf.contains("ICODE_GIT_URL"));
+        assert!(jf.contains("ICODE_GIT_REF"));
+        assert!(jf.contains("icode-linux-x86_64-full-v0.1.41.tar.gz"));
+        assert!(jf.contains("tar -xzf"));
+        assert!(jf.contains("ICODE_RELEASE is required"));
+        assert!(jf.contains("PRIVATE-TOKEN"));
+        assert!(jf.contains("GITCODE_TOKEN"));
+        assert!(jf.contains("ICODE_ARGS"));
+        assert!(jf.contains("ICODE_TASK"));
         assert!(jf.contains("lock(label: 'CPU_CORES'"));
-    }
-
-    #[test]
-    fn jenkinsfile_falls_back_to_git_when_no_path() {
-        let jf = jenkinsfile(&sample_opts_git());
-        assert!(jf.contains("GitSCM"));
-        assert!(jf.contains("LOLBENCH_GIT_URL"));
-        assert!(!jf.contains("LOLBENCH_PATH"));
-        assert!(jf.contains("dir(env.WORKSPACE)"));
-    }
-
-    #[test]
-    fn jenkinsfile_contains_isolation_and_icode() {
-        let jf = jenkinsfile(&sample_opts());
-        assert!(jf.contains("harbor_runs/jenkins-"));
-        assert!(jf.contains("lock(label: 'CPU_CORES'"));
-        assert!(jf.contains("resource: null"));
-        assert!(jf.contains("agents.icode_agent:ICodeAgent"));
         assert!(jf.contains("withCredentials"));
         assert!(jf.contains("deepseek-api-key"));
-        assert!(!jf.contains("timestamps()"));
+        assert!(jf.contains("source)"));
+        assert!(jf.contains("( cd \"$srcdir\" && uv sync )"));
+        assert!(jf.contains("git clone"));
+        assert!(jf.contains("ICODE_GIT_URL is required when EVAL_MODE=source"));
+        assert!(!jf.contains("honeyc"));
+        assert!(!jf.contains("BINARY_TARGET"));
+        assert!(!jf.contains("PYTHONPATH=."));
+        assert!(!jf.contains("harbor run"));
+        assert!(!jf.contains("GitSCM"));
+        assert!(!jf.contains("eval --task"));
+        let case_at = jf.find("case \"$mode\" in").expect("EVAL_MODE case");
+        let uv_at = jf[case_at..].find("uv sync").expect("uv sync in Evaluate");
+        let binary_req = jf[case_at..]
+            .find("ICODE_RELEASE is required")
+            .expect("binary require");
+        assert!(
+            uv_at < binary_req,
+            "uv sync should appear in the source arm, before the binary require"
+        );
+    }
+
+    #[test]
+    fn jenkinsfile_choice_order_follows_default_eval_mode() {
+        let mut opts = sample_opts();
+        opts.default_eval_mode = "source".into();
+        let jf = jenkinsfile(&opts);
+        assert!(jf.contains("choices: ['source', 'binary']"));
+        opts.default_eval_mode = "binary".into();
+        let jf = jenkinsfile(&opts);
+        assert!(jf.contains("choices: ['binary', 'source']"));
+    }
+
+    #[test]
+    fn jenkinsfile_downloads_http_and_warns_slim() {
+        let jf = jenkinsfile(&sample_opts());
+        assert!(jf.contains("http://*|https://*"));
+        assert!(jf.contains("icode-in"));
+        assert!(jf.contains("-full-"));
+        assert!(jf.contains("slim tarballs"));
     }
 
     #[test]
@@ -837,17 +804,43 @@ mod tests {
         let xml = job_config_xml(&sample_opts());
         assert!(xml.contains("<![CDATA["));
         assert!(xml.contains("flow-definition"));
-        assert!(xml.contains("<string>icode</string>"));
-        assert!(xml.contains("<name>LOLBENCH_PATH</name>"));
-        assert!(!xml.contains("<name>LOLBENCH_GIT_URL</name>"));
+        assert!(xml.contains("<name>EVAL_MODE</name>"));
+        assert!(xml.contains("<name>ICODE_RELEASE</name>"));
+        assert!(xml.contains("<name>ICODE_GIT_URL</name>"));
+        assert!(xml.contains("<name>ICODE_GIT_REF</name>"));
+        assert!(xml.contains("<name>ICODE_ARGS</name>"));
+        assert!(xml.contains("<string>binary</string>"));
+        assert!(!xml.contains("<name>HONEYC_BIN</name>"));
+        assert!(!xml.contains("<name>BINARY_TARGET</name>"));
+        assert!(!xml.contains("<name>LOLBENCH_PATH</name>"));
         assert!(xml.contains("pipeline {"));
     }
 
     #[test]
-    fn jenkinsfile_python_fstring_is_valid() {
-        let jf = jenkinsfile(&sample_opts());
-        assert!(jf.contains(r#"glob.glob(f"{jobs_dir}/**/verifier/reward.json""#));
-        assert!(jf.contains(r#"f"REWARD={reward}" + chr(10)"#));
+    fn job_opts_from_config_falls_back_to_old_binary_target() {
+        let mut cfg = crate::config::MacK3dConfig::default();
+        cfg.jenkins_job.default_icode_release.clear();
+        cfg.jenkins_job.default_binary_target = "/tmp/icode".into();
+        let opts = JobOpts::from_config(&cfg, Vec::new());
+        assert_eq!(opts.default_icode_release, "/tmp/icode");
+        assert_eq!(opts.default_task, "ruff_1");
+        assert_eq!(opts.default_eval_mode, "binary");
+        assert_eq!(opts.default_icode_git_ref, "main");
+    }
+
+    #[test]
+    fn job_opts_from_config_normalizes_eval_mode() {
+        let mut cfg = crate::config::MacK3dConfig::default();
+        cfg.jenkins_job.default_eval_mode = "SOURCE".into();
+        cfg.jenkins_job.default_icode_git_url = "https://gitcode.com/example/icode.git".into();
+        cfg.jenkins_job.default_icode_git_ref.clear();
+        let opts = JobOpts::from_config(&cfg, Vec::new());
+        assert_eq!(opts.default_eval_mode, "source");
+        assert_eq!(opts.default_icode_git_ref, "main");
+        assert_eq!(
+            opts.default_icode_git_url,
+            "https://gitcode.com/example/icode.git"
+        );
     }
 
     #[test]
@@ -855,12 +848,5 @@ mod tests {
         let s = "hello pipeline";
         let enc = base64_encode(s.as_bytes());
         assert_eq!(enc, "aGVsbG8gcGlwZWxpbmU=");
-    }
-
-    #[test]
-    fn harness_default_sorted_first() {
-        let h = harness_choices("icode");
-        assert_eq!(h[0], "icode");
-        assert!(h.contains(&"oracle"));
     }
 }

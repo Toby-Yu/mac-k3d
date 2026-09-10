@@ -168,17 +168,47 @@ pub struct JenkinsAgentConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JenkinsJobConfig {
-    pub default_harness: String,
     pub default_task: String,
+    /// `binary` (GitCode `-full-` tarball) or `source` (git clone + uv sync in the job).
+    pub default_eval_mode: String,
+    /// GitCode `icode-<os>-<arch>-full-vX.Y.Z.tar.gz` URL or path (or a stub `icode` binary).
+    pub default_icode_release: String,
+    /// iCode git URL for `EVAL_MODE=source` (private GitCode clone uses `gitcode-pat`).
+    pub default_icode_git_url: String,
+    /// Git ref for source mode (branch or tag). Empty becomes `main`.
+    pub default_icode_git_ref: String,
+    pub default_icode_args: String,
+    /// Deprecated; ignored if `default_icode_release` is set.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_binary_target: String,
+    /// Deprecated honeyc-era field; ignored by the job generator.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_honeyc_bin: String,
+    /// Deprecated honeyc-era field; ignored by the job generator.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_honeyc_args: String,
+    /// Deprecated Harbor-era field; ignored by the job generator.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_harness: String,
+    /// Deprecated Harbor-era field; ignored by the job generator.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_model: String,
 }
 
 impl Default for JenkinsJobConfig {
     fn default() -> Self {
         Self {
-            default_harness: "oracle".into(),
             default_task: "ruff_1".into(),
-            default_model: "openrouter/deepseek/deepseek-v4-pro".into(),
+            default_eval_mode: "binary".into(),
+            default_icode_release: String::new(),
+            default_icode_git_url: String::new(),
+            default_icode_git_ref: "main".into(),
+            default_icode_args: String::new(),
+            default_binary_target: String::new(),
+            default_honeyc_bin: String::new(),
+            default_honeyc_args: String::new(),
+            default_harness: String::new(),
+            default_model: String::new(),
         }
     }
 }

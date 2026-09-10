@@ -62,9 +62,12 @@ jenkins_agent:
   api_token: null         # not for LLM/Git — see docs/secrets.md
 
 jenkins_job:              # controller: lolbench_one_task parameter defaults (non-secret)
-  default_harness: oracle
   default_task: ruff_1
-  default_model: openrouter/deepseek/deepseek-v4-pro
+  default_eval_mode: binary   # binary | source
+  default_icode_release: ""   # binary: GitCode icode-OS-ARCH-full-vX.Y.Z.tar.gz URL or path
+  default_icode_git_url: ""   # source: iCode git URL
+  default_icode_git_ref: main
+  default_icode_args: ""      # argv after ./icode (smoke: --help)
 
 resources:
   cpu_cores_label: CPU_CORES

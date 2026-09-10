@@ -21,11 +21,14 @@ pub struct Cli {
     pub verbose: u8,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Interactive first-run: wizard, then start (controller) or config (worker)
+    Setup(commands::SetupArgs),
+
     /// Verify prerequisites and prepare the local environment
     Prepare(commands::PrepareArgs),
 

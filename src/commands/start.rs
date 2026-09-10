@@ -3,8 +3,8 @@ use std::time::Duration;
 use clap::Args;
 
 use crate::cli::JenkinsMode;
-use crate::config::MacK3dConfig;
-use crate::error::Result;
+use crate::config::{MacK3dConfig, NodeRole};
+use crate::error::{Error, Result};
 use crate::platform::ensure_supported_os;
 use crate::runtime::docker::{self, DockerStatus};
 use crate::runtime::k3d::{self, ClusterState};
@@ -12,7 +12,7 @@ use crate::runtime::kubectl;
 use crate::prepare::jenkins_job;
 use crate::runtime::{jenkins, state, Tools};
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub struct StartArgs {
     /// Jenkins deployment mode (overrides config when set)
     #[arg(long, value_enum)]
@@ -29,6 +29,7 @@ pub struct StartArgs {
 
 pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
     ensure_supported_os()?;
+    reject_worker_start(config)?;
 
     let tools = Tools::from_config(config)?;
 
@@ -95,4 +96,34 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
     state::write_after_start(config)?;
     println!("Start complete. Next: mac-k3d config");
     Ok(())
+}
+
+/// Workers must not create a k3d cluster. Use `config` / `setup` instead.
+fn reject_worker_start(config: &MacK3dConfig) -> Result<()> {
+    if matches!(config.role, NodeRole::Worker) {
+        return Err(Error::Config(
+            "start is for controller/standalone configs. Workers use `mac-k3d config` (or `setup`). Do not start k3d from a worker YAML.".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_yaml_cannot_start() {
+        let mut config = MacK3dConfig::default();
+        config.role = NodeRole::Worker;
+        let err = reject_worker_start(&config).unwrap_err().to_string();
+        assert!(err.contains("Workers use"), "{err}");
+    }
+
+    #[test]
+    fn controller_may_start() {
+        let mut config = MacK3dConfig::default();
+        config.role = NodeRole::Controller;
+        reject_worker_start(&config).unwrap();
+    }
 }

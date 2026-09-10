@@ -1,4 +1,4 @@
-use crate::config::MacK3dConfig;
+use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
 use crate::platform::ensure_supported_os;
 use crate::runtime::docker;
@@ -8,6 +8,22 @@ use crate::runtime::{jenkins, Tools};
 
 pub async fn run(config: &MacK3dConfig) -> Result<()> {
     ensure_supported_os()?;
+
+    if matches!(config.role, NodeRole::Worker) {
+        println!("Role:            worker (Jenkins agent; not a k3d node)");
+        println!(
+            "Jenkins URL:     {}",
+            config
+                .jenkins_agent
+                .controller_url
+                .as_deref()
+                .unwrap_or("(unset)")
+        );
+        println!(
+            "Agent daemon:    {}",
+            crate::platform::agent_daemon_label()
+        );
+    }
 
     let tools = match Tools::from_config(config) {
         Ok(t) => t,

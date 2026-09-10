@@ -8,7 +8,7 @@ use crate::platform::ensure_supported_os;
 use crate::prepare::{jenkins_agent, jenkins_credentials, jenkins_job};
 use crate::runtime::{jenkins, kubectl, k3d, Tools};
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub struct ConfigArgs {
     /// Do not merge kubeconfig into ~/.kube/config
     #[arg(long)]

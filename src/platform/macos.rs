@@ -27,6 +27,10 @@ pub fn default_agent_labels() -> Vec<String> {
     vec!["macos".into(), "docker".into(), "lolbench".into()]
 }
 
+pub fn agent_daemon_label() -> &'static str {
+    LAUNCH_AGENT_LABEL
+}
+
 pub fn scan_extra_mount_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(entries) = std::fs::read_dir("/Volumes") {

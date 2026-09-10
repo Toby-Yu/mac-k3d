@@ -84,6 +84,11 @@ pub fn default_agent_labels() -> Vec<String> {
     os::default_agent_labels()
 }
 
+/// systemd unit (Linux) or LaunchAgent label (macOS) for the Jenkins inbound agent.
+pub fn agent_daemon_label() -> &'static str {
+    os::agent_daemon_label()
+}
+
 pub fn platform_label() -> &'static str {
     host_os().as_str()
 }

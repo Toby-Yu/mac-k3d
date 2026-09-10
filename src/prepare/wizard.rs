@@ -59,15 +59,24 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         MacRole::Worker => NodeRole::Worker,
     };
     let jenkins_enabled = matches!(role, MacRole::Controller);
-    let wants_lolbench = !matches!(role, MacRole::Standalone)
-        || Confirm::with_theme(&ColorfulTheme::default())
+    // Jenkins evals take an iCode *release* tarball (not git/uv). Harbor/LoLBench
+    // source checkout is optional (oracle/debug only).
+    let wants_lolbench = match role {
+        MacRole::Controller => false,
+        MacRole::Worker => Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Install Harbor / LoLBench anyway (optional, for oracle/debug)?")
+            .default(false)
+            .interact()
+            .map_err(|_| Error::Cancelled)?,
+        MacRole::Standalone => Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(format!(
                 "Set up LoLBench / Harbor on this {}?",
                 crate::platform::machine_noun()
             ))
             .default(false)
             .interact()
-            .map_err(|_| Error::Cancelled)?;
+            .map_err(|_| Error::Cancelled)?,
+    };
 
     let docker = prompt_dependency(
         crate::platform::docker_display_name(),
@@ -75,8 +84,14 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         true,
         true,
     )?;
-    let k3d = prompt_dependency("k3d", discovered.k3d.as_ref(), true, false)?;
-    let kubectl = prompt_dependency("kubectl", discovered.kubectl.as_ref(), true, false)?;
+    let cluster_tools_required = !matches!(role, MacRole::Worker);
+    let k3d = prompt_dependency("k3d", discovered.k3d.as_ref(), cluster_tools_required, false)?;
+    let kubectl = prompt_dependency(
+        "kubectl",
+        discovered.kubectl.as_ref(),
+        cluster_tools_required,
+        false,
+    )?;
     let helm = if jenkins_enabled {
         prompt_dependency("helm", discovered.helm.as_ref(), true, false)?
     } else {
@@ -216,7 +231,13 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         .unwrap_or(std::path::Path::new("/"));
     resources::ensure_disk_min(disk_path, config.disk_min_gb())?;
 
-    println!("\nSetup complete. Next: mac-k3d start");
+    match role {
+        MacRole::Worker => println!("\nPrepare complete. Next: mac-k3d config (or mac-k3d setup)"),
+        MacRole::Controller => {
+            println!("\nPrepare complete. Next: mac-k3d start && mac-k3d config (or mac-k3d setup)")
+        }
+        MacRole::Standalone => println!("\nPrepare complete. Next: mac-k3d start"),
+    }
     Ok(config)
 }
 
@@ -360,7 +381,7 @@ fn prompt_dependency(
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("{label} action"))
         .items(&options)
-        .default(0)
+        .default(if required { 0 } else { options.len().saturating_sub(1) })
         .interact()
         .map_err(|_| Error::Cancelled)?;
 
@@ -712,43 +733,70 @@ fn apply_worker_agent(config: &mut MacK3dConfig, _creds: Option<&WorkerAgentProm
 fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
     println!(
         "\n`lolbench_one_task` parameter defaults (non-secret).\n\
-         Secrets are collected separately and stored in Jenkins Credentials.\n"
+         EVAL_MODE=binary uses a GitCode -full- tarball (ICODE_RELEASE).\n\
+         EVAL_MODE=source clones iCode in the *job* and runs uv sync there (not at prepare time).\n\
+         Secrets (DeepSeek, GitCode PAT) go to Jenkins Credentials.\n"
     );
-    let harnesses = [
-        "oracle",
-        "icode",
-        "dsh",
-        "chrys",
-        "opencode",
-        "codex",
-        "claude-code",
-        "nop",
-    ];
-    let default_idx = harnesses.iter().position(|h| *h == "oracle").unwrap_or(0);
-    let hi = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Default HARNESS")
-        .items(&harnesses)
-        .default(default_idx)
+
+    let mode_options = ["binary (GitCode -full- tarball)", "source (git clone + uv sync)"];
+    let mode_idx = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Default EVAL_MODE")
+        .items(&mode_options)
+        .default(0)
         .interact()
         .map_err(|_| Error::Cancelled)?;
-    let default_harness = harnesses[hi].to_string();
+    let default_eval_mode = if mode_idx == 1 {
+        "source".to_string()
+    } else {
+        "binary".to_string()
+    };
 
     let default_task: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Default TASK")
+        .with_prompt("Default TASK (exported as TASK / ICODE_TASK)")
         .default("ruff_1".into())
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
 
-    let default_model: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Default MODEL (built-in harnesses / chrys)")
-        .default("openrouter/deepseek/deepseek-v4-pro".into())
+    let default_icode_release: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Default ICODE_RELEASE (binary: full .tar.gz URL/path, or path to icode)")
+        .default(String::new())
+        .allow_empty(true)
+        .interact_text()
+        .map_err(|_| Error::Cancelled)?;
+
+    let default_icode_git_url: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Default ICODE_GIT_URL (source: iCode git URL)")
+        .default(String::new())
+        .allow_empty(true)
+        .interact_text()
+        .map_err(|_| Error::Cancelled)?;
+
+    let default_icode_git_ref: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Default ICODE_GIT_REF (source: branch or tag)")
+        .default("main".into())
+        .allow_empty(true)
+        .interact_text()
+        .map_err(|_| Error::Cancelled)?;
+
+    let default_icode_args: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Default ICODE_ARGS (argv after ./icode; smoke: --help)")
+        .default(String::new())
+        .allow_empty(true)
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
 
     Ok(JenkinsJobConfig {
-        default_harness,
         default_task,
-        default_model,
+        default_eval_mode,
+        default_icode_release,
+        default_icode_git_url,
+        default_icode_git_ref: if default_icode_git_ref.trim().is_empty() {
+            "main".into()
+        } else {
+            default_icode_git_ref
+        },
+        default_icode_args,
+        ..JenkinsJobConfig::default()
     })
 }
 
@@ -837,10 +885,25 @@ fn print_summary(config: &MacK3dConfig, role: MacRole) {
     }
     if matches!(role, MacRole::Controller) {
         println!(
-            "  Job defaults:  harness={} task={} model={}",
-            config.jenkins_job.default_harness,
+            "  Job defaults:  mode={} task={} icode_release={} git={}@{} args={}",
+            config.jenkins_job.default_eval_mode,
             config.jenkins_job.default_task,
-            config.jenkins_job.default_model
+            if config.jenkins_job.default_icode_release.is_empty() {
+                "(set at build time)"
+            } else {
+                config.jenkins_job.default_icode_release.as_str()
+            },
+            if config.jenkins_job.default_icode_git_url.is_empty() {
+                "(set at build time)"
+            } else {
+                config.jenkins_job.default_icode_git_url.as_str()
+            },
+            config.jenkins_job.default_icode_git_ref,
+            if config.jenkins_job.default_icode_args.is_empty() {
+                "(none)"
+            } else {
+                config.jenkins_job.default_icode_args.as_str()
+            }
         );
     }
     println!("  Disk minimum:  {} GB", config.disk_min_gb());

@@ -9,7 +9,25 @@ async fn main() -> mac_k3d::Result<()> {
 
     let mut config = MacK3dConfig::load(cli.config.as_deref())?;
 
-    match cli.command {
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            if atty::is(atty::Stream::Stdin) {
+                mac_k3d::cli::Command::Setup(mac_k3d::commands::SetupArgs::default())
+            } else {
+                eprintln!(
+                    "mac-k3d: no command given and stdin is not a TTY.\n\
+                     Run `mac-k3d setup` in a terminal, or `mac-k3d --help`."
+                );
+                std::process::exit(2);
+            }
+        }
+    };
+
+    match command {
+        mac_k3d::cli::Command::Setup(args) => {
+            mac_k3d::commands::run_setup(args, &config, cli.config.as_deref()).await?;
+        }
         mac_k3d::cli::Command::Prepare(args) => {
             mac_k3d::commands::run_prepare(args, &config, cli.config.as_deref()).await?;
         }
