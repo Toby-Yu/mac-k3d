@@ -68,7 +68,7 @@ Store the DeepSeek API key on the **controller** when prompted for CI secrets (c
 
 Storage: about **60 GB** free. Jenkins UI port: **17070**.
 
-If another program already uses **8080**, after prepare edit `~/.config/mac-k3d/config.yaml` and change `cluster.ports` `host: 8080` to e.g. `18080`. Leave `jenkins.host_port: 17070`.
+If another program already uses **8080**, **mac-k3d auto-remaps** the cluster HTTP host port (e.g. to `18080`) and prints the change. Leave `jenkins.host_port: 17070` unless that port is also busy (it is remapped the same way). Manual YAML edit is a last resort.
 
 ```bash
 # 1. Write controller config and apply (wizard → start → config)
@@ -272,4 +272,4 @@ Do **not** run `loginctl` or `usermod` on a Mac. Those are Linux-only.
 | `agent.jar` / curl port 17070 / need token | Finish controller `start`, paste API token, then worker `config` |
 | `REPLACE_ME` / unit not started | Token missing or still `api_token: null`; edit `worker.yaml` and re-run worker `config` |
 | `mac-k3d-jenkins-agent.service` could not be found | You ran `config` on **controller** YAML, or Jenkins was down / no token. Use `-c worker.yaml` after step 2 |
-| `failed to bind host port … 8080` | In controller YAML set host port `8080` → `18080`; keep Jenkins on `17070` |
+| `failed to bind host port … 8080` | Re-run `mac-k3d start` on a build that auto-remaps; or set free `cluster.ports` hosts. Keep Jenkins on `17070` unless remapped |

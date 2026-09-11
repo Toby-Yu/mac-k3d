@@ -190,6 +190,12 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         ..MacK3dConfig::default()
     };
 
+    // Remap busy host ports before summary/write so users see the final ports.
+    if !matches!(role, MacRole::Worker) {
+        let remaps = crate::runtime::ports::ensure_host_ports_available(&mut config)?;
+        crate::runtime::ports::print_port_remaps(&remaps);
+    }
+
     print_summary(&config, role);
 
     if !Confirm::with_theme(&ColorfulTheme::default())

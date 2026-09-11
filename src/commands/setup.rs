@@ -58,7 +58,7 @@ pub async fn run(args: SetupArgs, _config: &MacK3dConfig, config_path: Option<&P
         }
         NodeRole::Controller | NodeRole::Standalone => {
             println!("\nStarting Docker / k3d / Jenkins (if enabled)…\n");
-            super::run_start(StartArgs::default(), &config).await?;
+            super::run_start(StartArgs::default(), &config, Some(&config_path)).await?;
             println!("\nApplying kubeconfig / Jenkins job / credentials…\n");
             super::run_config(ConfigArgs::default(), &config).await?;
         }

@@ -5,7 +5,7 @@ Step-by-step for a **new Linux or Mac** (or a wiped lab PC) using the GitHub Rel
 Automated checks after bootstrap: [`scripts/env_set_up/README.md`](../../scripts/env_set_up/README.md).  
 Full product story: [workflow.md](workflow.md). Wizard details: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
 
-Prefer pre-release **v0.4.0-rc.3** (or newer 0.4.x) over GitHub **Latest** if Latest is still v0.3.0.
+Prefer pre-release **v0.4.0-rc.4** (or newer 0.4.x) over GitHub **Latest** if Latest is still v0.3.0.
 
 ---
 
@@ -24,7 +24,7 @@ Docker: the binary can **Install** it. If Docker is already present, choose **Us
 Option A — script (recommended once the repo is cloned, or copy the scripts folder):
 
 ```bash
-export MAC_K3D_RELEASE_TAG=v0.4.0-rc.3   # or the tag you were given
+export MAC_K3D_RELEASE_TAG=v0.4.0-rc.4   # or the tag you were given
 ./scripts/env_set_up/01_download_binary.sh
 export PATH="$HOME/.local/bin:$PATH"
 which mac-k3d
@@ -60,11 +60,11 @@ Wizard choices:
 | Role | **CI controller (Jenkins in k3d)** |
 | Docker / k3d / kubectl / helm | Use existing or **Install** |
 | Harbor / LoLBench | Skip |
-| Jenkins UI host port | **17070** (default on v0.4.0-rc.3+) |
+| Jenkins UI host port | **17070** (default on v0.4.0-rc.4+) |
 | CI secrets | Yes if you have `deepseek-api-key`; else skip and add later |
 | Write + apply | **yes** |
 
-If host **8080** is already taken, after prepare edit `~/.config/mac-k3d/config.yaml`: set `cluster.ports` host `8080` → e.g. `18080`. Leave `jenkins.host_port: 17070`. Then `mac-k3d start` / `config` if setup did not apply yet.
+If host **8080** (or **8443**) is already taken, **mac-k3d auto-remaps** to a free port (e.g. `18080`) and prints `Host port 8080 in use → using 18080` before writing config / creating the cluster. Jenkins UI stays on **17070** unless that port is also busy. Manual YAML edit is only needed if no free candidate port is found.
 
 Open **http://localhost:17070** — user **admin**, password from:
 
@@ -170,6 +170,6 @@ SKIP_DOWNLOAD=1 RUN_EVAL_SMOKE=1 ./scripts/env_set_up/run_all.sh
 | Docker permission / no Server | Linux: log out/in after docker group; macOS: open Docker Desktop |
 | Jenkins login not 200 | Finish controller `setup`/`start`; check `jenkins.host_port` and `JENKINS_URL` |
 | Agent not active | Token in `worker.yaml`, then `mac-k3d config -c worker.yaml` |
-| Host port 8080 bind error | Remap `cluster.ports` host `8080` → `18080`; keep Jenkins on **17070** |
+| Host port 8080 bind error | Should be rare: `setup`/`start` auto-remap busy cluster ports. If it still fails, free the process or set free `cluster.ports` hosts; keep Jenkins on **17070** unless that port is busy too |
 
 Sign-off tables: [testing-binary-initializer.md](testing-binary-initializer.md). Wipe/retest: tear down with `teardown`/`clean` as in [binary-initializer-new-machine.md](binary-initializer-new-machine.md).

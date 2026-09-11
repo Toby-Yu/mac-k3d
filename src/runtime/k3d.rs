@@ -133,7 +133,18 @@ pub async fn create(k3d: &Path, config: &MacK3dConfig) -> Result<()> {
     let args = create_args(config);
     let display: Vec<&str> = args.iter().map(String::as_str).collect();
     println!("Creating k3d cluster '{}'…", config.cluster.name);
-    exec::visible(k3d, &display).await
+    match exec::visible(k3d, &display).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let msg = err.to_string();
+            Err(crate::error::Error::Config(format!(
+                "{msg}\n\
+                 Hint: a host port may still be in use (cluster.ports or jenkins.host_port). \
+                 Re-run `mac-k3d start` after freeing the port, or set free host ports in config. \
+                 Newer builds auto-remap busy ports before create."
+            )))
+        }
+    }
 }
 
 pub async fn start(k3d: &Path, name: &str) -> Result<()> {

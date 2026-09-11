@@ -138,4 +138,4 @@ mac-k3d eval --n-tasks 1 --icode-mode source
 | DeepSWE clone fails | Network / git; retry P2 |
 | DEEPSEEK_API_KEY missing | Set env for `--local`, or store `deepseek-api-key` on the controller ([secrets.md](../secrets.md)) |
 | Docker OOM / disk | DeepSWE images are large; free disk; lower N |
-| Worker offline | Finish bootstrap T3; for local-only tests use `--local` |
+| Worker offline | Finish bootstrap Task 3; for local-only tests use `--local` |

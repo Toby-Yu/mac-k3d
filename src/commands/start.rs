@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use clap::Args;
@@ -6,10 +7,11 @@ use crate::cli::JenkinsMode;
 use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::{Error, Result};
 use crate::platform::ensure_supported_os;
+use crate::prepare::jenkins_job;
 use crate::runtime::docker::{self, DockerStatus};
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::kubectl;
-use crate::prepare::jenkins_job;
+use crate::runtime::ports;
 use crate::runtime::{jenkins, state, Tools};
 
 #[derive(Debug, Default, Args)]
@@ -27,11 +29,16 @@ pub struct StartArgs {
     pub skip_job: bool,
 }
 
-pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
+pub async fn run(
+    args: StartArgs,
+    config: &MacK3dConfig,
+    config_path: Option<&Path>,
+) -> Result<()> {
     ensure_supported_os()?;
     reject_worker_start(config)?;
 
-    let tools = Tools::from_config(config)?;
+    let mut config = config.clone();
+    let tools = Tools::from_config(&config)?;
 
     match docker::status(&tools.docker).await {
         DockerStatus::Running => {
@@ -56,7 +63,23 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
 
     let info = k3d::inspect(&tools.k3d, &config.cluster.name).await?;
     match info.state {
-        ClusterState::Missing => k3d::create(&tools.k3d, config).await?,
+        ClusterState::Missing => {
+            let remaps = ports::ensure_host_ports_available(&mut config)?;
+            ports::print_port_remaps(&remaps);
+            if !remaps.is_empty() {
+                if let Err(err) = config.save(config_path) {
+                    tracing::warn!(error = %err, "could not persist remapped host ports to config");
+                } else if let Some(path) = config_path {
+                    println!("Updated host ports in {}", path.display());
+                } else {
+                    println!(
+                        "Updated host ports in {}",
+                        MacK3dConfig::default_config_path().display()
+                    );
+                }
+            }
+            k3d::create(&tools.k3d, &config).await?;
+        }
         ClusterState::Stopped => k3d::start(&tools.k3d, &config.cluster.name).await?,
         ClusterState::Running => {
             println!(
@@ -76,13 +99,13 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
 
     if config.jenkins.enabled {
         let helm = tools.helm_required()?;
-        jenkins::install_or_upgrade(helm, config).await?;
-        println!("Jenkins UI: {}", jenkins::ui_url(config));
+        jenkins::install_or_upgrade(helm, &config).await?;
+        println!("Jenkins UI: {}", jenkins::ui_url(&config));
         if !args.skip_job {
             println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
             // Best-effort: config will retry if Jenkins is still warming up.
             if let Err(err) =
-                jenkins_job::ensure_lolbench_one_task_from_cluster(&tools.kubectl, config, Vec::new())
+                jenkins_job::ensure_lolbench_one_task_from_cluster(&tools.kubectl, &config, Vec::new())
                     .await
             {
                 println!(
@@ -92,7 +115,7 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
             }
             println!("Ensuring Jenkins job '{}'…", jenkins_job::ICODE_EVAL);
             if let Err(err) =
-                jenkins_job::ensure_icode_eval_from_cluster(&tools.kubectl, config, Vec::new())
+                jenkins_job::ensure_icode_eval_from_cluster(&tools.kubectl, &config, Vec::new())
                     .await
             {
                 println!(
@@ -103,7 +126,7 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
         }
     }
 
-    state::write_after_start(config)?;
+    state::write_after_start(&config)?;
     println!("Start complete. Next: mac-k3d config");
     Ok(())
 }

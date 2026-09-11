@@ -57,7 +57,7 @@ flowchart TD
 ## Process 1 — prepare the machine
 
 **User steps:** [binary-initializer-new-machine.md](binary-initializer-new-machine.md) · clean-machine walkthrough: [clean-machine-binary-test.md](clean-machine-binary-test.md)  
-**Pass/fail:** [testing-binary-initializer.md](testing-binary-initializer.md) (T0–T3, T5–T6) · automated checks: [`scripts/env_set_up/`](../../scripts/env_set_up/README.md)
+**Pass/fail:** [testing-binary-initializer.md](testing-binary-initializer.md) (Task 0–5 + Task 7 on Linux; Task 6 macOS later) · automated checks: [`scripts/env_set_up/`](../../scripts/env_set_up/README.md)
 
 | Step | What | Why |
 |------|------|-----|
