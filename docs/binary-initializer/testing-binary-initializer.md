@@ -4,9 +4,19 @@ This is the **binary-initializer** path (`setup`, Release asset). Full workflow:
 
 Use this document to **verify** a prebuilt `mac-k3d` on macOS and Linux.
 
-**Linux bootstrap sign-off is Task 0–5 and Task 7.** Task 6 is macOS (later). Task 8 is a destructive blank-machine wizard. Eval pipeline (Task 9 / P1–P8): [testing-eval-pipeline.md](testing-eval-pipeline.md). New-user walkthrough: [binary-initializer-new-machine.md](binary-initializer-new-machine.md) or [clean-machine-binary-test.md](clean-machine-binary-test.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../scripts/env_set_up/run_all.sh).
+**Linux bootstrap sign-off is Task 0–5, Task 7, and Task 8.** Task 6 is macOS (later). Eval pipeline (Task 9 / P1–P8): [testing-eval-pipeline.md](testing-eval-pipeline.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../scripts/env_set_up/run_all.sh).
+
+If live YAML already exists, `setup` shows **Config already exists** (Validate). To test as a **new user**, wipe first (Task 8a), then follow Task 8b / [clean-machine-binary-test.md](clean-machine-binary-test.md).
 
 Related design: [../prepare-wizard.md](../prepare-wizard.md), [../setup.md](../setup.md), [../commands.md](../commands.md).
+
+### Which document
+
+| Document | Purpose |
+|----------|---------|
+| **This file** ([testing-binary-initializer.md](testing-binary-initializer.md)) | **Developer sign-off.** Copy-paste Tasks 0–9, pass/fail, wipe-to-first-run, `scripts/env_set_up`. |
+| [binary-initializer-new-machine.md](binary-initializer-new-machine.md) | **End-user product guide.** How a person on a blank Linux/Mac downloads a Release binary, picks controller vs worker vs both, honest leftovers (docker logout, API token, Docker Desktop). Not a numbered lab checklist; `02`/`03`/`run_all` are not the main path. |
+| [clean-machine-binary-test.md](clean-machine-binary-test.md) | **Lab walkthrough for testers.** Same product as the user guide, ordered as wipe-or-new-PC → `01_download_binary.sh` → controller wizard → worker wizard → `run_all.sh`. Wizard prompt table lives there. |
 
 ---
 
@@ -100,7 +110,7 @@ mac-k3d setup -c ~/.config/mac-k3d/config.yaml
 
 If **Config already exists** (re-test on this lab): choose **Validate existing config only**, then **yes** on **Continue and apply now (start/config)?**. If credentials are offered: **n** unless you have keys ready; empty Enter skips a key. GitCode/GitHub PATs are not required for Task 2.
 
-If this is a first write (no YAML yet), use the wizard table in [clean-machine-binary-test.md](clean-machine-binary-test.md) (role **CI controller**, Harbor/LoLBench skip, Jenkins port **17070**). If host **8080** is taken, **mac-k3d auto-remaps** cluster ports (e.g. to `18080`) and keeps `jenkins.host_port: 17070` unless that port is busy too.
+To test as a **completely new machine** (first-run Role wizard, not Validate), wipe live YAML first — **Task 8a** — then **Task 8b**. First-write prompt table: [clean-machine-binary-test.md](clean-machine-binary-test.md) (role **CI controller**, Harbor/LoLBench skip, Jenkins port **17070**). If host **8080** is taken, **`Host port 8080 in use → using 18080` is PASS**; Jenkins stays **17070**.
 
 Then verify:
 
@@ -136,7 +146,7 @@ Optional: `mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins` print
 
 Purpose: check `setup -c worker.yaml` registers a Jenkins agent (`config` only, not `start`), the systemd unit is active, and `start` on the worker file is rejected.
 
-Prerequisite: Jenkins API token from the UI (**admin** → **Configure** → **API Token**). `api_user` is `admin`. Put token in `worker.yaml` if it is still empty, then `mac-k3d config -c ~/.config/mac-k3d/worker.yaml`.
+Prerequisite: Jenkins API token from the UI (**admin** → **Configure** → **API Token**). `api_user` is **`admin`**. Paste the **token secret string**, not the token **name**. If the field is still empty, put `api_user` / `api_token` in `worker.yaml`, then `mac-k3d config -c ~/.config/mac-k3d/worker.yaml`.
 
 command:
 
@@ -145,7 +155,9 @@ export PATH="$HOME/.local/bin:$PATH"
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 ```
 
-If **Config already exists**: **Validate existing config only**, then **yes** on apply. Worker apply runs **config** only.
+If **Config already exists** (re-test): **Validate existing config only**, then **yes** on apply. Worker apply runs **config** only.
+
+First-run (no live `worker.yaml`): Task 8a wipe, then Task 8b. At **Jenkins controller URL**, confirm the line is `http://localhost:17070` before Enter. Do not paste a command block while prompts are open. If URL/name/labels are garbled: edit `jenkins_agent` in `worker.yaml` (`controller_url`, `api_user`, `api_token`, `name`, `labels`, `remote_fs`) then `mac-k3d config`, or **Re-run wizard (overwrite config)**.
 
 Then:
 
@@ -262,6 +274,136 @@ Optional Task 7c (Intel Mac or Rosetta): `xattr -d com.apple.quarantine ./mac-k3
 
 ---
 
+## Task 8a — wipe live YAML (keep `.bak`) for first-run
+
+Purpose: remove cluster, agent unit, and **live** `config.yaml` / `worker.yaml` so the next `setup` asks Role / base directory — not **Config already exists**. Keep `.bak` backups. Docker stays installed. Product walkthrough after wipe: [clean-machine-binary-test.md](clean-machine-binary-test.md).
+
+command:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+
+mac-k3d teardown -c ~/.config/mac-k3d/worker.yaml --deregister-agent 2>/dev/null || true
+mac-k3d clean -c ~/.config/mac-k3d/worker.yaml --yes 2>/dev/null || true
+mac-k3d teardown -c ~/.config/mac-k3d/config.yaml 2>/dev/null || true
+mac-k3d clean -c ~/.config/mac-k3d/config.yaml --yes 2>/dev/null || true
+
+systemctl --user stop mac-k3d-jenkins-agent.service 2>/dev/null || true
+systemctl --user disable mac-k3d-jenkins-agent.service 2>/dev/null || true
+rm -f ~/.config/systemd/user/mac-k3d-jenkins-agent.service
+systemctl --user daemon-reload 2>/dev/null || true
+
+mkdir -p ~/.config/mac-k3d
+[ -f ~/.config/mac-k3d/config.yaml ] && mv -f ~/.config/mac-k3d/config.yaml ~/.config/mac-k3d/config.yaml.bak
+[ -f ~/.config/mac-k3d/worker.yaml ] && mv -f ~/.config/mac-k3d/worker.yaml ~/.config/mac-k3d/worker.yaml.bak
+[ -f ~/.config/mac-k3d/credentials.pending.yaml ] && mv -f ~/.config/mac-k3d/credentials.pending.yaml ~/.config/mac-k3d/credentials.pending.yaml.bak
+
+k3d cluster delete ci-controller 2>/dev/null || true
+k3d cluster delete ci-worker 2>/dev/null || true
+
+ls -la ~/.config/mac-k3d/
+test ! -f ~/.config/mac-k3d/config.yaml && echo "no live config.yaml OK"
+test ! -f ~/.config/mac-k3d/worker.yaml && echo "no live worker.yaml OK"
+curl -sS -o /dev/null -w "17070:%{http_code}\n" --max-time 3 http://localhost:17070/login || echo "Jenkins down OK"
+```
+
+expected results:
+
+- `config.yaml.bak` / `worker.yaml.bak` present (and optional `credentials.pending.yaml.bak`).
+- `no live config.yaml OK` and `no live worker.yaml OK`.
+- Jenkins `:17070` down (`Could not connect` / `Jenkins down OK`).
+- Worker teardown when YAML is already gone may print default cluster `mac-k3d` and ignore `--deregister-agent` — harmless.
+- `Leaving ~/.local/state/mac-k3d intact` is expected.
+- Restore only if abandoning the test: copy `.bak` back over live YAML.
+
+To only prove prompts without applying, skip 8b and use a throwaway file:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+mkdir -p /tmp/mac-k3d-wizard-test
+mac-k3d setup -c /tmp/mac-k3d-wizard-test/fresh.yaml
+# Ctrl+C before Write / apply now
+```
+
+---
+
+## Task 8b — first-run wizard (controller + worker + run_all)
+
+Purpose: check a **new-user** path after Task 8a: Release binary, first-run controller wizard, worker with API token, then `run_all.sh`. Same sequence as [clean-machine-binary-test.md](clean-machine-binary-test.md). Do **not** pick Local development only.
+
+command:
+
+```bash
+cd ~/Documents/Toby/mac-k3d
+export PATH="$HOME/.local/bin:$PATH"
+export MAC_K3D_RELEASE_TAG=v0.4.0-rc.4
+./scripts/env_set_up/01_download_binary.sh
+which mac-k3d
+mac-k3d --version
+mac-k3d --help
+
+mac-k3d setup -c ~/.config/mac-k3d/config.yaml
+```
+
+Controller wizard (type answers; do not paste a multi-line block into a prompt):
+
+| Prompt | Choose |
+|--------|--------|
+| Base directory | recommended |
+| Role | **CI controller (Jenkins in k3d)** |
+| Docker / k3d / kubectl / helm | **Use this installation** (or **Install**) |
+| Harbor / LoLBench | Skip |
+| Jenkins UI host port | **17070** |
+| Job defaults | Enter |
+| CI secrets | **yes** if you have `deepseek-api-key`; else skip / empty Enter |
+| Write + apply | **yes** |
+| Continue apply | **yes** |
+
+Then:
+
+```bash
+cd ~/Documents/Toby/mac-k3d
+./scripts/env_set_up/02_check_controller.sh
+```
+
+Create a Jenkins API token in the UI (**admin** → **Configure** → **API Token**). Copy the **secret**, not the token name.
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
+```
+
+| Prompt | Choose |
+|--------|--------|
+| Role | **CI worker (Jenkins agent only)** |
+| Harbor / LoLBench | **No** |
+| Docker / Java | Use this installation |
+| Jenkins controller URL | type `http://localhost:17070` (look at the line before Enter) |
+| Jenkins API user | `admin` |
+| Jenkins API token | paste the **secret string** |
+| Agent name / labels / remote root | Enter |
+| Write + apply | **yes** |
+
+If URL became `interactive setup` or `agent.jar` curl is malformed: Ctrl+C or finish, then edit `jenkins_agent` in `worker.yaml` and `mac-k3d config -c ~/.config/mac-k3d/worker.yaml`, or **Re-run wizard (overwrite)**. Never `start -c worker.yaml`.
+
+```bash
+cd ~/Documents/Toby/mac-k3d
+REQUIRE_WORKER=1 ./scripts/env_set_up/03_check_worker.sh
+SKIP_DOWNLOAD=1 RUN_EVAL_SMOKE=1 ./scripts/env_set_up/run_all.sh
+```
+
+expected results:
+
+- `01_download_binary`: `OK downloaded … → ~/.local/bin/mac-k3d`, version `0.4.x`, help lists `setup` and `eval`.
+- Controller first prompts are base dir / Role, not **Config already exists**.
+- `Host port 8080 in use → using 18080` is **PASS**; Jenkins UI **http://localhost:17070**.
+- `OK 02_check_controller complete` (status healthy, login HTTP 200, both jobs).
+- Worker: `agent.jar` from `http://localhost:17070/jnlpJars/agent.jar`; unit `mac-k3d-jenkins-agent.service` started; `ci-worker` missing is OK.
+- `OK 03_check_worker complete` (`start` rejected, role=worker, unit active).
+- `OK ALL CHECKS PASSED` (includes P0).
+
+---
+
 ## Remaining (not required to sign off Linux bootstrap)
 
 ### Task 6 — macOS (checklist)
@@ -292,44 +434,6 @@ expected results:
 ```bash
 launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>&1 | head -20
 ```
-
----
-
-### Task 8 — blank-machine wizard (destructive)
-
-Purpose: check a **first-run** wizard (role / Install Docker) on a wiped PC or throwaway config — not the lab `~/.config/mac-k3d/config.yaml`. Re-run wizard on the lab overwrites YAML and can put host port `8080` back (bind conflict).
-
-command:
-
-On a **wiped** machine follow [clean-machine-binary-test.md](clean-machine-binary-test.md). To only prove prompts without applying:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-mkdir -p /tmp/mac-k3d-wizard-test
-mac-k3d setup -c /tmp/mac-k3d-wizard-test/fresh.yaml
-# Ctrl+C before Write / apply now
-```
-
-Full apply (wiped PC only):
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-mac-k3d setup -c ~/.config/mac-k3d/config.yaml
-```
-
-expected results (choose):
-
-| Prompt | Choose |
-|--------|--------|
-| Role | **CI controller (Jenkins in k3d)** or **CI worker** |
-| Docker / k3d / kubectl / helm | Use existing or **Install** |
-| Harbor / LoLBench | **Skip** / **No** |
-| Jenkins UI host port (controller) | **17070** |
-| Jenkins URL (worker) | `http://localhost:17070` or `http://<controller-ip>:17070` |
-| CI secrets | **yes** if you have `deepseek-api-key`; else skip |
-| Write + apply | **yes** only on a wiped PC |
-
-Do **not** pick “Local development only” if you need Jenkins. After apply, reuse Task 2 / Task 3 verify scripts.
 
 ---
 
@@ -388,7 +492,7 @@ P5+ costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **p
 | Task 5 | dual YAML; worker `start` `exit=1`; controller `status` healthy |
 | Task 6 | macOS later |
 | Task 7 | four Release assets; `file` → Mach-O 64-bit x86_64 executable (Actions job green still confirm on GitHub) |
-| Task 8 | blank-machine wizard not run on this lab |
+| Task 8 | wipe to `.bak`; first-run controller + worker (`v0.4.0-rc.4`); `Host port 8080 in use → using 18080`; `OK ALL CHECKS PASSED` |
 | Task 9 | P1–P8 not run (P0 via Task 4) |
 
 ---
@@ -399,7 +503,8 @@ P5+ costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **p
 |---------|------------|
 | `permission denied` on `docker.sock` / log out for docker | Linux: **log out and in**, then `mac-k3d setup` again |
 | `docker info` fails / no Server | Linux: docker group + new login. macOS: open **Docker Desktop** and wait until it is idle |
-| `agent.jar` / curl port 17070 / need token | Finish controller `start`, paste API token, then worker `config` |
+| `agent.jar` / curl port 17070 / need token | Finish controller `start`, paste API **secret** (not the token name), then worker `config` |
+| `curl: URL rejected` / `interactive setup/jnlpJars/agent.jar` | Wizard ate leftover prompt text as `controller_url`. Set `jenkins_agent.controller_url: http://localhost:17070`, fix `api_user` / `api_token` / `name` / `labels` / `remote_fs`, then `mac-k3d config -c worker.yaml`. Or Task 8a wipe and Task 8b again. |
 | `start is for controller/standalone` | Expected on `worker.yaml`. Use `mac-k3d config -c worker.yaml` |
 | `failed to bind host port … 8080` | Prefer a build that auto-remaps on `setup`/`start`. Last resort: set free `cluster.ports` hosts; keep Jenkins on `17070` unless remapped |
 | Release missing `darwin-x86_64` | Tag was cut **before** the `macos-latest` cross-compile workflow. Push this branch, cut a **new** `v*` tag (or upload the CI artifact onto the old release). See **Task 7**. |

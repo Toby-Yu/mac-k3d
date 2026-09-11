@@ -2,6 +2,8 @@
 
 Step-by-step for a **new Linux or Mac** (or a wiped lab PC) using the GitHub Release binary. Default Jenkins UI port is **17070**.
 
+To wipe an existing lab and keep `.bak` YAML: [testing-binary-initializer.md](testing-binary-initializer.md) **Task 8a**. Developer pass/fail: same file.
+
 Automated checks after bootstrap: [`scripts/env_set_up/README.md`](../../scripts/env_set_up/README.md).  
 Full product story: [workflow.md](workflow.md). Wizard details: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
 
