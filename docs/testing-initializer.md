@@ -1,6 +1,6 @@
 # Initializer testing (Mac + Linux)
 
-This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Binary-initializer (`setup`, Release asset): [testing-binary-initializer.md](testing-binary-initializer.md).
+This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Binary-initializer (`setup`, Release asset): [binary-initializer/testing-binary-initializer.md](binary-initializer/testing-binary-initializer.md).
 
 Use this document to **verify** the one CLI initializer (`mac-k3d prepare`) on macOS and Linux (step numbers **0–7** stay stable).
 

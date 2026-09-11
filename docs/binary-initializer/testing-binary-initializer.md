@@ -1,12 +1,12 @@
 # Binary-initializer testing (Mac + Linux)
 
-This is the **binary-initializer** path (`setup`, Release asset). The **v0.3.0 / initializer** path (`cargo install`, `prepare` steps 0–7) is [testing-initializer.md](testing-initializer.md).
+This is the **binary-initializer** path (`setup`, Release asset). Full workflow: [workflow.md](workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare` steps 0–7) is [../testing-initializer.md](../testing-initializer.md).
 
 Use this document to **verify** a prebuilt `mac-k3d` on macOS and Linux.
 
-**Sign-off is T0–T3 and T5–T6 only.** If you are a **new user** bringing up a blank computer, use [binary-initializer-new-machine.md](binary-initializer-new-machine.md) instead.
+**Bootstrap sign-off is T0–T3 and T5–T6 only.** Eval pipeline stages: [testing-eval-pipeline.md](testing-eval-pipeline.md). If you are a **new user** bringing up a blank computer, use [binary-initializer-new-machine.md](binary-initializer-new-machine.md) instead.
 
-Related design: [prepare-wizard.md](prepare-wizard.md), [setup.md](setup.md), [commands.md](commands.md).
+Related design: [../prepare-wizard.md](../prepare-wizard.md), [../setup.md](../setup.md), [../commands.md](../commands.md).
 
 ---
 
@@ -32,7 +32,7 @@ GitHub Release  mac-k3d-{os}-{arch}
 
 Workers do **not** join the controller’s k3d cluster. Worker `start` is rejected.
 
-Until a `v*` pre-release publishes assets, testers use `target/release/mac-k3d` as a stand-in.
+Until a `v*` pre-release publishes the **fast** three assets (`linux-x86_64`, `linux-aarch64`, `darwin-aarch64`), testers use `target/release/mac-k3d` as a stand-in. Intel Mac `darwin-x86_64` may arrive later on the same release.
 
 ---
 
@@ -109,4 +109,5 @@ Download `mac-k3d-darwin-aarch64`, `xattr -d com.apple.quarantine`, run in Termi
 | `start is for controller/standalone` | Expected on `worker.yaml`. Use `mac-k3d config -c worker.yaml` |
 | `failed to bind host port … 8080` | In controller YAML set host port `8080` → `18080`; keep Jenkins on `9080` |
 
-User commands: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
+User commands: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).  
+Eval pipeline stages: [testing-eval-pipeline.md](testing-eval-pipeline.md).

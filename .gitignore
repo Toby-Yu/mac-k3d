@@ -10,3 +10,6 @@
 
 # Local runtime state (managed by mac-k3d)
 .mac-k3d/
+eval-work/
+output/
+iCode/

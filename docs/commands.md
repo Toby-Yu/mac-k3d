@@ -40,7 +40,35 @@ Global `-c / --config` is honored.
 
 If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
 
-Keep `prepare` / `start` / `config` for power users.
+Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` also ensure Jenkins jobs `lolbench_one_task` and `icode_eval`.
+
+---
+
+## `eval`
+
+Run the iCode vs DeepSeek DeepSWE evaluation (Process 2). See [binary-initializer/workflow.md](binary-initializer/workflow.md) and [binary-initializer/testing-eval-pipeline.md](binary-initializer/testing-eval-pipeline.md).
+
+```bash
+mac-k3d eval --stage p0
+mac-k3d eval --stage p5 --n-tasks 1
+mac-k3d eval --local --n-tasks 1 --icode-mode source
+mac-k3d eval                         # interactive → local or Jenkins icode_eval
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--stage p0..p8` | Run one stage script under `scripts/eval/` |
+| `--local` | Full local `run_all.sh` (no Jenkins) |
+| `--n-tasks N` | Number of DeepSWE tasks (default 1) |
+| `--icode-mode source\|binary` | How to obtain iCode |
+| `--icode-release PATH\|URL` | Binary mode input |
+| `--icode-source PATH` | Source tree (default `~/Documents/Toby/iCode-main`) |
+| `--workdir PATH` | Eval workdir (default `./eval-work`) |
+| `--yes` | Non-interactive defaults |
+
+v1 choices are fixed: harness=`icode`, llm=`deepseek`, benchmark=`deepswe`. Output: `output/eval-icode-deepseek-deepswe-n{N}-{utc}.json`.
 
 ---
 

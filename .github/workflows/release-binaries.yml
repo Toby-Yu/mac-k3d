@@ -17,7 +17,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked
 
-  build:
+  # Fast three assets — publish without waiting on scarce macos-13 Intel runners.
+  build-fast:
     needs: test
     strategy:
       fail-fast: false
@@ -44,9 +45,6 @@ jobs:
         shell: bash
         run: |
           bin="target/${{ matrix.target }}/release/mac-k3d"
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            bin="${bin}.exe"
-          fi
           cp "$bin" "${{ matrix.asset }}"
           chmod +x "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
@@ -54,9 +52,9 @@ jobs:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
 
-  publish:
+  publish-fast:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: build-fast
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,10 +62,17 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Publish GitHub release
+          pattern: mac-k3d-linux-*
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: mac-k3d-darwin-aarch64
+      - name: Publish GitHub release (three fast assets)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          ls -la dist/
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             gh release create "${GITHUB_REF_NAME}" dist/mac-k3d-* \
               --title "${GITHUB_REF_NAME}" \
@@ -79,3 +84,41 @@ jobs:
               --generate-notes \
               --latest
           fi
+          echo "Fast assets published. Intel Mac (macos-13) may still be queued — that is a runner wait, not a compile error."
+
+  # LAST: scarce Intel Mac runners. Do not block publish-fast.
+  build-intel:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: publish-fast
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - name: Build Intel Mac binary
+        run: cargo build --locked --release --target x86_64-apple-darwin
+      - name: Name asset
+        run: |
+          cp target/x86_64-apple-darwin/release/mac-k3d mac-k3d-darwin-x86_64
+          chmod +x mac-k3d-darwin-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-k3d-darwin-x86_64
+          path: mac-k3d-darwin-x86_64
+
+  publish-intel:
+    if: always() && needs.build-intel.result == 'success'
+    needs: build-intel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-k3d-darwin-x86_64
+          path: dist
+      - name: Upload Intel Mac asset onto existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" dist/mac-k3d-darwin-x86_64 --clobber
+          echo "Uploaded mac-k3d-darwin-x86_64 to ${GITHUB_REF_NAME}"

@@ -723,6 +723,230 @@ fn urlencoding_simple(s: &str) -> String {
         .collect()
 }
 
+pub const ICODE_EVAL: &str = "icode_eval";
+
+/// Ensure Pipeline job `icode_eval` (Pier + DeepSWE + iCode vs DeepSeek baseline).
+pub fn ensure_icode_eval(
+    jenkins_url: &str,
+    api_user: &str,
+    api_token_or_password: &str,
+    credential_ids: &[String],
+) -> Result<()> {
+    let base = jenkins_url.trim_end_matches('/');
+    let auth = format!("{api_user}:{api_token_or_password}");
+
+    wait_for_jenkins(base, &auth, Duration::from_secs(90))?;
+
+    let cookie_file = tempfile_path("mac-k3d-icode-eval-cookies")?;
+    let crumb = fetch_crumb(base, &auth, &cookie_file);
+
+    let exists = curl_status(
+        base,
+        &auth,
+        &format!("/job/{ICODE_EVAL}/api/json"),
+        &crumb,
+        &cookie_file,
+    )
+    .map(|c| c == 200)
+    .unwrap_or(false);
+
+    let xml = icode_eval_job_xml(credential_ids);
+
+    if exists {
+        println!("Updating Jenkins job '{ICODE_EVAL}'…");
+        let post_url = format!("{base}/job/{ICODE_EVAL}/config.xml");
+        let mut cmd = Command::new("curl");
+        cmd.args([
+            "-sS",
+            "-b",
+            &cookie_file.display().to_string(),
+            "-c",
+            &cookie_file.display().to_string(),
+            "-u",
+            &auth,
+            "-H",
+            "Content-Type: text/xml",
+            "-X",
+            "POST",
+            &post_url,
+            "--data-binary",
+            &xml,
+            "-w",
+            "\n%{http_code}",
+        ]);
+        if let Some((field, value)) = &crumb {
+            cmd.args(["-H", &format!("{field}: {value}")]);
+        }
+        let output = cmd.output().map_err(|e| Error::CommandFailed {
+            cmd: "curl config.xml icode_eval".into(),
+            source: e.into(),
+        })?;
+        let _ = std::fs::remove_file(&cookie_file);
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let code = raw.lines().last().unwrap_or("").trim().to_string();
+        if code != "200" && code != "201" {
+            println!("Warning: failed to update '{ICODE_EVAL}' (HTTP {code}).");
+        } else {
+            println!("Updated job '{ICODE_EVAL}'.");
+        }
+        return Ok(());
+    }
+
+    let create_url = format!(
+        "{base}/createItem?name={}",
+        urlencoding_simple(ICODE_EVAL)
+    );
+    println!("Creating Jenkins job '{ICODE_EVAL}' on {base} …");
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "-b",
+        &cookie_file.display().to_string(),
+        "-c",
+        &cookie_file.display().to_string(),
+        "-u",
+        &auth,
+        "-H",
+        "Content-Type: text/xml",
+        "-X",
+        "POST",
+        &create_url,
+        "--data-binary",
+        &xml,
+        "-w",
+        "\n%{http_code}",
+    ]);
+    if let Some((field, value)) = &crumb {
+        cmd.args(["-H", &format!("{field}: {value}")]);
+    }
+    let output = cmd.output().map_err(|e| Error::CommandFailed {
+        cmd: "curl createItem icode_eval".into(),
+        source: e.into(),
+    })?;
+    let _ = std::fs::remove_file(&cookie_file);
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let code = raw.lines().last().unwrap_or("").trim().to_string();
+    if code != "200" && code != "201" && code != "302" && code != "303" {
+        println!("Warning: failed to create '{ICODE_EVAL}' (HTTP {code}).");
+        return Ok(());
+    }
+    println!(
+        "Created job '{ICODE_EVAL}'.\n\
+         Trigger: {base}/job/{ICODE_EVAL}/buildWithParameters  (or: mac-k3d eval)"
+    );
+    Ok(())
+}
+
+pub async fn ensure_icode_eval_from_cluster(
+    kubectl: &Path,
+    config: &crate::config::MacK3dConfig,
+    credential_ids: Vec<String>,
+) -> Result<()> {
+    if !config.jenkins.enabled {
+        return Ok(());
+    }
+    let url = crate::runtime::jenkins::ui_url(config);
+    let password = match crate::runtime::jenkins::admin_password(kubectl, config).await {
+        Ok(p) if !p.is_empty() => p,
+        Ok(_) | Err(_) => {
+            println!("Skipping '{ICODE_EVAL}' create — could not read Jenkins admin password yet.");
+            return Ok(());
+        }
+    };
+    ensure_icode_eval(&url, "admin", &password, &credential_ids)
+}
+
+fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
+    let (cred_open, cred_close) = with_credentials_block(credential_ids);
+    format!(
+        r#"pipeline {{
+  agent {{ label params.AGENT_LABEL }}
+
+  options {{
+    timeout(time: 12, unit: 'HOURS')
+  }}
+
+  parameters {{
+    choice(name: 'HARNESS', choices: ['icode'], description: 'v1: icode only')
+    choice(name: 'LLM', choices: ['deepseek'], description: 'v1: deepseek only')
+    choice(name: 'BENCHMARK', choices: ['deepswe'], description: 'v1: deepswe only')
+    string(name: 'N_TASKS', defaultValue: '1', description: 'Number of DeepSWE questions')
+    choice(name: 'ICODE_MODE', choices: ['source', 'binary'], description: 'iCode delivery')
+    string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: -full- tarball URL/path')
+    string(name: 'ICODE_SOURCE', defaultValue: '/home/Toby/Documents/Toby/iCode-main', description: 'source: path on worker')
+    string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
+    string(name: 'CPU_LOCK_QTY', defaultValue: '4')
+    string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Checkout path with scripts/eval (optional)')
+  }}
+
+  stages {{
+    stage('Prepare') {{
+      steps {{
+        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
+{cred_open}          sh '''
+            set -euo pipefail
+            echo "PROGRESS 5% prepare workspace"
+            export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
+            command -v docker >/dev/null
+            docker info >/dev/null
+            ROOT="${{MAC_K3D_ROOT:-}}"
+            if [ -z "$ROOT" ] || [ ! -f "$ROOT/scripts/eval/run_all.sh" ]; then
+              if [ -f "${{WORKSPACE}}/scripts/eval/run_all.sh" ]; then
+                ROOT="${{WORKSPACE}}"
+              elif [ -f "${{HOME}}/Documents/Toby/mac-k3d/scripts/eval/run_all.sh" ]; then
+                ROOT="${{HOME}}/Documents/Toby/mac-k3d"
+              else
+                echo "MAC_K3D_ROOT missing scripts/eval; clone mac-k3d binary-initializer onto the worker" >&2
+                exit 1
+              fi
+            fi
+            export MAC_K3D_ROOT="$ROOT"
+            export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-work"
+            export N_TASKS="${{N_TASKS:-1}}"
+            export ICODE_MODE="${{ICODE_MODE:-source}}"
+            export ICODE_RELEASE="${{ICODE_RELEASE:-}}"
+            export ICODE_SOURCE="${{ICODE_SOURCE:-/home/Toby/Documents/Toby/iCode-main}}"
+            export HARNESS=icode LLM=deepseek BENCHMARK=deepswe
+            echo "PROGRESS 10% running local eval scripts"
+            bash "$MAC_K3D_ROOT/scripts/eval/run_all.sh"
+            echo "PROGRESS 100% done"
+            if [ -f "$MAC_K3D_EVAL_WORKDIR/last_output.txt" ]; then
+              echo "RESULT $(cat "$MAC_K3D_EVAL_WORKDIR/last_output.txt")"
+            fi
+          '''
+{cred_close}        }}
+      }}
+    }}
+  }}
+
+  post {{
+    always {{
+      archiveArtifacts artifacts: 'eval-work/output/**/*.json', allowEmptyArchive: true
+    }}
+  }}
+}}
+"#
+    )
+}
+
+fn icode_eval_job_xml(credential_ids: &[String]) -> String {
+    let script = icode_eval_jenkinsfile(credential_ids);
+    format!(
+        r#"<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job">
+  <description>iCode vs DeepSeek on DeepSWE via Pier. See docs/binary-initializer/workflow.md.</description>
+  <keepDependencies>false</keepDependencies>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script><![CDATA[{script}]]></script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>
+"#
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -848,5 +1072,16 @@ mod tests {
         let s = "hello pipeline";
         let enc = base64_encode(s.as_bytes());
         assert_eq!(enc, "aGVsbG8gcGlwZWxpbmU=");
+    }
+
+    #[test]
+    fn icode_eval_xml_mentions_progress_and_scripts() {
+        let xml = icode_eval_job_xml(&["deepseek-api-key".into()]);
+        assert!(xml.contains("<![CDATA["));
+        assert!(xml.contains("scripts/eval/run_all.sh"));
+        assert!(xml.contains("PROGRESS"));
+        assert!(xml.contains("deepswe"));
+        assert!(xml.contains("deepseek"));
+        assert!(xml.contains("withCredentials"));
     }
 }

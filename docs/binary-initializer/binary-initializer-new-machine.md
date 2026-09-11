@@ -1,8 +1,8 @@
 # Initialize a new Linux or Mac (binary-initializer)
 
-This is the **binary-initializer** path (`setup`, GitHub Release asset). The **v0.3.0 / initializer** path (`cargo install`, `prepare`) is [initializer-new-machine.md](initializer-new-machine.md).
+This is the **binary-initializer** path (`setup`, GitHub Release asset). Full story (bootstrap → iCode eval): [workflow.md](workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare`) is [../initializer-new-machine.md](../initializer-new-machine.md).
 
-**Users:** download a Release binary from this repo and run it. The binary installs Docker (and the rest) when you choose **Install**.
+**Users:** download a Release binary from this repo and run it. The binary installs Docker (and the rest) when you choose **Install**. After Jenkins is up, run `mac-k3d eval` for DeepSWE / iCode / DeepSeek ([testing-eval-pipeline.md](testing-eval-pipeline.md)).
 
 **Developers:** pass/fail checks live in [testing-binary-initializer.md](testing-binary-initializer.md). This page does not describe how to verify the initializer.
 
@@ -33,7 +33,7 @@ Until a pre-release exists, testers may use `target/release/mac-k3d` as a stand-
 
 ## 1. Download the binary
 
-Get the matching GitHub Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, or `mac-k3d-darwin-aarch64`). Prefer a **pre-release** such as `v0.4.0-rc.1` on this branch; **Latest** may still be v0.3.0. Open **Terminal** (double-click is not supported).
+Get the matching GitHub Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, or `mac-k3d-darwin-aarch64`). Prefer a **pre-release** on this branch; **Latest** may still be v0.3.0. Intel Mac `mac-k3d-darwin-x86_64` may appear later on the same release (built last). Open **Terminal** (double-click is not supported).
 
 ```bash
 chmod +x ./mac-k3d-linux-x86_64
@@ -59,6 +59,8 @@ Honest leftovers the binary cannot hide:
 Do **not** pick “Local development only” if you need Jenkins or an agent.
 
 Developers building from git still use `cargo build --release` (see [testing-binary-initializer.md](testing-binary-initializer.md)).
+
+Store the DeepSeek API key on the **controller** when prompted for CI secrets (credential id `deepseek-api-key`), or later via Jenkins Credentials — see [../secrets.md](../secrets.md). Workers do not keep a local copy of that key.
 
 ---
 
@@ -92,10 +94,12 @@ Open **http://localhost:9080** (or `http://<this-machine>:9080`). Username **adm
 | k3d agent nodes | `0` |
 | Jenkins UI host port | `9080` |
 | Job defaults | Defaults are fine |
-| Enter CI secrets now? | **no** unless you already have keys ([secrets.md](secrets.md)) |
+| Enter CI secrets now? | **yes** if you have `deepseek-api-key` (needed for `mac-k3d eval`); else **no** and add later ([../secrets.md](../secrets.md)) |
 | Write configuration? | **yes** |
 
 Do **not** use `worker.yaml` with `start`. `start` is for the controller file only.
+
+After Jenkins is healthy, run evaluations with `mac-k3d eval` (see [workflow.md](workflow.md)).
 
 ---
 
@@ -222,6 +226,17 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 # put api_user / api_token in worker.yaml if prompted/empty, then:
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
+
+### After bootstrap — run an eval
+
+On a machine that can reach Jenkins (usually the controller):
+
+```bash
+mac-k3d eval --n-tasks 1 --icode-mode source
+# or stage-by-stage: see testing-eval-pipeline.md
+```
+
+Worker must have Docker (already from setup). For source mode, clone/copy iCode to the worker path (default `/home/Toby/Documents/Toby/iCode-main`) or pass `ICODE_SOURCE`.
 
 ---
 

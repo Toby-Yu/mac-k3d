@@ -1,0 +1,21 @@
+# Pier agent: icode (mac-k3d eval)
+# Harbor/Pier-compatible agent package. Puts iCode into the sandbox and calls DeepSeek.
+
+name = "icode"
+version = "0.1.0"
+description = "iCode harness agent for DeepSWE via Pier"
+
+[install]
+script = "install.sh"
+
+[run]
+script = "run.sh"
+
+# Allow LLM API from air-gapped-style tasks (Pier network allowlist).
+[[network_allowlist]]
+host = "api.deepseek.com"
+ports = [443]
+
+[[network_allowlist]]
+host = "api.deepseek.ai"
+ports = [443]

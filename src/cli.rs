@@ -38,6 +38,9 @@ pub enum Command {
     /// Apply configuration (kubeconfig, port-forwards, Jenkins setup)
     Config(commands::ConfigArgs),
 
+    /// Run iCode / DeepSeek / DeepSWE evaluation (local stages or Jenkins icode_eval)
+    Eval(commands::EvalArgs),
+
     /// Stop cluster and services without removing data
     Teardown(commands::TeardownArgs),
 

@@ -40,6 +40,9 @@ async fn main() -> mac_k3d::Result<()> {
         mac_k3d::cli::Command::Config(args) => {
             mac_k3d::commands::run_config(args, &config).await?;
         }
+        mac_k3d::cli::Command::Eval(args) => {
+            mac_k3d::commands::run_eval(args, &config).await?;
+        }
         mac_k3d::cli::Command::Teardown(args) => {
             mac_k3d::commands::run_teardown(args, &config).await?;
         }
