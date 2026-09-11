@@ -2,7 +2,7 @@
 
 Turn a **new Linux or Mac** into a **Jenkins controller or worker**. Download a GitHub Release binary; it installs Docker and the rest.
 
-- **Controller** — Docker → k3d → Jenkins UI (`http://localhost:9080`)
+- **Controller** — Docker → k3d → Jenkins UI (`http://localhost:17070`)
 - **Worker** — Docker + Java + Jenkins inbound agent (not a k3d node)
 
 Users do **not** need Rust. Developers who build from source do.
@@ -26,7 +26,7 @@ If auto-install fails, install Docker yourself and re-run setup ([docs/binary-in
 2. `chmod +x` (macOS: also `xattr -d com.apple.quarantine`).
 3. Run `./mac-k3d` or `./mac-k3d setup -c ~/.config/mac-k3d/config.yaml` (controller) / `worker.yaml` (worker).
 4. Choose the role; let it **Install** Docker if asked.
-5. Controller: open `http://localhost:9080`. Worker: paste API token, then `mac-k3d config -c worker.yaml` if needed.
+5. Controller: open `http://localhost:17070`. Worker: paste API token, then `mac-k3d config -c worker.yaml` if needed.
 
 ```bash
 chmod +x mac-k3d-linux-x86_64

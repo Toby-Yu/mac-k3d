@@ -27,7 +27,7 @@ jenkins:
   enabled: false          # set true or use `start --jenkins in-cluster`
   namespace: jenkins
   release_name: jenkins
-  host_port: 9080         # localhost URL for Jenkins UI
+  host_port: 17070         # localhost URL for Jenkins UI
 
 docker:
   startup_timeout_secs: 120
@@ -113,12 +113,12 @@ Default ports expose HTTP/HTTPS on the cluster load balancer for Ingress or Node
 | `enabled` | bool | `false` | Whether Jenkins is managed |
 | `namespace` | string | `jenkins` | Kubernetes namespace |
 | `release_name` | string | `jenkins` | Helm release name |
-| `host_port` | u16 | `9080` | Local port mapped to Jenkins service |
+| `host_port` | u16 | `17070` | Local port mapped to Jenkins service |
 
 When enabled, `start` adds a port mapping:
 
 ```text
--p "9080:8080@loadbalancer"
+-p "17070:8080@loadbalancer"
 ```
 
 Helm values applied by `mac-k3d start` (controller):
@@ -213,7 +213,7 @@ CLI flag `--jenkins` overrides config for that invocation only (does not write b
 {
   "namespace": "jenkins",
   "release": "jenkins",
-  "host_port": 9080,
+  "host_port": 17070,
   "chart_version": "5.1.0"
 }
 ```
@@ -264,7 +264,7 @@ cluster:
   agents: 0
 jenkins:
   enabled: true
-  host_port: 9080
+  host_port: 17070
 docker:
   startup_timeout_secs: 180
 ```

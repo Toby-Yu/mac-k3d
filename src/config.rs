@@ -245,7 +245,7 @@ impl Default for MacK3dConfig {
                 enabled: false,
                 namespace: "jenkins".into(),
                 release_name: "jenkins".into(),
-                host_port: 9080,
+                host_port: 17070,
             },
             docker: DockerConfig {
                 startup_timeout_secs: 120,

@@ -110,7 +110,7 @@ To exercise **worker prepare** while Jenkins already runs on this Mac:
 ```bash
 mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 # Role: CI worker
-# Jenkins URL: http://localhost:9080
+# Jenkins URL: http://localhost:17070
 # k3d agents: 0  (optional local cluster; not required for LoLBench)
 ```
 
@@ -274,14 +274,14 @@ mac-k3d status
 Docker Desktop:  running
 k3d cluster:     mac-k3d (running, 1 server, 0 agents)
 kubectl context: k3d-mac-k3d
-Jenkins:         configured, pod Running, http://localhost:9080
+Jenkins:         configured, pod Running, http://localhost:17070
 ```
 
 After `clean` / while the cluster is gone, Jenkins still shows as **configured** from the YAML (so the next `start` will redeploy it), not as live:
 
 ```text
 k3d cluster:     ci-controller (missing, 0 server, 0 agents)
-Jenkins:         configured, not running (cluster missing), http://localhost:9080
+Jenkins:         configured, not running (cluster missing), http://localhost:17070
 ```
 
 Pod lookup uses `--context k3d-<cluster>` from the loaded config, not whatever the shell’s current kubectl context happens to be.
@@ -305,6 +305,6 @@ mac-k3d teardown   # end of day
 mac-k3d prepare --init-config
 mac-k3d start --jenkins in-cluster
 mac-k3d config --show-jenkins
-# open http://localhost:9080
+# open http://localhost:17070
 mac-k3d clean --yes
 ```

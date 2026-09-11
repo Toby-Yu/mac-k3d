@@ -4,7 +4,7 @@ This is the **binary-initializer** path (`setup`, Release asset). Full workflow:
 
 Use this document to **verify** a prebuilt `mac-k3d` on macOS and Linux.
 
-**Bootstrap sign-off is T0–T3 and T5–T6 only.** Eval pipeline stages: [testing-eval-pipeline.md](testing-eval-pipeline.md). If you are a **new user** bringing up a blank computer, use [binary-initializer-new-machine.md](binary-initializer-new-machine.md) instead.
+**Bootstrap sign-off is T0–T3 and T5–T6 only.** Eval pipeline stages: [testing-eval-pipeline.md](testing-eval-pipeline.md). If you are a **new user** bringing up a blank computer, use [binary-initializer-new-machine.md](binary-initializer-new-machine.md) or [clean-machine-binary-test.md](clean-machine-binary-test.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../scripts/env_set_up/run_all.sh).
 
 Related design: [../prepare-wizard.md](../prepare-wizard.md), [../setup.md](../setup.md), [../commands.md](../commands.md).
 
@@ -26,7 +26,7 @@ GitHub Release  mac-k3d-{os}-{arch}
         →  chmod +x && ./mac-k3d   (or setup)
         →  wizard: controller | worker
         →  binary installs Docker + the rest
-        →  controller: k3d + Jenkins :9080
+        →  controller: k3d + Jenkins :17070
            worker: Java agent connected to Jenkins URL
 ```
 
@@ -66,11 +66,11 @@ After a GitHub pre-release exists, repeat with the downloaded `mac-k3d-linux-x86
 
 Role **CI controller**, apply now (`setup` installs Docker if needed).
 
-**Expected:** start succeeds; k3d up; Jenkins pod Running; UI `http://localhost:9080`; `mac-k3d status` healthy. If Docker was just installed, a clear **log out, log in, run `mac-k3d setup` again** error is **PASS** for this attempt (re-run after login).
+**Expected:** start succeeds; k3d up; Jenkins pod Running; UI `http://localhost:17070`; `mac-k3d status` healthy. If Docker was just installed, a clear **log out, log in, run `mac-k3d setup` again** error is **PASS** for this attempt (re-run after login).
 
 ## T3 — worker setup from binary
 
-Role **CI worker**, Jenkins URL `:9080`, apply now (`config` only; **not** `start`).
+Role **CI worker**, Jenkins URL `:17070`, apply now (`config` only; **not** `start`).
 
 **Expected:** agent unit **or** a clear “need token” / “log out for docker” message. No LoLBench clone required; Harbor/uv **not** required. When a token is present: Linux `mac-k3d-jenkins-agent.service` active (linger enabled) or macOS LaunchAgent `com.mac-k3d.jenkins-agent`; node **online** in Jenkins. `start -c worker.yaml` is rejected.
 
@@ -130,7 +130,7 @@ Apple Silicon can run this via Rosetta; that is optional. Native Intel is the re
 |-------|--------|
 | T0 | `cargo test` 42 passed; `cargo build --release`; help lists `setup` |
 | T1 | `/tmp/mac-k3d-user --help` lists `setup` without cargo PATH |
-| T2 | `ci-controller` running; Jenkins `http://localhost:9080` HTTP 200 |
+| T2 | `ci-controller` running; Jenkins `http://localhost:17070` HTTP 200 |
 | T3 | `start -c worker.yaml` rejected; `mac-k3d-jenkins-agent.service` active |
 | T5 | dual YAML; worker `start` rejected; controller `status` healthy |
 | T6 | macOS later |
@@ -143,9 +143,9 @@ Apple Silicon can run this via Rosetta; that is optional. Native Intel is the re
 |---------|------------|
 | `permission denied` on `docker.sock` / log out for docker | Linux: **log out and in**, then `mac-k3d setup` again |
 | `docker info` fails / no Server | Linux: docker group + new login. macOS: open **Docker Desktop** and wait until it is idle |
-| `agent.jar` / curl port 9080 / need token | Finish controller `start`, paste API token, then worker `config` |
+| `agent.jar` / curl port 17070 / need token | Finish controller `start`, paste API token, then worker `config` |
 | `start is for controller/standalone` | Expected on `worker.yaml`. Use `mac-k3d config -c worker.yaml` |
-| `failed to bind host port … 8080` | In controller YAML set host port `8080` → `18080`; keep Jenkins on `9080` |
+| `failed to bind host port … 8080` | In controller YAML set host port `8080` → `18080`; keep Jenkins on `17070` |
 | Release missing `darwin-x86_64` | Tag was cut **before** the `macos-latest` cross-compile workflow. Push this branch, cut a **new** `v*` tag (or upload the CI artifact onto the old release). See **T7**. |
 
 User commands: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).  

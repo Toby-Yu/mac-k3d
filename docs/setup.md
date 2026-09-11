@@ -116,7 +116,7 @@ cluster:
 
 jenkins:
   enabled: true
-  host_port: 9080
+  host_port: 17070
 ```
 
 ### 2. Start with Jenkins
@@ -131,7 +131,7 @@ mac-k3d start --jenkins in-cluster
 mac-k3d config --show-jenkins
 ```
 
-Open `http://localhost:9080` and complete the Jenkins setup wizard.
+Open `http://localhost:17070` and complete the Jenkins setup wizard.
 
 ### 4. Jenkins plugins
 
@@ -164,7 +164,7 @@ If the Macs are in the same place and you have **one Internet RJ45**, connect th
 2. Put an **Ethernet switch** on the router LAN.
 3. Plug **each Mac Mini's built-in RJ45** into the switch.
 
-Do not daisy-chain the Minis or use macOS Internet Sharing. Give the controller a stable DHCP reservation or static IP so workers can reach Jenkins at `http://<controller-ip>:9080`.
+Do not daisy-chain the Minis or use macOS Internet Sharing. Give the controller a stable DHCP reservation or static IP so workers can reach Jenkins at `http://<controller-ip>:17070`.
 
 ### Overview
 
@@ -193,7 +193,7 @@ cluster:
 
 jenkins:
   enabled: true
-  host_port: 9080
+  host_port: 17070
 
 docker:
   startup_timeout_secs: 180
@@ -206,7 +206,7 @@ mac-k3d start --jenkins in-cluster
 mac-k3d config --show-jenkins
 ```
 
-Complete the Jenkins setup wizard at `http://localhost:9080`.
+Complete the Jenkins setup wizard at `http://localhost:17070`.
 
 #### Expose Jenkins to workers (remote access)
 
@@ -215,16 +215,16 @@ Workers on other Macs must reach the Jenkins controller. Choose one:
 **Option 1 — Shared LAN (recommended when co-located)**
 
 - Connect all Mac Minis through a router and Ethernet switch as in [Physical LAN](deployment.md#physical-lan-co-located-mac-minis).
-- Use Mac A's LAN IP or hostname (e.g. `http://192.168.1.10:9080` or `http://mac-a.local:9080`).
+- Use Mac A's LAN IP or hostname (e.g. `http://192.168.1.10:17070` or `http://mac-a.local:17070`).
 
 **Option 2 — VPN / private overlay (recommended when not co-located)**
 
 - Put all Macs on the same VPN or routed network.
-- Use Mac A's VPN IP or hostname (e.g. `https://jenkins.internal:9080`).
+- Use Mac A's VPN IP or hostname (e.g. `https://jenkins.internal:17070`).
 
 **Option 3 — Port forward / reverse proxy**
 
-- Forward port 9080 on Mac A to a stable public hostname with TLS.
+- Forward port 17070 on Mac A to a stable public hostname with TLS.
 - Use a reverse proxy (nginx, Caddy) with HTTPS in front of Jenkins.
 
 **Option 4 — SSH tunnel (development only)**
@@ -232,10 +232,10 @@ Workers on other Macs must reach the Jenkins controller. Choose one:
 On each worker Mac:
 
 ```bash
-ssh -L 9080:localhost:9080 user@mac-a-hostname
+ssh -L 17070:localhost:17070 user@mac-a-hostname
 ```
 
-Point the agent at `http://localhost:9080`.
+Point the agent at `http://localhost:17070`.
 
 > Do not expose an unsecured Jenkins instance on the public internet.
 
@@ -298,7 +298,7 @@ On Mac B, download the agent JAR from Jenkins:
 Run on Mac B:
 
 ```bash
-java -jar agent.jar -url https://jenkins.example.com:9080/ -secret <SECRET> -name mac-b -webSocket
+java -jar agent.jar -url https://jenkins.example.com:17070/ -secret <SECRET> -name mac-b -webSocket
 ```
 
 Use `-webSocket` when direct TCP from worker to controller is blocked by firewalls.
@@ -357,7 +357,7 @@ Run the job and confirm it executes on Mac B.
 |-------|------------------|
 | Controller cluster | `mac-k3d status` on Mac A |
 | Worker cluster | `mac-k3d status` on Mac B |
-| Jenkins reachable from worker | `curl -k https://jenkins.example.com:9080/login` from Mac B |
+| Jenkins reachable from worker | `curl -k https://jenkins.example.com:17070/login` from Mac B |
 | Agent online | Jenkins UI → Nodes → mac-b shows **online** |
 | Job runs on worker | Trigger test pipeline; build log shows Mac B hostname |
 | Back pressure works | Queue two `macb-large` jobs; second waits in queue |

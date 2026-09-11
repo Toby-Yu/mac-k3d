@@ -199,7 +199,7 @@ Controller Mac itself usually does **not** run LoLBench agents; it hosts the que
 ### Worker (`role: worker`) — agent install and registration
 
 ```text
-Jenkins controller URL [https://jenkins.example.com:9080]:
+Jenkins controller URL [https://jenkins.example.com:17070]:
 Jenkins API user [admin]:
 Jenkins API token (input hidden):
 Agent name [mac-$(hostname -s)]:
@@ -284,7 +284,7 @@ lolbench:
   source: existing   # existing | clone | release
 
 jenkins_agent:        # worker only
-  controller_url: https://jenkins.example.com:9080
+  controller_url: https://jenkins.example.com:17070
   name: mac-mini-1
   labels: ["macos", "docker", "lolbench"]
   remote_fs: /Users/you/jenkins-agent

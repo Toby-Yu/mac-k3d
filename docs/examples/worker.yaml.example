@@ -30,7 +30,7 @@ lolbench:
   source: existing
 
 jenkins_agent:
-  controller_url: http://CONTROLLER_HOST:9080
+  controller_url: http://CONTROLLER_HOST:17070
   name: linux-eval-1
   labels: [linux, docker, lolbench]
   remote_fs: /home/YOU/jenkins-agent

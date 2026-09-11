@@ -14,7 +14,7 @@ This is the **binary-initializer** story. The older **v0.3.0** cargo/`prepare` p
 ```text
 New Mac/Linux
   → download mac-k3d Release asset
-  → setup: controller (k3d+Jenkins :9080) or worker (agent.jar)
+  → setup: controller (k3d+Jenkins :17070) or worker (agent.jar)
   → mac-k3d eval (harness=icode, llm=deepseek, benchmark=deepswe, N)
   → Jenkins job icode_eval on worker
        clone DeepSWE, install pier, put iCode in the Pier sandbox
@@ -30,7 +30,7 @@ flowchart TD
   bin["Download mac-k3d asset"]
   setup["mac-k3d setup"]
   role{"role?"}
-  ctrl["Controller: Docker k3d Jenkins :9080 credentials"]
+  ctrl["Controller: Docker k3d Jenkins :17070 credentials"]
   work["Worker: Docker Java agent pier"]
   evalCli["mac-k3d eval: icode / deepseek / deepswe / N"]
   job["Jenkins icode_eval on worker"]
@@ -56,15 +56,15 @@ flowchart TD
 
 ## Process 1 — prepare the machine
 
-**User steps:** [binary-initializer-new-machine.md](binary-initializer-new-machine.md)  
-**Pass/fail:** [testing-binary-initializer.md](testing-binary-initializer.md) (T0–T3, T5–T6)
+**User steps:** [binary-initializer-new-machine.md](binary-initializer-new-machine.md) · clean-machine walkthrough: [clean-machine-binary-test.md](clean-machine-binary-test.md)  
+**Pass/fail:** [testing-binary-initializer.md](testing-binary-initializer.md) (T0–T3, T5–T6) · automated checks: [`scripts/env_set_up/`](../../scripts/env_set_up/README.md)
 
 | Step | What | Why |
 |------|------|-----|
 | Download `mac-k3d-{os}-{arch}` | Prebuilt CLI from a GitHub **pre-release** (or Latest after a final tag) | No Rust on a new laptop |
 | `chmod +x` / quarantine strip | Make the asset executable | Unsigned downloads are blocked on macOS |
 | `mac-k3d setup` | Wizard: role, Install Docker / k3d / Java | One entry point for controller or worker |
-| Controller: `start` + `config` | k3d cluster + Jenkins UI `:9080` + credentials | Job queue and `deepseek-api-key` live here |
+| Controller: `start` + `config` | k3d cluster + Jenkins UI `:17070` + credentials | Job queue and `deepseek-api-key` live here |
 | Worker: token + `config` | Inbound agent + `CPU_CORES` locks | Workloads run on the worker’s Docker, not inside the controller’s k3d nodes |
 
 Honest leftovers: Linux **logout** after docker group; macOS first **Docker Desktop** window; worker **API token**; DeepSeek key on the **controller** credentials store.
@@ -120,6 +120,8 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 | Doc | Role |
 |-----|------|
 | [binary-initializer-new-machine.md](binary-initializer-new-machine.md) | User bootstrap commands |
+| [clean-machine-binary-test.md](clean-machine-binary-test.md) | Clean PC → binary → controller/worker → eval-ready |
+| [`scripts/env_set_up/`](../../scripts/env_set_up/README.md) | Automated controller/worker/eval-ready checks |
 | [testing-binary-initializer.md](testing-binary-initializer.md) | Bootstrap sign-off |
 | [testing-eval-pipeline.md](testing-eval-pipeline.md) | Pipeline stage CLI tests |
 | [../secrets.md](../secrets.md) | Controller credentials (`deepseek-api-key`) |

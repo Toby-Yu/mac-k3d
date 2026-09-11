@@ -33,7 +33,7 @@ Lifecycle: `prepare` **→** `start` **(controller only) →** `config` **(agent
 Workers do **not** join the controller’s k3d cluster. They run a **Jenkins inbound agent** and execute Harbor/LoLBench on **host Docker**.
 
 ```text
-Controller:  Docker → k3d → Jenkins :9080  (job lolbench_one_task)
+Controller:  Docker → k3d → Jenkins :17070  (job lolbench_one_task)
 Worker:      Docker + Harbor + Java + agent.jar  → connects to Jenkins URL
 ```
 
@@ -57,11 +57,11 @@ Ubuntu 26.04, account **Toby**, 2026-09-09. Goal: one CLI initializes Linux the 
 | 1           | `--init-config` `exit=0` twice                                                                                                                                                                |
 | 2           | `--non-interactive` `exit=1` “marked for install” (expected)                                                                                                                                  |
 | 3           | Worker prepare `exit=0`; Harbor via uv; LoLBench cloned; `validate_exit=0`; `role: worker` `platform: linux`                                                                                  |
-| 3 agent.jar | `curl` to `:9080` failed — **warning only**; config + `launch-agent.sh` saved                                                                                                                 |
+| 3 agent.jar | `curl` to `:17070` failed — **warning only**; config + `launch-agent.sh` saved                                                                                                                 |
 | 4           | Controller prepare `exit=0`; `validate_exit=0`; `role: controller`                                                                                                                            |
 | 5           | both validates `0`; roles stay controller + worker                                                                                                                                            |
 | 6           | `exit=1` free-space error at 99999 GB                                                                                                                                                         |
-| 7A          | Remapped host `8080` → `18080` (host Jenkins already on 8080); `start_exit=0`; cluster `ci-controller` running; Jenkins pod Running; `http://localhost:9080`; job `lolbench_one_task` created |
+| 7A          | Remapped host `8080` → `18080` (host Jenkins already on 8080); `start_exit=0`; cluster `ci-controller` running; Jenkins pod Running; `http://localhost:17070`; job `lolbench_one_task` created |
 | 7B          | 2026-09-10: API token in `worker.yaml`; `config -c worker.yaml`; node `mac-Michael-Ubuntu` registered; 16 `CPU_CORES` locks; `mac-k3d-jenkins-agent.service` **active (running)** |
 
 
@@ -79,7 +79,7 @@ Use this when the goal is “this computer should run LoLBench jobs,” not only
 
 ### A. Worker-only machine (Jenkins already exists)
 
-Controller URL must be reachable (example: `http://jenkins-host:9080` or `http://localhost:9080` on a lab PC).
+Controller URL must be reachable (example: `http://jenkins-host:17070` or `http://localhost:17070` on a lab PC).
 
 1. **OS access to Docker**
   - **Linux:** `sudo usermod -aG docker "$USER"`, then **log out and log in** (quit lingering user systemd / Cursor if `groups` still lacks `docker`). Check `groups | grep docker` and `docker info` (Server section). `loginctl enable-linger "$USER"` once.
@@ -107,7 +107,7 @@ mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 | docker / k3d / kubectl / java | **Use this installation** if found                                  |
 | Harbor                        | Install (uv/pipx) or existing — needed for LoLBench                 |
 | LoLBench                      | Clone or existing checkout                                          |
-| Jenkins URL                   | Controller base URL (default `http://localhost:9080`)               |
+| Jenkins URL                   | Controller base URL (default `http://localhost:17070`)               |
 | API user / token              | Fill in if Jenkins is already up; **empty** if not (register later) |
 | Labels                        | `linux docker lolbench` or `macos docker lolbench`                  |
 | Write config                  | **Yes**                                                             |
@@ -151,11 +151,11 @@ Do **not** `mac-k3d start -c worker.yaml` to “start the agent.” `start` is f
 
 ```bash
 mac-k3d prepare -i -c ~/.config/mac-k3d/config.yaml
-# Role: CI controller; use existing tools; helm required; Jenkins port 9080
+# Role: CI controller; use existing tools; helm required; Jenkins port 17070
 # Skip CI secrets for a smoke test
 ```
 
-1. If something already listens on **8080**, change `cluster.ports` host `8080` → e.g. `18080`. Keep `jenkins.host_port: 9080`.
+1. If something already listens on **8080**, change `cluster.ports` host `8080` → e.g. `18080`. Keep `jenkins.host_port: 17070`.
 2. Start Jenkins:
 
 ```bash
@@ -164,7 +164,7 @@ mac-k3d status -c ~/.config/mac-k3d/config.yaml
 mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
 ```
 
-Open `http://localhost:9080`. **User:** `admin`. **Password:** printed by `--show-jenkins` (cluster secret).
+Open `http://localhost:17070`. **User:** `admin`. **Password:** printed by `--show-jenkins` (cluster secret).
 
 1. Create an API token and run worker `config` as in [7B](#7b--start-the-jenkins-agent-on-this-host).
 
@@ -340,7 +340,7 @@ Only after Step 4 and Docker/k3d/helm are usable (`docker info` shows Server).
 
 ### 7A — Start cluster and Jenkins
 
-If host port **8080** is taken, remap `cluster.ports` `host: 8080` → e.g. `18080`. Keep Jenkins on **9080**.
+If host port **8080** is taken, remap `cluster.ports` `host: 8080` → e.g. `18080`. Keep Jenkins on **17070**.
 
 ```bash
 mac-k3d start -c ~/.config/mac-k3d/config.yaml
@@ -350,7 +350,7 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
 ```
 
 | Purpose | Prepare-produced config drives Docker + k3d + Helm Jenkins |
-| Expect | `start_exit=0`; cluster running; Jenkins UI `http://localhost:9080`; login **admin** + printed password |
+| Expect | `start_exit=0`; cluster running; Jenkins UI `http://localhost:17070`; login **admin** + printed password |
 
 Not required to accept the **initializer** itself (Steps 0–6).
 
@@ -362,7 +362,7 @@ The `--show-jenkins` password is for the **UI only**. It is not the API token. T
 
 #### Token (Jenkins UI)
 
-1. Open `http://localhost:9080` (or the controller URL).
+1. Open `http://localhost:17070` (or the controller URL).
 2. Log in **admin** + password from `--show-jenkins`.
 3. **admin** (top right) → **Configure** → **API Token** → **Add new Token** → **Generate**.
 4. Copy the token once.
@@ -378,7 +378,7 @@ Under `jenkins_agent:` in `~/.config/mac-k3d/worker.yaml`:
   api_token: PASTE_THE_TOKEN_HERE
 ```
 
-Keep `controller_url` (lab PC: `http://localhost:9080`). `nano`: **Ctrl+O**, **Enter**, **Ctrl+X**. Quote the token if it contains `#` or spaces.
+Keep `controller_url` (lab PC: `http://localhost:17070`). `nano`: **Ctrl+O**, **Enter**, **Ctrl+X**. Quote the token if it contains `#` or spaces.
 
 Or re-run `mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml` and paste user + token when asked.
 
@@ -403,7 +403,7 @@ systemctl --user status mac-k3d-jenkins-agent.service
 # press q to leave the pager
 ```
 
-Expect **`Active: active (running)`** (Java `-jar …/agent.jar -url http://localhost:9080`).
+Expect **`Active: active (running)`** (Java `-jar …/agent.jar -url http://localhost:17070`).
 
 **macOS**
 
@@ -471,9 +471,9 @@ systemctl --user status mac-k3d-jenkins-agent.service   # Linux
 
 Linger (`loginctl enable-linger`) does **not** create the unit; it only keeps it after logout.
 
-### `curl: (7) Failed to connect to localhost port 9080` / `agent.jar`
+### `curl: (7) Failed to connect to localhost port 17070` / `agent.jar`
 
-**Cause:** Worker prepare tries to download `agent.jar` from the Jenkins controller. Nothing is listening on `:9080` yet (controller not started).
+**Cause:** Worker prepare tries to download `agent.jar` from the Jenkins controller. Nothing is listening on `:17070` yet (controller not started).
 
 **What still succeeded:** Config is saved; launch script may be written. Harbor / LoLBench may already be on disk.
 
@@ -494,7 +494,7 @@ If you logged out but Cursor/`systemd --user` still has old groups: save work, `
 
 ### `failed to bind host port 0.0.0.0:8080`
 
-Another process (often host Jenkins) owns 8080. Remap k3d `8080` → `18080` in controller YAML. Project Jenkins stays on **9080**.
+Another process (often host Jenkins) owns 8080. Remap k3d `8080` → `18080` in controller YAML. Project Jenkins stays on **17070**.
 
 ### `E: Unable to locate package kubectl`
 

@@ -203,8 +203,8 @@ mod tests {
     fn create_args_add_jenkins_port_when_enabled() {
         let mut config = MacK3dConfig::default();
         config.jenkins.enabled = true;
-        config.jenkins.host_port = 9080;
+        config.jenkins.host_port = 17070;
         let args = create_args(&config);
-        assert!(args.iter().any(|a| a == "9080:8080@loadbalancer"));
+        assert!(args.iter().any(|a| a == "17070:8080@loadbalancer"));
     }
 }

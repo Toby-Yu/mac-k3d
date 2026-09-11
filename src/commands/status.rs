@@ -106,16 +106,16 @@ mod tests {
 
     #[test]
     fn jenkins_line_missing_cluster() {
-        let s = format_jenkins_line(ClusterState::Missing, None, "http://localhost:9080");
+        let s = format_jenkins_line(ClusterState::Missing, None, "http://localhost:17070");
         assert_eq!(
             s,
-            "configured, not running (cluster missing), http://localhost:9080"
+            "configured, not running (cluster missing), http://localhost:17070"
         );
     }
 
     #[test]
     fn jenkins_line_stopped_cluster() {
-        let s = format_jenkins_line(ClusterState::Stopped, None, "http://localhost:9080");
+        let s = format_jenkins_line(ClusterState::Stopped, None, "http://localhost:17070");
         assert!(s.contains("cluster stopped"));
     }
 
@@ -124,14 +124,14 @@ mod tests {
         let s = format_jenkins_line(
             ClusterState::Running,
             Some("Running"),
-            "http://localhost:9080",
+            "http://localhost:17070",
         );
-        assert_eq!(s, "configured, pod Running, http://localhost:9080");
+        assert_eq!(s, "configured, pod Running, http://localhost:17070");
     }
 
     #[test]
     fn jenkins_line_running_no_pod() {
-        let s = format_jenkins_line(ClusterState::Running, None, "http://localhost:9080");
+        let s = format_jenkins_line(ClusterState::Running, None, "http://localhost:17070");
         assert!(s.contains("pod not found"));
     }
 }

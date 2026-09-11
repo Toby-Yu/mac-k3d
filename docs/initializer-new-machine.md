@@ -17,7 +17,7 @@ One CLI (`mac-k3d`) on Linux and macOS.
 Workers are Jenkins **agents**. They do not join the controller’s Kubernetes cluster.
 
 ```text
-Controller:  Docker → k3d → Jenkins  (usually http://HOST:9080)
+Controller:  Docker → k3d → Jenkins  (usually http://HOST:17070)
 Worker:      Docker + Harbor + Java + agent  → that Jenkins URL
 ```
 
@@ -97,9 +97,9 @@ Do **not** pick “Local development only” if you need Jenkins or an agent.
 
 ## A. Controller — host Jenkins
 
-Storage: about **60 GB** free. Jenkins UI port: **9080**.
+Storage: about **60 GB** free. Jenkins UI port: **17070**.
 
-If another program already uses **8080**, after prepare edit `~/.config/mac-k3d/config.yaml` and change `cluster.ports` `host: 8080` to e.g. `18080`. Leave `jenkins.host_port: 9080`.
+If another program already uses **8080**, after prepare edit `~/.config/mac-k3d/config.yaml` and change `cluster.ports` `host: 8080` to e.g. `18080`. Leave `jenkins.host_port: 17070`.
 
 ```bash
 # 1. Write controller config (wizard)
@@ -112,7 +112,7 @@ mac-k3d start -c ~/.config/mac-k3d/config.yaml
 mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
 ```
 
-Open **http://localhost:9080** (or `http://<this-machine>:9080`). Username **admin**. Password from step 3. Do not commit the password.
+Open **http://localhost:17070** (or `http://<this-machine>:17070`). Username **admin**. Password from step 3. Do not commit the password.
 
 **Wizard (step 1) — choose:**
 
@@ -124,7 +124,7 @@ Open **http://localhost:9080** (or `http://<this-machine>:9080`). Username **adm
 | Harbor / LoLBench | Optional (job can use a LoLBench path if you set one) |
 | Cluster name | Default is fine |
 | k3d agent nodes | `0` |
-| Jenkins UI host port | `9080` |
+| Jenkins UI host port | `17070` |
 | Job defaults | `oracle` / `ruff_1` / default model is fine |
 | Enter CI secrets now? | **no** unless you already have keys ([secrets.md](secrets.md)) |
 | Write configuration? | **yes** |
@@ -145,7 +145,7 @@ The worker **node** is created in Jenkins and the local agent process starts onl
 mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 ```
 
-If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **9080**). That is OK. Config still saves. Finish **A**, then continue below.
+If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **17070**). That is OK. Config still saves. Finish **A**, then continue below.
 
 **Wizard — choose:**
 
@@ -157,7 +157,7 @@ If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **9080**). That i
 | Harbor | Install via uv/pipx, or use existing |
 | Add `~/.local/bin` to PATH | **yes** if asked |
 | LoLBench | Clone, or an existing checkout |
-| Jenkins controller URL | e.g. `http://192.168.1.10:9080` or `http://localhost:9080` on this PC |
+| Jenkins controller URL | e.g. `http://192.168.1.10:17070` or `http://localhost:17070` on this PC |
 | API user / token | Fill in if Jenkins is already up; **empty** if not |
 | Agent name / labels / remote root | Defaults are fine |
 | Write configuration? | **yes** |
@@ -166,7 +166,7 @@ If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **9080**). That i
 
 The `--show-jenkins` **password** is only for the browser. It is **not** the API token.
 
-1. Open the Jenkins URL (`http://localhost:9080` on this PC).
+1. Open the Jenkins URL (`http://localhost:17070` on this PC).
 2. Log in as **admin** + password from `mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins` (controller file).
 3. Click **admin** (top right) → **Configure**.
 4. **API Token** → **Add new Token** → name it (e.g. `mac-k3d-worker`) → **Generate**.
@@ -183,7 +183,7 @@ Edit `~/.config/mac-k3d/worker.yaml`. Under `jenkins_agent:`, change only:
   api_token: PASTE_THE_TOKEN_HERE
 ```
 
-Leave `controller_url` as the Jenkins URL (this PC: `http://localhost:9080`).
+Leave `controller_url` as the Jenkins URL (this PC: `http://localhost:17070`).
 
 If you use `nano`:
 
@@ -241,9 +241,9 @@ Two files: `config.yaml` (controller) and `worker.yaml` (worker). Run in this or
 mac-k3d prepare -i -c ~/.config/mac-k3d/config.yaml
 mac-k3d start -c ~/.config/mac-k3d/config.yaml
 mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
-# log in at http://localhost:9080  (admin + printed password)
+# log in at http://localhost:17070  (admin + printed password)
 
-# 3. Worker (URL http://localhost:9080)
+# 3. Worker (URL http://localhost:17070)
 mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 # put api_user / api_token in worker.yaml, then:
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
@@ -269,7 +269,7 @@ mac-k3d clean -c ~/.config/mac-k3d/config.yaml --yes
 | `permission denied` on `docker.sock` | Linux only: finish `usermod`, **log out and in**; if it still fails, `systemctl --user exit` then sign in |
 | `docker info` fails / no Server | Linux: docker group + new login. macOS: open **Docker Desktop** and wait until it is idle |
 | `loginctl: command not found` | macOS — ignore; use LaunchAgent after worker `config` |
-| `agent.jar` / curl port 9080 | Finish controller `start`, then worker `config` |
+| `agent.jar` / curl port 17070 | Finish controller `start`, then worker `config` |
 | `REPLACE_ME` / unit not started | Token missing or still `api_token: null`; edit `worker.yaml` and re-run worker `config` |
 | `mac-k3d-jenkins-agent.service` could not be found | You ran `config` on **controller** YAML, or Jenkins was down / no token. Use `-c worker.yaml` after step 2 |
-| `failed to bind host port … 8080` | In controller YAML set host port `8080` → `18080`; keep Jenkins on `9080` |
+| `failed to bind host port … 8080` | In controller YAML set host port `8080` → `18080`; keep Jenkins on `17070` |

@@ -12,7 +12,7 @@ jenkins:
   enabled: true
   namespace: jenkins
   release_name: jenkins
-  host_port: 9080
+  host_port: 17070
 
 storage:
   base_dir: /var/lib/mac-k3d

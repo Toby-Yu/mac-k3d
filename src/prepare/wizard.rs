@@ -625,7 +625,7 @@ fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgent
 
     let controller_url: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Jenkins controller URL")
-        .default("http://localhost:9080".into())
+        .default("http://localhost:17070".into())
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
 
@@ -822,11 +822,11 @@ fn prompt_cluster_settings(role: MacRole) -> Result<(String, u8, u16)> {
     let jenkins_port: u16 = if matches!(role, MacRole::Controller) {
         Input::with_theme(&ColorfulTheme::default())
             .with_prompt("Jenkins UI host port")
-            .default(9080)
+            .default(17070)
             .interact_text()
             .map_err(|_| Error::Cancelled)?
     } else {
-        9080
+        17070
     };
 
     Ok((name, agents, jenkins_port))
