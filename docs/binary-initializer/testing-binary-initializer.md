@@ -32,7 +32,7 @@ GitHub Release  mac-k3d-{os}-{arch}
 
 Workers do **not** join the controller’s k3d cluster. Worker `start` is rejected.
 
-Until a `v*` pre-release publishes the **fast** three assets (`linux-x86_64`, `linux-aarch64`, `darwin-aarch64`), testers use `target/release/mac-k3d` as a stand-in. Intel Mac `darwin-x86_64` may arrive later on the same release.
+Until a `v*` pre-release publishes the four assets (`linux-x86_64`, `linux-aarch64`, `darwin-aarch64`, `darwin-x86_64`), testers use `target/release/mac-k3d` as a stand-in. Intel Mac is **cross-compiled** on `macos-latest` (see **T7**).
 
 ---
 
@@ -84,6 +84,44 @@ Download `mac-k3d-darwin-aarch64`, `xattr -d com.apple.quarantine`, run in Termi
 
 **Expected:** same wizard; LaunchAgent `com.mac-k3d.jenkins-agent` after token + `config`; Jenkins node online. Double-click of an unsigned binary is **not** supported. Mac can be signed off later than Linux.
 
+## T7 — Intel Mac asset (`mac-k3d-darwin-x86_64`)
+
+The Intel binary is **cross-compiled** on GitHub `macos-latest` (`x86_64-apple-darwin`). It is **not** built on `macos-13`.
+
+### T7a — CI log (no Intel Mac required)
+
+On the **Release binaries** run for the tag:
+
+1. Job **build** / matrix `x86_64-apple-darwin` is green.
+2. Step **Verify Intel Mac asset is x86_64** prints `file` / `lipo -info` containing **x86_64** and not **arm64**.
+3. Job **publish** lists four files; Releases page has `mac-k3d-darwin-x86_64`.
+
+```bash
+# after gh auth login
+gh release view <tag> --json assets --jq '.assets[].name'
+# must include mac-k3d-darwin-x86_64
+```
+
+### T7b — downloaded file (any machine)
+
+```bash
+file ./mac-k3d-darwin-x86_64
+# expect: Mach-O 64-bit executable x86_64
+# reject: arm64, ELF, or a fat binary that is only arm64
+```
+
+On a Mac you can also run `lipo -info ./mac-k3d-darwin-x86_64` (`Non-fat file: … architecture: x86_64`).
+
+### T7c — Intel Mac smoke (optional)
+
+```bash
+xattr -d com.apple.quarantine ./mac-k3d-darwin-x86_64
+chmod +x ./mac-k3d-darwin-x86_64
+./mac-k3d-darwin-x86_64 --help    # must list setup and eval
+```
+
+Apple Silicon can run this via Rosetta; that is optional. Native Intel is the real T7c.
+
 ---
 
 ## Linux lab (2026-09-10, `mac-k3d 0.4.0`)
@@ -108,6 +146,7 @@ Download `mac-k3d-darwin-aarch64`, `xattr -d com.apple.quarantine`, run in Termi
 | `agent.jar` / curl port 9080 / need token | Finish controller `start`, paste API token, then worker `config` |
 | `start is for controller/standalone` | Expected on `worker.yaml`. Use `mac-k3d config -c worker.yaml` |
 | `failed to bind host port … 8080` | In controller YAML set host port `8080` → `18080`; keep Jenkins on `9080` |
+| Release missing `darwin-x86_64` | Tag was cut **before** the `macos-latest` cross-compile workflow. Push this branch, cut a **new** `v*` tag (or upload the CI artifact onto the old release). See **T7**. |
 
 User commands: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).  
 Eval pipeline stages: [testing-eval-pipeline.md](testing-eval-pipeline.md).

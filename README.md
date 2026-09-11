@@ -22,7 +22,7 @@ If auto-install fails, install Docker yourself and re-run setup ([docs/binary-in
 
 ## Install (users)
 
-1. Download the asset for your OS/arch from this repo’s GitHub **Releases** page (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, or `mac-k3d-darwin-aarch64`).
+1. Download the asset for your OS/arch from this repo’s GitHub **Releases** page (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, or Intel `mac-k3d-darwin-x86_64`).
 2. `chmod +x` (macOS: also `xattr -d com.apple.quarantine`).
 3. Run `./mac-k3d` or `./mac-k3d setup -c ~/.config/mac-k3d/config.yaml` (controller) / `worker.yaml` (worker).
 4. Choose the role; let it **Install** Docker if asked.

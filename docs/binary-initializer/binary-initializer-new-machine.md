@@ -33,7 +33,7 @@ Until a pre-release exists, testers may use `target/release/mac-k3d` as a stand-
 
 ## 1. Download the binary
 
-Get the matching GitHub Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, or `mac-k3d-darwin-aarch64`). Prefer a **pre-release** on this branch; **Latest** may still be v0.3.0. Intel Mac `mac-k3d-darwin-x86_64` may appear later on the same release (built last). Open **Terminal** (double-click is not supported).
+Get the matching GitHub Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, or Intel Mac `mac-k3d-darwin-x86_64`). Prefer a **pre-release** on this branch; **Latest** may still be v0.3.0. Open **Terminal** (double-click is not supported).
 
 ```bash
 chmod +x ./mac-k3d-linux-x86_64
@@ -202,7 +202,7 @@ One **controller**. Each new Mac or Linux box is another **worker**. They do not
 
 On the new computer:
 
-1. Download the matching Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, or `mac-k3d-darwin-aarch64`). No Rust.
+1. Download the matching Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, or `mac-k3d-darwin-x86_64`). No Rust.
 2. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` — role **CI worker**; let it install Docker if asked; Harbor/LoLBench **No**; Jenkins URL `http://<controller-ip>:9080`.
 3. Use a **distinct** agent name (the wizard default includes the hostname).
 4. Create or reuse a Jenkins API token; put `api_user` / `api_token` in that machine’s `worker.yaml`.

@@ -102,9 +102,16 @@ Jenkins job name: **`icode_eval`**. Logs print `PROGRESS n% …` so you can see 
 
 ## Release assets (all machines)
 
-Fast publish (minutes): `mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`.
+One tag publishes **four** assets (see [`.github/workflows/release-binaries.yml`](../../.github/workflows/release-binaries.yml)):
 
-Intel Mac `mac-k3d-darwin-x86_64` is built **last** on scarce `macos-13` runners and uploaded onto the **same** pre-release. If that job shows **queued**, you are waiting for hardware — not a compile error. Use the three fast assets while you wait.
+| Asset | Runner | How it is built |
+|-------|--------|-----------------|
+| `mac-k3d-linux-x86_64` | `ubuntu-latest` | native |
+| `mac-k3d-linux-aarch64` | `ubuntu-24.04-arm` | native |
+| `mac-k3d-darwin-aarch64` | `macos-latest` (Apple Silicon) | native |
+| `mac-k3d-darwin-x86_64` | `macos-latest` (Apple Silicon) | **cross-compile** `--target x86_64-apple-darwin` |
+
+CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. There is no `macos-13` job.
 
 ---
 
