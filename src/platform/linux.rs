@@ -175,6 +175,12 @@ fn install_docker_engine() -> Result<()> {
                 .into(),
         ));
     }
+    if let Err(e) = apt_install(&["docker-compose-v2"]) {
+        tracing::warn!(
+            error = %e,
+            "apt install docker-compose-v2 failed (P0 can install a user plugin)"
+        );
+    }
     let _ = Command::new("sudo")
         .args(["systemctl", "enable", "--now", "docker"])
         .status();

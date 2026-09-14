@@ -625,13 +625,26 @@ struct WorkerAgentPrompt {
     config: JenkinsAgentConfig,
 }
 
+fn default_worker_jenkins_url() -> String {
+    for key in ["MAC_K3D_JENKINS_URL", "JENKINS_URL"] {
+        if let Ok(v) = std::env::var(key) {
+            let t = v.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+    "http://127.0.0.1:17070".into()
+}
+
 fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgentPrompt> {
     println!("\n--- Jenkins worker agent ---\n");
     println!("Detected logical CPU cores: {cpu_cores} (will register as CPU_CORES capacity)");
+    println!("Jenkins URL: this PC (default), or type http://<controller-ip>:17070");
 
     let controller_url: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Jenkins controller URL")
-        .default("http://43.107.42.252:17070".into())
+        .default(default_worker_jenkins_url())
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
 
@@ -988,4 +1001,27 @@ fn install_pending_dependencies(config: &mut MacK3dConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_worker_jenkins_url;
+
+    #[test]
+    fn worker_jenkins_url_defaults_to_localhost() {
+        let prev_j = std::env::var_os("JENKINS_URL");
+        let prev_m = std::env::var_os("MAC_K3D_JENKINS_URL");
+        std::env::remove_var("JENKINS_URL");
+        std::env::remove_var("MAC_K3D_JENKINS_URL");
+        let got = default_worker_jenkins_url();
+        match prev_j {
+            Some(v) => std::env::set_var("JENKINS_URL", v),
+            None => std::env::remove_var("JENKINS_URL"),
+        }
+        match prev_m {
+            Some(v) => std::env::set_var("MAC_K3D_JENKINS_URL", v),
+            None => std::env::remove_var("MAC_K3D_JENKINS_URL"),
+        }
+        assert_eq!(got, "http://127.0.0.1:17070");
+    }
 }

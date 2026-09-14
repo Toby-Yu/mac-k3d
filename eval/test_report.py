@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from check_report import validate  # noqa: E402
+from pier_result import hollow_job_reason  # noqa: E402
 from score_results import pass_at_1  # noqa: E402
 
 
@@ -206,7 +207,36 @@ printf '%s' "$DEEPSEEK_API_KEY"
         text = (ROOT / "scripts" / "eval" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertIn("icode_pier_agent:ICodeAgent", text)
         self.assertIn("No such option", text)
+        self.assertIn("selected_tasks", text)
+        self.assertIn("hollow", text)
         self.assertNotIn("--agent icode", text)
+
+    def test_p1_requires_agent_import_path(self):
+        text = (ROOT / "scripts" / "eval" / "p1_pier.sh").read_text(encoding="utf-8")
+        self.assertIn("--agent-import-path", text)
+
+    def test_hollow_pier_result(self):
+        hollow = {
+            "n_total_trials": 1,
+            "stats": {
+                "n_completed_trials": 1,
+                "n_errored_trials": 1,
+                "evals": {
+                    "icode__deepseek-v4-pro__tasks": {
+                        "n_trials": 0,
+                        "n_errors": 1,
+                    }
+                },
+            },
+        }
+        self.assertIsNotNone(hollow_job_reason(hollow))
+        ran = {
+            "stats": {
+                "n_errored_trials": 1,
+                "evals": {"x": {"n_trials": 1, "n_errors": 1}},
+            }
+        }
+        self.assertIsNone(hollow_job_reason(ran))
 
     def test_icode_adapter_module_parses(self):
         path = ROOT / "eval" / "icode_pier_agent.py"

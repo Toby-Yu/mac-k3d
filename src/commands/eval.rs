@@ -57,13 +57,12 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
         .unwrap_or_default();
     let mut icode_source = args
         .icode_source
-        .or_else(|| std::env::var("ICODE_SOURCE").ok())
-        .unwrap_or_else(|| {
-            dirs_home()
-                .join("Documents/Toby/iCode-main")
-                .display()
-                .to_string()
-        });
+        .or_else(|| {
+            std::env::var("ICODE_SOURCE")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .unwrap_or_else(|| discover_icode_source(&repo).display().to_string());
     let workdir = args
         .workdir
         .unwrap_or_else(|| PathBuf::from("eval-work"));
@@ -199,6 +198,28 @@ fn dirs_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+fn looks_like_icode(path: &Path) -> bool {
+    path.is_dir()
+        && (path.join(".venv/bin/icode").is_file() || path.join("pyproject.toml").is_file())
+}
+
+fn discover_icode_source(repo: &Path) -> PathBuf {
+    let home = dirs_home();
+    let candidates = [
+        home.join("Documents/iCode-main"),
+        home.join("iCode-main"),
+        home.join("src/iCode-main"),
+        repo.parent().unwrap_or(repo).join("iCode-main"),
+        home.join("Documents/Toby/iCode-main"),
+    ];
+    for c in &candidates {
+        if looks_like_icode(c) {
+            return c.clone();
+        }
+    }
+    home.join("Documents/iCode-main")
 }
 
 fn discover_repo_root() -> Result<PathBuf> {
@@ -379,4 +400,20 @@ fn urlencoding_simple(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discover_icode_source_ends_with_icode_main() {
+        let repo = PathBuf::from("/tmp/mac-k3d-no-such-checkout");
+        let got = discover_icode_source(&repo);
+        assert!(
+            got.file_name().and_then(|s| s.to_str()) == Some("iCode-main"),
+            "{}",
+            got.display()
+        );
+    }
 }

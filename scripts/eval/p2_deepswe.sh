@@ -12,5 +12,6 @@ if [ ! -d "$DEEPSWE_DIR/tasks" ]; then
 fi
 [ -d "$DEEPSWE_DIR/tasks" ] || die "missing $DEEPSWE_DIR/tasks after clone"
 TASK_COUNT="$(find "$DEEPSWE_DIR/tasks" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-echo "OK deep-swe tasks dir ($TASK_COUNT task dirs)"
+write_selected_tasks
+echo "OK deep-swe tasks dir ($TASK_COUNT task dirs); selected $(tr '\n' ' ' <"$WORKDIR/selected_tasks.txt")"
 progress 30 "P2 complete"

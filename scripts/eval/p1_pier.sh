@@ -19,5 +19,8 @@ fi
 
 have pier || die "pier still not on PATH after install"
 pier --help >/dev/null || pier -h >/dev/null || true
-echo "OK pier=$(command -v pier)"
+PIER_RUN_HELP="$(pier run --help 2>&1 || true)"
+echo "$PIER_RUN_HELP" | grep -q -- '--agent-import-path' \
+  || die "this pier has no --agent-import-path; need datacurve-pier 0.3.x (uv tool install datacurve-pier)"
+echo "OK pier=$(command -v pier) (--agent-import-path present)"
 progress 20 "P1 complete"

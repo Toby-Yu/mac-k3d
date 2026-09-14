@@ -18,8 +18,14 @@ export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
 export PYTHONPATH="$MAC_K3D_ROOT/eval${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$HARNESS_DIR"
 
-FIRST_TASK="$(find "$DEEPSWE_DIR/tasks" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
-[ -n "$FIRST_TASK" ] || die "no tasks under $DEEPSWE_DIR/tasks"
+ensure_selected_tasks
+FIRST_TASK=""
+while read -r tid; do
+  [ -n "$tid" ] || continue
+  FIRST_TASK="$DEEPSWE_DIR/tasks/$tid"
+  break
+done <"$WORKDIR/selected_tasks.txt"
+[ -n "$FIRST_TASK" ] && [ -d "$FIRST_TASK" ] || die "no tasks under $DEEPSWE_DIR/tasks"
 
 HOST_ICODE=""
 ICODE_BIN_HOST_IN_SANDBOX=""
@@ -69,6 +75,12 @@ chmod 600 "$PIER_ENV_FILE"
 CMD=(pier run)
 if echo "$PIER_HELP" | grep -q -- '--n-tasks'; then
   CMD+=(-p "$DEEPSWE_DIR/tasks" --n-tasks "$N_TASKS")
+  if echo "$PIER_HELP" | grep -q -- '--include-task-name'; then
+    while read -r tid; do
+      [ -n "$tid" ] || continue
+      CMD+=(--include-task-name "$tid")
+    done <"$WORKDIR/selected_tasks.txt"
+  fi
 else
   CMD+=(-p "$FIRST_TASK")
 fi
@@ -111,6 +123,47 @@ if [ "$rc" -ne 0 ]; then
   echo "WARNING: pier run exited $rc (see $HARNESS_DIR/pier.log). Stage still recorded."
 fi
 echo "$rc" >"$HARNESS_DIR/exit_code.txt"
+
+HOLLOW="$(
+  python3 - "$MAC_K3D_ROOT/eval/pier_result.py" "$HARNESS_DIR" "$STARTED_AT" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+mod = Path(sys.argv[1])
+root = Path(sys.argv[2])
+started = sys.argv[3]
+sys.path.insert(0, str(mod.parent))
+from pier_result import hollow_job_reason
+
+try:
+    start_ts = datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+except ValueError:
+    start_ts = 0.0
+newest = None
+newest_mtime = -1.0
+for p in root.rglob("result.json"):
+    try:
+        m = p.stat().st_mtime
+    except OSError:
+        continue
+    if m + 2 < start_ts:
+        continue
+    if m >= newest_mtime:
+        newest_mtime = m
+        newest = p
+if newest is None:
+    print("no pier result.json from this P5 run")
+    raise SystemExit(0)
+doc = json.loads(newest.read_text(encoding="utf-8"))
+reason = hollow_job_reason(doc)
+if reason:
+    print(f"{newest}: {reason}")
+PY
+)"
+if [ -n "$HOLLOW" ]; then
+  die "P5 hollow job: $HOLLOW"
+fi
 
 python3 - "$HARNESS_DIR" "$DEEPSEEK_MODEL" "$STARTED_AT" "$FINISHED_AT" "$DURATION" "$rc" <<'PY'
 import json, re, sys

@@ -9,6 +9,10 @@ require_mac_k3d
 have docker || die "docker not on PATH"
 docker info >/dev/null 2>&1 || die "docker info failed (no Server / permission). Linux: log out/in. macOS: open Docker Desktop."
 pass "docker Server section present"
+# shellcheck source=../eval/ensure_compose.sh
+source "$(cd "$(dirname "$0")/../eval" && pwd)/ensure_compose.sh"
+ensure_docker_compose
+pass "docker compose present"
 
 "$MAC_K3D_BIN" --help | grep -q eval || die "mac-k3d --help does not list eval"
 pass "mac-k3d lists eval"

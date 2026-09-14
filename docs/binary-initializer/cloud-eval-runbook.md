@@ -232,7 +232,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 | Docker / Java | Use existing or **Install** |
 | k3d / kubectl | **Skip** |
 | Harbor / LoLBench | **No** |
-| Jenkins controller URL | **Enter** — wizard default is `http://43.107.42.252:17070` |
+| Jenkins controller URL | type `http://43.107.42.252:17070` (or export `JENKINS_URL` first). Wizard default is localhost. |
 | API user / token | `admin` + the **token secret** |
 | Agent name | Distinct default (hostname) is fine |
 | Write + apply | **yes** |
@@ -277,7 +277,7 @@ cd ~/Documents/Toby/mac-k3d
 mac-k3d eval --stage p0
 mac-k3d eval --stage p1
 mac-k3d eval --stage p2
-ICODE_MODE=source ICODE_SOURCE=/home/Toby/Documents/Toby/iCode-main mac-k3d eval --stage p3
+mac-k3d eval --stage p3
 mac-k3d eval --stage p4
 
 ./scripts/eval/check_report.sh eval/testdata/report-min.json
@@ -289,7 +289,7 @@ mac-k3d eval --stage p4
 | P0 | Docker Server; CLI lists `eval` |
 | P1 | `pier --help` works |
 | P2 | `$WORKDIR/deep-swe/tasks` (clone `https://github.com/datacurve-ai/deep-swe`) |
-| P3 | `icode --help` from `/home/Toby/Documents/Toby/iCode-main` |
+| P3 | `icode --help` from the discovered iCode tree |
 | P4 | Pier agent `icode` discoverable |
 | E3 | `OK report schema` |
 
@@ -315,7 +315,7 @@ mac-k3d eval --stage p8 --n-tasks 1
 
 **Expected:**
 
-- P5: `PROGRESS` lines; Pier/Docker/LLM work (minutes, not 4s); `harness/` artifacts. CLI usage errors (`No such option`) **fail** the stage. Other pier/docker errors after a trial starts still count as “stage ran”.
+- P5: `PROGRESS` lines; Pier/Docker/LLM work (minutes, not 4s); `harness/` artifacts. CLI usage errors and **0-trial** Pier jobs **fail** the stage. P0 installs `docker compose` if missing. P5 and P6 use the same `selected_tasks.txt`.
 - P6: `baseline/<task>/agent.patch`; `baseline/summary.json` has usage / time / model
 - P8: `output/eval-icode-deepseek-deepswe-n1-<utc>.json` with f2p, p2p, `pass_at_1_*`, `token_usage`, `duration_seconds`, `access_date_utc`, `llm_model_id` / `llm_name`
 - `check_report.sh` prints `OK report schema`
@@ -338,7 +338,7 @@ Or Jenkins UI: job `icode_eval` → Build with Parameters (`DEEPSEEK_MODEL=deeps
 
 **Expected:** build on this worker; archived JSON; same schema as E6. Confirm with `check_report.sh` on the downloaded artifact if needed.
 
-If the job still uses `deepseek-chat`, on the **cloud root** session:
+If the job still uses `deepseek-chat` or a hardcoded Toby `ICODE_SOURCE`, on the **cloud root** session after `git pull`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -372,11 +372,11 @@ E8 (N>1) is optional after E7.
 | k3d install script writes `/usr/local/bin` | As root this succeeds. As a normal user it fails; this runbook does not use that user. |
 | `Host port 8080/8443 in use → using 18xxx` | Pass. Keep Jenkins on **17070**. |
 | Jenkins UI not 200 from this PC | Security group **17070**; confirm `02_check` on the VM first. |
-| Worker URL is localhost | Wizard default is the cloud URL. If YAML still has localhost, set `controller_url: http://43.107.42.252:17070`, then `mac-k3d config -c worker.yaml`. Restart the agent unit if it was already running. |
+| Worker URL is localhost | This lab: set `controller_url: http://43.107.42.252:17070` or export `JENKINS_URL` before setup. Restart the agent unit if it was already running. |
 | `start is for controller/standalone` | Correct for `worker.yaml`. Use `config`, not `start`. |
 | `DEEPSEEK_API_KEY missing` | E4–E6: copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller. |
 | `No such option: --agent-dir` | Old P5 flags. This tree uses `--agent-import-path icode_pier_agent:ICodeAgent`. Pull/rebuild scripts; do not pass `--agent-dir` on Pier 0.3.1. |
 | Job still `deepseek-chat` | On cloud root: `mac-k3d config --skip-secrets` after pulling this tree. |
-| P3 `ICODE_SOURCE missing` | Clone/copy iCode to `/home/Toby/Documents/Toby/iCode-main` on **this PC**. |
+| P3 `ICODE_SOURCE missing` | Put iCode at `$HOME/Documents/iCode-main` (or set `ICODE_SOURCE`). This lab often uses `/home/Toby/Documents/Toby/iCode-main` (auto-discovered if present). |
 | pier not found | `uv tool install datacurve-pier` |
 | Docker OOM / disk | DeepSWE images are large; free disk; keep N=1. |

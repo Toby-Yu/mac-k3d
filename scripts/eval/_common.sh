@@ -8,7 +8,6 @@ export WORKDIR="${MAC_K3D_EVAL_WORKDIR:-$ROOT/eval-work}"
 export OUTPUT_DIR="${MAC_K3D_EVAL_OUTPUT:-$WORKDIR/output}"
 export DEEPSWE_DIR="${DEEPSWE_DIR:-$WORKDIR/deep-swe}"
 export ICODE_MODE="${ICODE_MODE:-source}"
-export ICODE_SOURCE="${ICODE_SOURCE:-$HOME/Documents/Toby/iCode-main}"
 export ICODE_RELEASE="${ICODE_RELEASE:-}"
 export N_TASKS="${N_TASKS:-1}"
 export HARNESS="${HARNESS:-icode}"
@@ -100,3 +99,56 @@ load_local_env() {
 
 load_local_env
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
+
+_icode_tree_ok() {
+  [ -d "$1" ] || return 1
+  [ -x "$1/.venv/bin/icode" ] || [ -f "$1/pyproject.toml" ]
+}
+
+# Per-machine iCode path. Toby's lab tree is a candidate only if it exists.
+discover_icode_source() {
+  local c
+  if [ -n "${ICODE_SOURCE:-}" ] && [ -d "$ICODE_SOURCE" ]; then
+    echo "$ICODE_SOURCE"
+    return 0
+  fi
+  for c in \
+    "$HOME/Documents/iCode-main" \
+    "$HOME/iCode-main" \
+    "$HOME/src/iCode-main" \
+    "$(dirname "$ROOT")/iCode-main" \
+    "$HOME/Documents/Toby/iCode-main"
+  do
+    if _icode_tree_ok "$c"; then
+      echo "$c"
+      return 0
+    fi
+  done
+  echo "$HOME/Documents/iCode-main"
+}
+
+if [ -z "${ICODE_SOURCE:-}" ]; then
+  ICODE_SOURCE="$(discover_icode_source)"
+fi
+export ICODE_SOURCE
+
+write_selected_tasks() {
+  local list="$WORKDIR/selected_tasks.txt" n
+  [ -d "$DEEPSWE_DIR/tasks" ] || die "run P2 first (missing deep-swe/tasks)"
+  n="${N_TASKS:-1}"
+  find "$DEEPSWE_DIR/tasks" -mindepth 1 -maxdepth 1 -type d | sort | head -n "$n" \
+    | xargs -n1 basename >"$list"
+  [ -s "$list" ] || die "no DeepSWE tasks to select under $DEEPSWE_DIR/tasks"
+}
+
+ensure_selected_tasks() {
+  local list="$WORKDIR/selected_tasks.txt" have_n want
+  want="${N_TASKS:-1}"
+  if [ -f "$list" ]; then
+    have_n="$(grep -c . "$list" || true)"
+    if [ "$have_n" = "$want" ]; then
+      return 0
+    fi
+  fi
+  write_selected_tasks
+}

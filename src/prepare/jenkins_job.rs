@@ -873,7 +873,7 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
     string(name: 'N_TASKS', defaultValue: '1', description: 'Number of DeepSWE questions')
     choice(name: 'ICODE_MODE', choices: ['source', 'binary'], description: 'iCode delivery')
     string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: -full- tarball URL/path')
-    string(name: 'ICODE_SOURCE', defaultValue: '/home/Toby/Documents/Toby/iCode-main', description: 'source: path on worker')
+    string(name: 'ICODE_SOURCE', defaultValue: '', description: 'source: path on worker; empty = discover on the worker')
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4')
     string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Checkout path with scripts/eval (optional)')
@@ -906,7 +906,7 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
             export N_TASKS="${{N_TASKS:-1}}"
             export ICODE_MODE="${{ICODE_MODE:-source}}"
             export ICODE_RELEASE="${{ICODE_RELEASE:-}}"
-            export ICODE_SOURCE="${{ICODE_SOURCE:-/home/Toby/Documents/Toby/iCode-main}}"
+            export ICODE_SOURCE="${{ICODE_SOURCE:-}}"
             export HARNESS=icode LLM=deepseek BENCHMARK=deepswe
             export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-deepseek-v4-pro}}"
             export LLM_NAME="${{LLM_NAME:-DeepSeek V4 Pro}}"
@@ -1088,5 +1088,9 @@ mod tests {
         assert!(xml.contains("DEEPSEEK_MODEL"));
         assert!(xml.contains("deepseek-v4-pro"));
         assert!(xml.contains("withCredentials"));
+        assert!(
+            !xml.contains("/home/Toby/Documents/Toby/iCode-main"),
+            "job must not hardcode a lab iCode path"
+        );
     }
 }

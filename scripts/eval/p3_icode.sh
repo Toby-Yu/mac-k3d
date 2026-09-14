@@ -33,7 +33,7 @@ case "$ICODE_MODE" in
     [ -n "$ICODE_BIN" ] || die "could not find icode inside release"
     ;;
   source)
-    [ -d "$ICODE_SOURCE" ] || die "ICODE_SOURCE missing: $ICODE_SOURCE"
+    [ -d "$ICODE_SOURCE" ] || die "ICODE_SOURCE missing: $ICODE_SOURCE. Clone or copy iCode there, or set ICODE_SOURCE."
     if [ -x "$ICODE_SOURCE/.venv/bin/icode" ]; then
       ICODE_BIN="$ICODE_SOURCE/.venv/bin/icode"
     elif have uv; then

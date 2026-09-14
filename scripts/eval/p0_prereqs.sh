@@ -8,6 +8,9 @@ progress 5 "P0: checking Docker and mac-k3d"
 
 have docker || die "docker not on PATH"
 docker info >/dev/null 2>&1 || die "docker info failed (no Server / permission). Log out/in on Linux or open Docker Desktop on macOS."
+# shellcheck source=./ensure_compose.sh
+source "$(cd "$(dirname "$0")" && pwd)/ensure_compose.sh"
+ensure_docker_compose
 
 MAC_K3D_BIN="${MAC_K3D_BIN:-}"
 if [ -z "$MAC_K3D_BIN" ]; then
@@ -24,6 +27,12 @@ fi
 
 echo "OK docker Server section present"
 echo "OK mac-k3d=$MAC_K3D_BIN lists eval"
+if ! "$MAC_K3D_BIN" eval --help 2>/dev/null | grep -q -- '--model'; then
+  echo "NOTE: this mac-k3d binary has no --model; eval stages use this checkout + DEEPSEEK_MODEL / .env"
+fi
+if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+  echo "NOTE: no DEEPSEEK_API_KEY yet. For local P5/P6 copy .env.example to .env (chmod 600). Jenkins E7 uses deepseek-api-key."
+fi
 
 if have systemctl; then
   if systemctl --user is-active mac-k3d-jenkins-agent.service >/dev/null 2>&1; then

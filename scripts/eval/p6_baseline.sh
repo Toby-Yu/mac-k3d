@@ -8,10 +8,12 @@ progress 75 "P6: DeepSeek baseline arm (n=$N_TASKS)"
 [ -d "$DEEPSWE_DIR/tasks" ] || die "run P2 first"
 [ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
 
+ensure_selected_tasks
 mkdir -p "$BASELINE_DIR"
 python3 "$MAC_K3D_ROOT/eval/baseline_deepseek.py" \
   --tasks-dir "$DEEPSWE_DIR/tasks" \
   --n-tasks "$N_TASKS" \
+  --task-file "$WORKDIR/selected_tasks.txt" \
   --out-dir "$BASELINE_DIR" \
   --model "${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
   | tee "$BASELINE_DIR/baseline.log"

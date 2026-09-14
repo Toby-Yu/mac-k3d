@@ -18,7 +18,7 @@ mac-k3d eval                        # interactive → Jenkins job icode_eval
 ```
 
 Default workdir: `./eval-work` (override with `MAC_K3D_EVAL_WORKDIR`).  
-Default iCode source: `/home/Toby/Documents/Toby/iCode-main` (override with `ICODE_SOURCE`).  
+Default iCode source: first existing tree among `$HOME/Documents/iCode-main`, `$HOME/iCode-main`, `$HOME/src/iCode-main`, a sibling of this checkout, or `$HOME/Documents/Toby/iCode-main` if present (override with `ICODE_SOURCE`).  
 Default model: `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`). API `model` in the response is stored as `llm_model_served` (routing to Flash is possible).
 
 ---
@@ -35,7 +35,7 @@ This PC: Jenkins agent + Docker + iCode
     └── archive JSON back to cloud Jenkins
 ```
 
-If a local lab controller is still bound to `:17070`, teardown it or leave it unused. Worker wizard default / YAML is `http://43.107.42.252:17070`, not localhost. Never `mac-k3d start -c worker.yaml`.
+Worker wizard default is `http://127.0.0.1:17070`. For this lab’s cloud Jenkins, export or type `JENKINS_URL=http://43.107.42.252:17070`. Never `mac-k3d start -c worker.yaml`.
 
 After changing the `icode_eval` job XML, refresh on the **cloud** controller:
 
@@ -54,7 +54,7 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 | Jenkins admin password | After cloud `setup` |
 | Jenkins API token | **Secret**, not the token *name*, for worker register |
 | Credential `deepseek-api-key` | Stored on the **cloud** controller |
-| iCode tree on this PC | Default `/home/Toby/Documents/Toby/iCode-main` or a `-full-` tarball |
+| iCode tree on this PC | Discovered path (often `$HOME/Documents/iCode-main`) or a `-full-` tarball |
 | `MAC_K3D_ROOT` on this PC | mac-k3d checkout (or Release binary + `scripts/eval`) |
 | API model string | `deepseek-v4-pro` (override with `DEEPSEEK_MODEL` if docs change) |
 | N for smoke | **1**; larger N later (E8) |
@@ -70,7 +70,7 @@ Copy-paste commands. Use `--n-tasks 1` until E4–E6 are green.
 | Check | Command | Expected | Pass (y/n) | Notes |
 |-------|---------|----------|------------|-------|
 | **E0** Cloud controller | On the **cloud** VM: Release binary, first-run wizard, role **CI controller**, Jenkins **17070**, Harbor skip, credential `deepseek-api-key`. Open security group **17070**. Then `JENKINS_URL=http://127.0.0.1:17070 ./scripts/env_set_up/02_check_controller.sh` | Browser `http://<cloud-ip>:17070` HTTP 200; job `icode_eval` present | | Once per VM |
-| **E1** This PC as worker | On this PC: `setup -c worker.yaml`. Wizard default URL is `http://43.107.42.252:17070` (Enter). User `admin`, API **secret**, distinct agent name. Never `start -c worker.yaml`. `JENKINS_URL=http://43.107.42.252:17070 ./scripts/eval/e1_reach_jenkins.sh` then `REQUIRE_WORKER=1 JENKINS_URL=http://43.107.42.252:17070 ./scripts/env_set_up/03_check_worker.sh` | `e1`: HTTP 200; start rejected; unit active; node **online** in **cloud** Jenkins → Nodes | | |
+| **E1** This PC as worker | On this PC: `setup -c worker.yaml`. Type or export `JENKINS_URL=http://43.107.42.252:17070` (wizard default is localhost). User `admin`, API **secret**, distinct agent name. Never `start -c worker.yaml`. `JENKINS_URL=http://43.107.42.252:17070 ./scripts/eval/e1_reach_jenkins.sh` then `REQUIRE_WORKER=1 JENKINS_URL=http://43.107.42.252:17070 ./scripts/env_set_up/03_check_worker.sh` | `e1`: HTTP 200; start rejected; unit active; node **online** in **cloud** Jenkins → Nodes | | |
 | **E2** P0–P4 (no LLM) | See commands below | Existing P0–P4 OK lines; Pier agent `icode` present | | Fast |
 | **E3** Report schema (no LLM) | `./scripts/eval/check_report.sh eval/testdata/report-min.json` | `OK report schema` | | Instant |
 | **E4** P5 n=1 harness (paid) | `mac-k3d eval --stage p5 --n-tasks 1` with gitignored `.env` (or Jenkins bind `deepseek-api-key`) | `PROGRESS` P5; minutes of Pier/Docker/LLM; `harness/` artifacts. CLI usage errors fail the stage | | |
@@ -87,7 +87,7 @@ export DEEPSEEK_MODEL=deepseek-v4-pro
 mac-k3d eval --stage p0
 mac-k3d eval --stage p1
 mac-k3d eval --stage p2
-ICODE_MODE=source ICODE_SOURCE=/home/Toby/Documents/Toby/iCode-main mac-k3d eval --stage p3
+mac-k3d eval --stage p3
 mac-k3d eval --stage p4
 ```
 
@@ -153,7 +153,7 @@ mac-k3d eval --stage p2
 # binary mode
 ICODE_MODE=binary ICODE_RELEASE=/path/to/icode-*-full-*.tar.gz mac-k3d eval --stage p3
 # source mode (default path)
-ICODE_MODE=source ICODE_SOURCE=/home/Toby/Documents/Toby/iCode-main mac-k3d eval --stage p3
+mac-k3d eval --stage p3
 ```
 
 **Expected:** unpacked/`uv run` `icode --help` succeeds.
@@ -237,4 +237,5 @@ mac-k3d eval --n-tasks 1 --icode-mode source --model deepseek-v4-pro
 | Docker OOM / disk | DeepSWE images are large; free disk; lower N |
 | Worker offline | Finish E1; for local-only tests use `--local` |
 | Job still uses `deepseek-chat` | Re-run `mac-k3d config --skip-secrets` on the **cloud** controller after pulling this tree |
-| Worker points at localhost | Set `controller_url: http://43.107.42.252:17070` (wizard default) in worker YAML; restart the agent unit if it was already running |
+| Worker points at localhost | For this lab set `controller_url: http://43.107.42.252:17070` (or export `JENKINS_URL` before setup); restart the agent unit if it was already running |
+| No such option / docker compose unknown | P0 installs the Compose v2 user plugin; re-run `--stage p0`. P5 now fails on a 0-trial Pier job. |

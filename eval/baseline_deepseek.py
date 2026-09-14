@@ -14,7 +14,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def list_tasks(tasks_dir: Path, n: int) -> list[Path]:
+def list_tasks(tasks_dir: Path, n: int, names: list[str] | None = None) -> list[Path]:
+    if names:
+        out: list[Path] = []
+        for name in names:
+            p = tasks_dir / name
+            if p.is_dir():
+                out.append(p)
+        return out
     dirs = sorted([p for p in tasks_dir.iterdir() if p.is_dir()])
     return dirs[:n]
 
@@ -104,6 +111,7 @@ def main() -> int:
     ap.add_argument("--n-tasks", type=int, default=1)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--model", default=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))
+    ap.add_argument("--task-file", default="", help="newline-separated task dir names")
     args = ap.parse_args()
 
     api_key = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -115,7 +123,11 @@ def main() -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tasks = list_tasks(tasks_dir, args.n_tasks)
+    names: list[str] | None = None
+    if args.task_file:
+        raw = Path(args.task_file).read_text(encoding="utf-8")
+        names = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    tasks = list_tasks(tasks_dir, args.n_tasks, names)
     summary = []
     wall0 = time.perf_counter()
     served = None

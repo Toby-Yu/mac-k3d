@@ -157,7 +157,7 @@ If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **17070**). That 
 | Harbor | Install via uv/pipx, or use existing |
 | Add `~/.local/bin` to PATH | **yes** if asked |
 | LoLBench | Clone, or an existing checkout |
-| Jenkins controller URL | Wizard default `http://43.107.42.252:17070` (Enter). Same-PC controller: type `http://localhost:17070` |
+| Jenkins controller URL | Wizard default `http://127.0.0.1:17070`. Remote controller: type `http://<controller-ip>:17070` |
 | API user / token | Fill in if Jenkins is already up; **empty** if not |
 | Agent name / labels / remote root | Defaults are fine |
 | Write configuration? | **yes** |
@@ -183,7 +183,7 @@ Edit `~/.config/mac-k3d/worker.yaml`. Under `jenkins_agent:`, change only:
   api_token: PASTE_THE_TOKEN_HERE
 ```
 
-Leave `controller_url` as the Jenkins URL (wizard default `http://43.107.42.252:17070`; this PC: `http://localhost:17070`).
+Leave `controller_url` as the Jenkins URL (wizard default `http://127.0.0.1:17070`; remote: `http://<controller-ip>:17070`).
 
 If you use `nano`:
 
@@ -243,7 +243,7 @@ mac-k3d start -c ~/.config/mac-k3d/config.yaml
 mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
 # log in at http://localhost:17070  (admin + printed password)
 
-# 3. Worker (URL default http://43.107.42.252:17070; same-PC: http://localhost:17070)
+# 3. Worker (URL default http://127.0.0.1:17070; remote: http://<controller-ip>:17070)
 mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 # put api_user / api_token in worker.yaml, then:
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
