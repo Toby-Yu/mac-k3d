@@ -123,6 +123,7 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 | [clean-machine-binary-test.md](clean-machine-binary-test.md) | Clean PC → binary → controller/worker → eval-ready |
 | [`scripts/env_set_up/`](../../scripts/env_set_up/README.md) | Automated controller/worker/eval-ready checks |
 | [testing-binary-initializer.md](testing-binary-initializer.md) | Bootstrap sign-off |
+| [cloud-eval-runbook.md](cloud-eval-runbook.md) | Operator runbook: cloud root controller → local worker → JSON |
 | [testing-eval-pipeline.md](testing-eval-pipeline.md) | Pipeline stage CLI tests |
 | [../secrets.md](../secrets.md) | Controller credentials (`deepseek-api-key`) |
 | [../lolbench-jenkins.md](../lolbench-jenkins.md) | Older `lolbench_one_task` job pointer |

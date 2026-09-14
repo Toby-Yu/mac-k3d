@@ -1,7 +1,8 @@
 # Testing the iCode eval pipeline (P0–P8 / E0–E8)
 
 Per-stage CLI checks for Process 2 (DeepSWE + Pier + iCode vs DeepSeek V4 Pro baseline).  
-Machine bootstrap first: [testing-binary-initializer.md](testing-binary-initializer.md) and [workflow.md](workflow.md).
+Machine bootstrap first: [testing-binary-initializer.md](testing-binary-initializer.md) and [workflow.md](workflow.md).  
+**This lab (cloud root + this PC):** copy-paste phases and flowcharts in [cloud-eval-runbook.md](cloud-eval-runbook.md).
 
 **Sign-off:** pass **E0–E7** with `--n-tasks 1` (Harbor/LoLBench stay skip). E8 is optional N>1. Keep P0–P4 cheap (no LLM).
 

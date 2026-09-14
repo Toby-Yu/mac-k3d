@@ -10,6 +10,7 @@
 | [binary-initializer/workflow.md](binary-initializer/workflow.md) | End-to-end: new machine → controller/worker → iCode eval → JSON |
 | [binary-initializer/binary-initializer-new-machine.md](binary-initializer/binary-initializer-new-machine.md) | User guide: download Release binary, run setup; Docker installed by the binary |
 | [binary-initializer/testing-binary-initializer.md](binary-initializer/testing-binary-initializer.md) | Sign-off Task 0–5 + Task 7 on Linux; Task 6 macOS later |
+| [binary-initializer/cloud-eval-runbook.md](binary-initializer/cloud-eval-runbook.md) | Operator runbook: cloud root controller → this PC worker → E0–E7 JSON |
 | [binary-initializer/testing-eval-pipeline.md](binary-initializer/testing-eval-pipeline.md) | Cloud+worker eval: E0–E8 tracking, P0–P8 stages, report schema |
 | [initializer-new-machine.md](initializer-new-machine.md) | v0.3.0 user guide: `cargo install` + `prepare` on a blank Linux or Mac |
 | [prepare-wizard.md](prepare-wizard.md) | Interactive `prepare` questionnaire design |
