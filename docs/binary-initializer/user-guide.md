@@ -31,7 +31,7 @@ mkdir -p "$HOME/.local/bin"
 
 # Download the Linux asset from the pre-release (change tag/arch if needed)
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/MichaelLing83/mac-k3d/releases/download/v0.5.0-rc.1/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.0-rc.1/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 
@@ -63,7 +63,7 @@ export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$HOME/.local/bin"
 # Linux x86_64 example — pick darwin-aarch64 / linux-aarch64 as needed
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/MichaelLing83/mac-k3d/releases/download/v0.5.0-rc.1/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.0-rc.1/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 mac-k3d --help   # must list setup and eval
