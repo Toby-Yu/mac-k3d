@@ -1,8 +1,27 @@
 # Secrets and Credentials Design
 
+## Local eval keys (this machine only)
+
+**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. This is the correct way to store the key for `mac-k3d eval --stage p5` / `p6` on this PC.
+
+```bash
+cp .env.example .env
+chmod 600 .env
+# edit .env — put the key after DEEPSEEK_API_KEY=
+# do not export the key in the terminal or paste it into chat
+```
+
+- Git never tracks `.env` (see `.gitignore`). Confirm with `git check-ignore -v .env`.
+- Scripts parse `KEY=value` only; they do not `source` the file as shell.
+- If `DEEPSEEK_API_KEY` is already set (Jenkins `withCredentials`), the file is not used to overwrite it.
+- **Never** `export DEEPSEEK_API_KEY=sk-…` (shell history, terminal capture, chat attachments).
+- **Never** commit `.env`, put the key in job parameters, or paste it into chat.
+
+**Supported CI method (unchanged):** Jenkins credential `deepseek-api-key` on the **controller**. Local `.env` is not a substitute for E7 and is not copied to other workers.
+
 ## Principle
 
-**Configure secrets once on the Jenkins controller; use them on every agent.**
+**Configure CI secrets once on the Jenkins controller; use them on every agent.**
 
 LLM API keys, Git forge PATs, and similar CI secrets live in the **Jenkins Credentials store** on the controller Mac. Jobs bind them by stable credential IDs. When a build runs on any inbound agent (any worker Mac), Jenkins **injects** those values into that build’s environment for the duration of the step. Workers do **not** keep local copies of these secrets.
 

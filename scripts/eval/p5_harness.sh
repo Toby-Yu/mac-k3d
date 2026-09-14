@@ -7,39 +7,105 @@ progress 55 "P5: Pier+iCode harness arm (n=$N_TASKS)"
 
 [ -d "$DEEPSWE_DIR/tasks" ] || die "run P2 first (missing deep-swe/tasks)"
 [ -f "$WORKDIR/icode_bin_path.txt" ] || bash "$(dirname "$0")/p3_icode.sh"
-[ -n "${DEEPSEEK_API_KEY:-}" ] || die "DEEPSEEK_API_KEY required for P5 (local) or bind deepseek-api-key in Jenkins"
+[ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
+[ -f "$MAC_K3D_ROOT/eval/icode_pier_agent.py" ] || die "missing eval/icode_pier_agent.py"
+have pier || die "pier not on PATH (run P1)"
 
 export ICODE_BIN
 ICODE_BIN="$(cat "$WORKDIR/icode_bin_path.txt")"
 export PIER_AGENTS_PATH="${PIER_AGENTS_PATH:-$PIER_AGENT_DIR}"
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
+export PYTHONPATH="$MAC_K3D_ROOT/eval${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$HARNESS_DIR"
 
 FIRST_TASK="$(find "$DEEPSWE_DIR/tasks" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
 [ -n "$FIRST_TASK" ] || die "no tasks under $DEEPSWE_DIR/tasks"
 
+HOST_ICODE=""
+ICODE_BIN_HOST_IN_SANDBOX=""
+ICODE_BIN_IN_SANDBOX="icode"
+if [ "${ICODE_MODE}" = "source" ]; then
+  [ -d "$ICODE_SOURCE" ] || die "ICODE_SOURCE missing: $ICODE_SOURCE"
+  HOST_ICODE="$(cd "$ICODE_SOURCE" && pwd)"
+elif [ -n "${ICODE_RELEASE:-}" ] && [[ "$ICODE_RELEASE" == http://* || "$ICODE_RELEASE" == https://* ]]; then
+  HOST_ICODE=""
+elif [ -n "${ICODE_BIN:-}" ] && [ -f "$ICODE_BIN" ]; then
+  HOST_ICODE="$(cd "$(dirname "$ICODE_BIN")" && pwd)"
+  ICODE_BIN_HOST_IN_SANDBOX="/opt/icode-host/$(basename "$ICODE_BIN")"
+else
+  die "cannot resolve host iCode tree to bind-mount (set ICODE_SOURCE or a real ICODE_BIN path)"
+fi
+
+PIER_HELP="$(pier run --help 2>&1 || true)"
+echo "$PIER_HELP" | grep -q -- '--agent-import-path' || die "this pier has no --agent-import-path; need datacurve-pier 0.3.x"
+
+MOUNTS_JSON="[]"
+if [ -n "$HOST_ICODE" ]; then
+  MOUNTS_JSON="$(
+    python3 - "$HOST_ICODE" <<'PY'
+import json, sys
+print(json.dumps([{"type": "bind", "source": sys.argv[1], "target": "/opt/icode-host"}]))
+PY
+  )"
+fi
+
+# Secrets go in this gitignored workdir file — never on argv / --ae.
+PIER_ENV_FILE="$WORKDIR/.pier-env"
+umask 077
+{
+  printf 'DEEPSEEK_API_KEY=%s\n' "${DEEPSEEK_API_KEY}"
+  printf 'DEEPSEEK_MODEL=%s\n' "${DEEPSEEK_MODEL}"
+  printf 'ICODE_SOURCE_HOST=%s\n' "/opt/icode-host"
+  printf 'ICODE_BIN=%s\n' "${ICODE_BIN_IN_SANDBOX}"
+  if [ -n "$ICODE_BIN_HOST_IN_SANDBOX" ]; then
+    printf 'ICODE_BIN_HOST=%s\n' "$ICODE_BIN_HOST_IN_SANDBOX"
+  fi
+  if [ -n "${ICODE_RELEASE:-}" ] && [[ "$ICODE_RELEASE" == http://* || "$ICODE_RELEASE" == https://* ]]; then
+    printf 'ICODE_RELEASE_URL=%s\n' "$ICODE_RELEASE"
+  fi
+} >"$PIER_ENV_FILE"
+chmod 600 "$PIER_ENV_FILE"
+
+CMD=(pier run)
+if echo "$PIER_HELP" | grep -q -- '--n-tasks'; then
+  CMD+=(-p "$DEEPSWE_DIR/tasks" --n-tasks "$N_TASKS")
+else
+  CMD+=(-p "$FIRST_TASK")
+fi
+CMD+=(--agent-import-path "icode_pier_agent:ICodeAgent")
+CMD+=(--model "${DEEPSEEK_MODEL}")
+CMD+=(-o "$HARNESS_DIR")
+if echo "$PIER_HELP" | grep -q -- '--yes'; then
+  CMD+=(-y)
+fi
+if echo "$PIER_HELP" | grep -q -- '--env-file'; then
+  CMD+=(--env-file "$PIER_ENV_FILE")
+fi
+if echo "$PIER_HELP" | grep -q -- '--agent-dir'; then
+  CMD+=(--agent-dir "$PIER_AGENT_DIR")
+fi
+if echo "$PIER_HELP" | grep -q -- '--mounts-json' && [ "$MOUNTS_JSON" != "[]" ]; then
+  CMD+=(--mounts-json "$MOUNTS_JSON")
+fi
+# Non-secret agent env only. API key is in --env-file (pier process → adapter os.environ).
+CMD+=(--ae "ICODE_SOURCE_HOST=/opt/icode-host")
+CMD+=(--ae "ICODE_BIN=${ICODE_BIN_IN_SANDBOX}")
+if [ -n "$ICODE_BIN_HOST_IN_SANDBOX" ]; then
+  CMD+=(--ae "ICODE_BIN_HOST=${ICODE_BIN_HOST_IN_SANDBOX}")
+fi
+
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SECONDS=0
 set +e
-if pier run --help 2>&1 | grep -q -- '--n-tasks'; then
-  pier run -p "$DEEPSWE_DIR/tasks" \
-    --agent icode \
-    --model "${DEEPSEEK_MODEL}" \
-    --n-tasks "$N_TASKS" \
-    --agent-dir "$PIER_AGENT_DIR" \
-    -o "$HARNESS_DIR" 2>&1 | tee "$HARNESS_DIR/pier.log"
-  rc=${PIPESTATUS[0]:-1}
-else
-  pier run -p "$FIRST_TASK" \
-    --agent icode \
-    --model "${DEEPSEEK_MODEL}" \
-    --agent-dir "$PIER_AGENT_DIR" \
-    -o "$HARNESS_DIR" 2>&1 | tee "$HARNESS_DIR/pier.log"
-  rc=${PIPESTATUS[0]:-1}
-fi
+"${CMD[@]}" 2>&1 | tee "$HARNESS_DIR/pier.log"
+rc=${PIPESTATUS[0]:-1}
 set -e
 DURATION="$SECONDS"
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+if grep -Eiq 'No such option|unexpected argument' "$HARNESS_DIR/pier.log"; then
+  die "pier CLI rejected flags (see $HARNESS_DIR/pier.log). Not recording as a successful stage."
+fi
 
 if [ "$rc" -ne 0 ]; then
   echo "WARNING: pier run exited $rc (see $HARNESS_DIR/pier.log). Stage still recorded."

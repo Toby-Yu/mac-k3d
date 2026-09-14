@@ -73,7 +73,7 @@ Copy-paste commands. Use `--n-tasks 1` until E4–E6 are green.
 | **E1** This PC as worker | On this PC: `setup -c worker.yaml`. Wizard default URL is `http://43.107.42.252:17070` (Enter). User `admin`, API **secret**, distinct agent name. Never `start -c worker.yaml`. `JENKINS_URL=http://43.107.42.252:17070 ./scripts/eval/e1_reach_jenkins.sh` then `REQUIRE_WORKER=1 JENKINS_URL=http://43.107.42.252:17070 ./scripts/env_set_up/03_check_worker.sh` | `e1`: HTTP 200; start rejected; unit active; node **online** in **cloud** Jenkins → Nodes | | |
 | **E2** P0–P4 (no LLM) | See commands below | Existing P0–P4 OK lines; Pier agent `icode` present | | Fast |
 | **E3** Report schema (no LLM) | `./scripts/eval/check_report.sh eval/testdata/report-min.json` | `OK report schema` | | Instant |
-| **E4** P5 n=1 harness (paid) | `DEEPSEEK_API_KEY=… DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage p5 --n-tasks 1` (or Jenkins bind `deepseek-api-key`) | `PROGRESS` P5; pier log; `harness/` artifacts. Clear pier/docker errors still “stage ran” | | |
+| **E4** P5 n=1 harness (paid) | `mac-k3d eval --stage p5 --n-tasks 1` with gitignored `.env` (or Jenkins bind `deepseek-api-key`) | `PROGRESS` P5; minutes of Pier/Docker/LLM; `harness/` artifacts. CLI usage errors fail the stage | | |
 | **E5** P6 baseline | `DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage p6 --n-tasks 1` | `baseline/<task>/agent.patch`; `baseline/summary.json` includes usage/time/model | | |
 | **E6** P7/P8 report fields | `mac-k3d eval --stage p7` then `--stage p8 --n-tasks 1`; then `./scripts/eval/check_report.sh` | `output/eval-icode-deepseek-deepswe-n1-<utc>.json` with f2p, p2p, `pass_at_1_*`, `token_usage`, `duration_seconds`, `access_date_utc`, `llm_model_id` / `llm_name` | | |
 | **E7** Jenkins `icode_eval` | From cloud or this PC with controller URL: `mac-k3d eval --n-tasks 1 --icode-mode source --yes` **without** `--local`, or UI Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`) | Build on **this** node; archived JSON; same schema | | |
@@ -166,26 +166,25 @@ ICODE_MODE=source ICODE_SOURCE=/home/Toby/Documents/Toby/iCode-main mac-k3d eval
 mac-k3d eval --stage p4
 ```
 
-**Expected:** agent package under `eval/pier-agent-icode` is discoverable; install script is executable.
+**Expected:** `eval/icode_pier_agent.py` present; `eval/pier-agent-icode` scripts executable; P4 prints `--agent-import-path icode_pier_agent:ICodeAgent`.
 
 ## P5 — One DeepSWE task through iCode (N=1)
 
 **Why:** End-to-end harness path (expensive: image build + LLM).
 
 ```bash
-export DEEPSEEK_API_KEY=…   # or rely on Jenkins credential when not --local
-export DEEPSEEK_MODEL=deepseek-v4-pro
+# key from gitignored .env — do not export DEEPSEEK_API_KEY
 mac-k3d eval --stage p5 --n-tasks 1
 ```
 
-**Expected:** `PROGRESS` lines; Pier run for one task; `harness/meta.json` (timing/model); patch or trajectory under workdir. Failures with clear pier/docker errors still count as “stage ran”.
+**Expected:** `PROGRESS` lines; Pier run for one task (minutes: image + LLM, not a 4s CLI error); `harness/meta.json` (timing/model); patch or trajectory under workdir. `No such option` / usage errors **fail** the stage. Other pier/docker errors after a trial starts still count as “stage ran”.
 
 ## P6 — Same task via DeepSeek API only
 
 **Why:** Baseline without iCode scaffolding.
 
 ```bash
-DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage p6 --n-tasks 1
+mac-k3d eval --stage p6 --n-tasks 1
 ```
 
 **Expected:** `instruction.md` posted to DeepSeek `deepseek-v4-pro`; `.patch` under `baseline/`; `summary.json` / `meta.json` include usage, wall time, and served model.
@@ -233,7 +232,8 @@ mac-k3d eval --n-tasks 1 --icode-mode source --model deepseek-v4-pro
 |---------|------------|
 | pier not found | `uv tool install datacurve-pier` or `uv tool install git+https://github.com/datacurve-ai/pier` |
 | DeepSWE clone fails | Network / git; retry P2 |
-| DEEPSEEK_API_KEY missing | Set env for `--local`, or store `deepseek-api-key` on the **cloud** controller ([secrets.md](../secrets.md)) |
+| DEEPSEEK_API_KEY missing | Copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller ([secrets.md](../secrets.md)) |
+| No such option: --agent-dir | Pier 0.3.1 has no `--agent-dir`. Use this tree’s `--agent-import-path icode_pier_agent:ICodeAgent` |
 | Docker OOM / disk | DeepSWE images are large; free disk; lower N |
 | Worker offline | Finish E1; for local-only tests use `--local` |
 | Job still uses `deepseek-chat` | Re-run `mac-k3d config --skip-secrets` on the **cloud** controller after pulling this tree |

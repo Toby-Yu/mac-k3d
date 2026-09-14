@@ -142,5 +142,118 @@ class ScoreResultsTests(unittest.TestCase):
             self.assertEqual(doc["tasks"][0]["f2p"], ["t::fix"])
 
 
+class LocalEnvAndPierAdapterTests(unittest.TestCase):
+    def test_env_example_has_no_secret(self):
+        text = (ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertIn("DEEPSEEK_API_KEY=", text)
+        self.assertNotRegex(text, r"DEEPSEEK_API_KEY=sk-")
+
+    def test_gitignore_covers_dotenv(self):
+        proc = subprocess.run(
+            ["git", "check-ignore", "-v", ".env"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(".env", proc.stdout)
+
+    def test_common_loads_env_file_without_overwrite(self):
+        common = ROOT / "scripts" / "eval" / "_common.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            envf = Path(tmp) / "keys.env"
+            envf.write_text(
+                "DEEPSEEK_API_KEY=test-from-file\nDEEPSEEK_MODEL=deepseek-v4-pro\n",
+                encoding="utf-8",
+            )
+            envf.chmod(0o600)
+            script = f"""
+unset DEEPSEEK_API_KEY
+export MAC_K3D_ENV_FILE={envf}
+# isolate workdir so tests do not touch the real eval-work tree
+export MAC_K3D_EVAL_WORKDIR={tmp}/eval-work
+source {common}
+printf '%s' "$DEEPSEEK_API_KEY"
+"""
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue(proc.stdout.endswith("test-from-file"), proc.stdout)
+            self.assertNotIn("test-from-file", proc.stderr)
+
+            script_keep = f"""
+export DEEPSEEK_API_KEY=already-set
+export MAC_K3D_ENV_FILE={envf}
+export MAC_K3D_EVAL_WORKDIR={tmp}/eval-work2
+source {common}
+printf '%s' "$DEEPSEEK_API_KEY"
+"""
+            keep = subprocess.run(
+                ["bash", "-c", script_keep],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(keep.returncode, 0, keep.stdout + keep.stderr)
+            self.assertTrue(keep.stdout.endswith("already-set"), keep.stdout)
+
+    def test_p5_uses_import_path_not_bare_agent_icode(self):
+        text = (ROOT / "scripts" / "eval" / "p5_harness.sh").read_text(encoding="utf-8")
+        self.assertIn("icode_pier_agent:ICodeAgent", text)
+        self.assertIn("No such option", text)
+        self.assertNotIn("--agent icode", text)
+
+    def test_icode_adapter_module_parses(self):
+        path = ROOT / "eval" / "icode_pier_agent.py"
+        src = path.read_text(encoding="utf-8")
+        compile(src, str(path), "exec")
+        self.assertIn("class ICodeAgent", src)
+
+    def test_icode_adapter_imports_when_pier_installed(self):
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "eval")}
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from icode_pier_agent import ICodeAgent; assert ICodeAgent.name() == 'icode'",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if proc.returncode != 0 and "ModuleNotFoundError" in (proc.stderr + proc.stdout):
+            pier = subprocess.run(
+                ["bash", "-lc", "command -v pier"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if pier.returncode != 0 or not pier.stdout.strip():
+                self.skipTest("pier not installed")
+            shebang = Path(pier.stdout.strip()).read_text(encoding="utf-8", errors="ignore").splitlines()[0]
+            py = shebang[2:].strip() if shebang.startswith("#!") else ""
+            if not py:
+                self.skipTest("pier interpreter not found")
+            proc = subprocess.run(
+                [
+                    py,
+                    "-c",
+                    "from icode_pier_agent import ICodeAgent; assert ICodeAgent.name() == 'icode'",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
+

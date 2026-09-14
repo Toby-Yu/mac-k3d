@@ -6,7 +6,7 @@ source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 progress 75 "P6: DeepSeek baseline arm (n=$N_TASKS)"
 
 [ -d "$DEEPSWE_DIR/tasks" ] || die "run P2 first"
-[ -n "${DEEPSEEK_API_KEY:-}" ] || die "DEEPSEEK_API_KEY required for P6"
+[ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
 
 mkdir -p "$BASELINE_DIR"
 python3 "$MAC_K3D_ROOT/eval/baseline_deepseek.py" \
