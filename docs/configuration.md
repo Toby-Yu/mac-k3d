@@ -65,7 +65,7 @@ lolbench:
   git_url: https://github.com/MichaelLing83/LoLBench-Preview.git
 
 jenkins_agent:
-  controller_url: null    # worker: Jenkins base URL
+  controller_url: null    # worker: Jenkins base URL (wizard default http://43.107.42.252:17070)
   name: null
   labels: [macos, docker, lolbench]
   remote_fs: null

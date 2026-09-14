@@ -75,6 +75,7 @@ mac-k3d clean --yes
 ```bash
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 # Role: CI worker — Docker, Java, Jenkins agent (Harbor optional)
+# Jenkins URL default: http://43.107.42.252:17070 (Enter). Same-PC: type http://localhost:17070
 mac-k3d prepare --non-interactive -c ~/.config/mac-k3d/worker.yaml
 ```
 

@@ -232,7 +232,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 | Docker / Java | Use existing or **Install** |
 | k3d / kubectl | **Skip** |
 | Harbor / LoLBench | **No** |
-| Jenkins controller URL | `http://43.107.42.252:17070` |
+| Jenkins controller URL | **Enter** — wizard default is `http://43.107.42.252:17070` |
 | API user / token | `admin` + the **token secret** |
 | Agent name | Distinct default (hostname) is fine |
 | Write + apply | **yes** |
@@ -373,7 +373,7 @@ E8 (N>1) is optional after E7.
 | k3d install script writes `/usr/local/bin` | As root this succeeds. As a normal user it fails; this runbook does not use that user. |
 | `Host port 8080/8443 in use → using 18xxx` | Pass. Keep Jenkins on **17070**. |
 | Jenkins UI not 200 from this PC | Security group **17070**; confirm `02_check` on the VM first. |
-| Worker URL is localhost | Set `controller_url: http://43.107.42.252:17070` in `worker.yaml`, then `mac-k3d config -c worker.yaml`. |
+| Worker URL is localhost | Wizard default is the cloud URL. If YAML still has localhost, set `controller_url: http://43.107.42.252:17070`, then `mac-k3d config -c worker.yaml`. Restart the agent unit if it was already running. |
 | `start is for controller/standalone` | Correct for `worker.yaml`. Use `config`, not `start`. |
 | `DEEPSEEK_API_KEY missing` | E4–E6: export the key. E7: store `deepseek-api-key` on the **cloud** controller. |
 | Job still `deepseek-chat` | On cloud root: `mac-k3d config --skip-secrets` after pulling this tree. |

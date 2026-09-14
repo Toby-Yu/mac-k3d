@@ -157,7 +157,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 
 If **Config already exists** (re-test): **Validate existing config only**, then **yes** on apply. Worker apply runs **config** only.
 
-First-run (no live `worker.yaml`): Task 8a wipe, then Task 8b. At **Jenkins controller URL**, confirm the line is `http://localhost:17070` before Enter. Do not paste a command block while prompts are open. If URL/name/labels are garbled: edit `jenkins_agent` in `worker.yaml` (`controller_url`, `api_user`, `api_token`, `name`, `labels`, `remote_fs`) then `mac-k3d config`, or **Re-run wizard (overwrite config)**.
+First-run (no live `worker.yaml`): Task 8a wipe, then Task 8b. At **Jenkins controller URL**, the wizard default is `http://43.107.42.252:17070` (Enter for this lab). Same-PC controller: type `http://localhost:17070` before Enter. Do not paste a command block while prompts are open. If URL/name/labels are garbled: edit `jenkins_agent` in `worker.yaml` (`controller_url`, `api_user`, `api_token`, `name`, `labels`, `remote_fs`) then `mac-k3d config`, or **Re-run wizard (overwrite config)**.
 
 Then:
 
@@ -378,7 +378,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 | Role | **CI worker (Jenkins agent only)** |
 | Harbor / LoLBench | **No** |
 | Docker / Java | Use this installation |
-| Jenkins controller URL | type `http://localhost:17070` (look at the line before Enter) |
+| Jenkins controller URL | wizard default `http://43.107.42.252:17070` (Enter). Same-PC: type `http://localhost:17070` (look at the line before Enter) |
 | Jenkins API user | `admin` |
 | Jenkins API token | paste the **secret string** |
 | Agent name / labels / remote root | Enter |
@@ -504,7 +504,7 @@ P5+ costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **p
 | `permission denied` on `docker.sock` / log out for docker | Linux: **log out and in**, then `mac-k3d setup` again |
 | `docker info` fails / no Server | Linux: docker group + new login. macOS: open **Docker Desktop** and wait until it is idle |
 | `agent.jar` / curl port 17070 / need token | Finish controller `start`, paste API **secret** (not the token name), then worker `config` |
-| `curl: URL rejected` / `interactive setup/jnlpJars/agent.jar` | Wizard ate leftover prompt text as `controller_url`. Set `jenkins_agent.controller_url: http://localhost:17070`, fix `api_user` / `api_token` / `name` / `labels` / `remote_fs`, then `mac-k3d config -c worker.yaml`. Or Task 8a wipe and Task 8b again. |
+| `curl: URL rejected` / `interactive setup/jnlpJars/agent.jar` | Wizard ate leftover prompt text as `controller_url`. Set `jenkins_agent.controller_url` to the wizard default `http://43.107.42.252:17070` (or `http://localhost:17070` for same-PC), fix `api_user` / `api_token` / `name` / `labels` / `remote_fs`, then `mac-k3d config -c worker.yaml`. Or Task 8a wipe and Task 8b again. |
 | `start is for controller/standalone` | Expected on `worker.yaml`. Use `mac-k3d config -c worker.yaml` |
 | `failed to bind host port … 8080` | Prefer a build that auto-remaps on `setup`/`start`. Last resort: set free `cluster.ports` hosts; keep Jenkins on `17070` unless remapped |
 | Release missing `darwin-x86_64` | Tag was cut **before** the `macos-latest` cross-compile workflow. Push this branch, cut a **new** `v*` tag (or upload the CI artifact onto the old release). See **Task 7**. |

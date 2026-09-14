@@ -631,7 +631,7 @@ fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgent
 
     let controller_url: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Jenkins controller URL")
-        .default("http://localhost:17070".into())
+        .default("http://43.107.42.252:17070".into())
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
 

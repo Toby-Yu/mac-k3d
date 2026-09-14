@@ -103,7 +103,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 |--------|--------|
 | Role | **CI worker (Jenkins agent only)** |
 | Harbor / LoLBench | **No** |
-| Jenkins controller URL | `http://localhost:17070` (this PC) or `http://<controller-ip>:17070` |
+| Jenkins controller URL | Wizard default `http://43.107.42.252:17070` (Enter). Same-PC controller: type `http://localhost:17070` |
 | API user / token | Paste now, or leave empty and edit YAML later |
 
 If the token was empty during setup:

@@ -111,7 +111,7 @@ To exercise **worker prepare** while Jenkins already runs on this Mac:
 ```bash
 mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 # Role: CI worker
-# Jenkins URL: http://localhost:17070
+# Jenkins URL: wizard default http://43.107.42.252:17070; same-PC: type http://localhost:17070
 # k3d agents: 0  (optional local cluster; not required for LoLBench)
 ```
 

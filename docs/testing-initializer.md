@@ -107,7 +107,7 @@ mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 | docker / k3d / kubectl / java | **Use this installation** if found                                  |
 | Harbor                        | Install (uv/pipx) or existing — needed for LoLBench                 |
 | LoLBench                      | Clone or existing checkout                                          |
-| Jenkins URL                   | Controller base URL (default `http://localhost:17070`)               |
+| Jenkins URL                   | Controller base URL (wizard default `http://43.107.42.252:17070`; type `http://localhost:17070` for same-PC) |
 | API user / token              | Fill in if Jenkins is already up; **empty** if not (register later) |
 | Labels                        | `linux docker lolbench` or `macos docker lolbench`                  |
 | Write config                  | **Yes**                                                             |
@@ -378,7 +378,7 @@ Under `jenkins_agent:` in `~/.config/mac-k3d/worker.yaml`:
   api_token: PASTE_THE_TOKEN_HERE
 ```
 
-Keep `controller_url` (lab PC: `http://localhost:17070`). `nano`: **Ctrl+O**, **Enter**, **Ctrl+X**. Quote the token if it contains `#` or spaces.
+Keep `controller_url` (wizard default `http://43.107.42.252:17070`; same-PC lab: `http://localhost:17070`). `nano`: **Ctrl+O**, **Enter**, **Ctrl+X**. Quote the token if it contains `#` or spaces.
 
 Or re-run `mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml` and paste user + token when asked.
 

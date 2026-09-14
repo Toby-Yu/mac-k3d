@@ -128,7 +128,7 @@ If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **17070**). That 
 | k3d / kubectl | **Skip** unless you want a local cluster |
 | Harbor / LoLBench | **No** (optional only for oracle/debug) |
 | Add `~/.local/bin` to PATH | **yes** if asked |
-| Jenkins controller URL | e.g. `http://192.168.1.10:17070` or `http://localhost:17070` on this PC |
+| Jenkins controller URL | Wizard default `http://43.107.42.252:17070` (Enter). Same-PC controller: type `http://localhost:17070` |
 | API user / token | Fill in if Jenkins is already up; **empty** if not |
 | Agent name / labels / remote root | Defaults are fine |
 | Write configuration? | **yes** |
@@ -154,7 +154,7 @@ Edit `~/.config/mac-k3d/worker.yaml`. Under `jenkins_agent:`, change only:
   api_token: PASTE_THE_TOKEN_HERE
 ```
 
-Leave `controller_url` as the Jenkins URL (this PC: `http://localhost:17070`).
+Leave `controller_url` as the Jenkins URL (wizard default `http://43.107.42.252:17070`; this PC: `http://localhost:17070`).
 
 If you use `nano`:
 
@@ -203,7 +203,7 @@ One **controller**. Each new Mac or Linux box is another **worker**. They do not
 On the new computer:
 
 1. Download the matching Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, or `mac-k3d-darwin-x86_64`). No Rust.
-2. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` — role **CI worker**; let it install Docker if asked; Harbor/LoLBench **No**; Jenkins URL `http://<controller-ip>:17070`.
+2. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` — role **CI worker**; let it install Docker if asked; Harbor/LoLBench **No**; Jenkins URL defaults to `http://43.107.42.252:17070` (Enter) or type `http://<controller-ip>:17070`.
 3. Use a **distinct** agent name (the wizard default includes the hostname).
 4. Create or reuse a Jenkins API token; put `api_user` / `api_token` in that machine’s `worker.yaml`.
 5. `mac-k3d config -c ~/.config/mac-k3d/worker.yaml` — node **online** in Jenkins.
@@ -221,7 +221,7 @@ Two files: `config.yaml` (controller) and `worker.yaml` (worker). Run in this or
 mac-k3d setup -c ~/.config/mac-k3d/config.yaml
 # log in at http://localhost:17070  (admin + printed password)
 
-# 3. Worker (URL http://localhost:17070)
+# 3. Worker (URL default http://43.107.42.252:17070; same-PC: http://localhost:17070)
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 # put api_user / api_token in worker.yaml if prompted/empty, then:
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
