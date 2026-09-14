@@ -10,7 +10,7 @@ progress 75 "P6: DeepSeek baseline arm (n=$N_TASKS)"
 
 ensure_selected_tasks
 mkdir -p "$BASELINE_DIR"
-python3 "$MAC_K3D_ROOT/eval/baseline_deepseek.py" \
+python3 "$PIPELINE_LIB/baseline_deepseek.py" \
   --tasks-dir "$DEEPSWE_DIR/tasks" \
   --n-tasks "$N_TASKS" \
   --task-file "$WORKDIR/selected_tasks.txt" \

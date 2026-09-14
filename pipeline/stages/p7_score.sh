@@ -5,7 +5,7 @@ source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
 progress 90 "P7: scoring f2p/p2p"
 
-python3 "$MAC_K3D_ROOT/eval/score_results.py" \
+python3 "$PIPELINE_LIB/score_results.py" \
   --harness-dir "$HARNESS_DIR" \
   --baseline-dir "$BASELINE_DIR" \
   --tasks-dir "$DEEPSWE_DIR/tasks" \

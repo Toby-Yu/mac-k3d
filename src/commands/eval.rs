@@ -13,7 +13,7 @@ pub struct EvalArgs {
     #[arg(long)]
     pub stage: Option<String>,
 
-    /// Run the full pipeline locally (scripts/eval/run_all.sh) instead of Jenkins
+    /// Run the full pipeline locally (pipeline/stages/run_all.sh) instead of Jenkins
     #[arg(long)]
     pub local: bool,
 
@@ -21,8 +21,8 @@ pub struct EvalArgs {
     #[arg(long, default_value_t = 1)]
     pub n_tasks: u32,
 
-    /// iCode delivery: binary | source
-    #[arg(long, default_value = "source")]
+    /// iCode delivery: binary | source (users: binary drop; developers: source)
+    #[arg(long, default_value = "binary")]
     pub icode_mode: String,
 
     /// Path or URL to icode -full- tarball / binary (ICODE_MODE=binary)
@@ -33,7 +33,7 @@ pub struct EvalArgs {
     #[arg(long)]
     pub icode_source: Option<String>,
 
-    /// Eval workdir (default: ./eval-work)
+    /// Eval workdir (default: ./eval-runs)
     #[arg(long)]
     pub workdir: Option<PathBuf>,
 
@@ -53,8 +53,8 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
     let mut icode_mode = normalize_mode(&args.icode_mode);
     let mut icode_release = args
         .icode_release
-        .or_else(|| std::env::var("ICODE_RELEASE").ok())
-        .unwrap_or_default();
+        .or_else(|| std::env::var("ICODE_RELEASE").ok().filter(|s| !s.trim().is_empty()))
+        .unwrap_or_else(discover_icode_release);
     let mut icode_source = args
         .icode_source
         .or_else(|| {
@@ -65,7 +65,8 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
         .unwrap_or_else(|| discover_icode_source(&repo).display().to_string());
     let workdir = args
         .workdir
-        .unwrap_or_else(|| PathBuf::from("eval-work"));
+        .or_else(|| std::env::var("MAC_K3D_EVAL_WORKDIR").ok().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("eval-runs"));
     let mut model = args
         .model
         .or_else(|| std::env::var("DEEPSEEK_MODEL").ok())
@@ -101,14 +102,14 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             .map_err(|_| Error::Cancelled)?;
         let mode_idx = Select::with_theme(&theme)
             .with_prompt("iCode input")
-            .items(&["source (git tree)", "binary (-full- tarball / path)"])
-            .default(if icode_mode == "binary" { 1 } else { 0 })
+            .items(&["binary (drop file under ~/.local/share/mac-k3d/icode)", "source (developer git tree)"])
+            .default(if icode_mode == "source" { 1 } else { 0 })
             .interact()
             .map_err(|_| Error::Cancelled)?;
         icode_mode = if mode_idx == 1 {
-            "binary".into()
-        } else {
             "source".into()
+        } else {
+            "binary".into()
         };
         if icode_mode == "source" {
             icode_source = Input::with_theme(&theme)
@@ -205,6 +206,50 @@ fn looks_like_icode(path: &Path) -> bool {
         && (path.join(".venv/bin/icode").is_file() || path.join("pyproject.toml").is_file())
 }
 
+fn looks_like_icode_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    path.is_file()
+        && (name == "icode"
+            || name.ends_with(".tar.gz")
+            || name.ends_with(".tgz")
+            || name.contains("-full-"))
+}
+
+fn discover_icode_release() -> String {
+    let share = crate::prepare::eval_assets::share_dir();
+    let candidates = [
+        share.join("icode"),
+        PathBuf::from("/opt/mac-k3d/icode"),
+    ];
+    for c in &candidates {
+        if looks_like_icode_file(c) {
+            return c.display().to_string();
+        }
+    }
+    for dir in [share, PathBuf::from("/opt/mac-k3d")] {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            let mut tars: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.is_file()
+                        && p.file_name()
+                            .and_then(|s| s.to_str())
+                            .is_some_and(|n| n.contains("full") && (n.ends_with(".tar.gz") || n.ends_with(".tgz")))
+                })
+                .collect();
+            tars.sort();
+            if let Some(p) = tars.into_iter().next() {
+                return p.display().to_string();
+            }
+        }
+    }
+    String::new()
+}
+
 fn discover_icode_source(repo: &Path) -> PathBuf {
     let home = dirs_home();
     let candidates = [
@@ -224,27 +269,25 @@ fn discover_icode_source(repo: &Path) -> PathBuf {
 
 fn discover_repo_root() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("MAC_K3D_ROOT") {
-        return Ok(PathBuf::from(p));
+        let root = PathBuf::from(p);
+        if crate::prepare::eval_assets::looks_like_root(&root) {
+            return Ok(root);
+        }
     }
-    // Prefer cwd if it contains scripts/eval
     let cwd = std::env::current_dir().map_err(|e| Error::Config(e.to_string()))?;
-    if cwd.join("scripts/eval/run_all.sh").is_file() {
+    if crate::prepare::eval_assets::looks_like_root(&cwd) {
         return Ok(cwd);
     }
-    // Walk up from executable
     if let Ok(exe) = std::env::current_exe() {
         let mut cur = exe.parent().map(Path::to_path_buf);
         while let Some(dir) = cur {
-            if dir.join("scripts/eval/run_all.sh").is_file() {
+            if crate::prepare::eval_assets::looks_like_root(&dir) {
                 return Ok(dir);
             }
             cur = dir.parent().map(Path::to_path_buf);
         }
     }
-    Err(Error::Config(
-        "cannot find repo root (scripts/eval). Set MAC_K3D_ROOT or run from the mac-k3d checkout."
-            .into(),
-    ))
+    crate::prepare::eval_assets::ensure_share_pipeline()
 }
 
 fn run_stage(
@@ -258,16 +301,16 @@ fn run_stage(
     model: &str,
 ) -> Result<()> {
     let script = match stage {
-        "p0" => "scripts/eval/p0_prereqs.sh",
-        "p1" => "scripts/eval/p1_pier.sh",
-        "p2" => "scripts/eval/p2_deepswe.sh",
-        "p3" => "scripts/eval/p3_icode.sh",
-        "p4" => "scripts/eval/p4_agent.sh",
-        "p5" => "scripts/eval/p5_harness.sh",
-        "p6" => "scripts/eval/p6_baseline.sh",
-        "p7" => "scripts/eval/p7_score.sh",
-        "p8" => "scripts/eval/p8_output.sh",
-        "all" => "scripts/eval/run_all.sh",
+        "p0" => "pipeline/stages/p0_prereqs.sh",
+        "p1" => "pipeline/stages/p1_pier.sh",
+        "p2" => "pipeline/stages/p2_deepswe.sh",
+        "p3" => "pipeline/stages/p3_icode.sh",
+        "p4" => "pipeline/stages/p4_agent.sh",
+        "p5" => "pipeline/stages/p5_harness.sh",
+        "p6" => "pipeline/stages/p6_baseline.sh",
+        "p7" => "pipeline/stages/p7_score.sh",
+        "p8" => "pipeline/stages/p8_output.sh",
+        "all" => "pipeline/stages/run_all.sh",
         other => {
             return Err(Error::Config(format!(
                 "unknown --stage {other}; use p0–p8 or omit for full"
@@ -415,5 +458,22 @@ mod tests {
             "{}",
             got.display()
         );
+    }
+
+    #[test]
+    fn discover_icode_release_empty_without_drop() {
+        let prev = std::env::var_os("MAC_K3D_SHARE");
+        std::env::set_var("MAC_K3D_SHARE", "/tmp/mac-k3d-no-icode-drop-xyz");
+        let got = discover_icode_release();
+        match prev {
+            Some(v) => std::env::set_var("MAC_K3D_SHARE", v),
+            None => std::env::remove_var("MAC_K3D_SHARE"),
+        }
+        assert!(got.is_empty() || !got.contains("Documents/Toby/mac-k3d"));
+    }
+
+    #[test]
+    fn looks_like_root_needs_pipeline_stages() {
+        assert!(!crate::prepare::eval_assets::looks_like_root(Path::new("/tmp")));
     }
 }

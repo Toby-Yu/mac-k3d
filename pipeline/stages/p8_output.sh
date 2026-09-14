@@ -10,7 +10,7 @@ progress 98 "P8: named output JSON"
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$OUTPUT_DIR/eval-${HARNESS}-${LLM}-${BENCHMARK}-n${N_TASKS}-${UTC}.json"
 
-python3 "$MAC_K3D_ROOT/eval/score_results.py" \
+python3 "$PIPELINE_LIB/score_results.py" \
   --harness-dir "$HARNESS_DIR" \
   --baseline-dir "$BASELINE_DIR" \
   --tasks-dir "$DEEPSWE_DIR/tasks" \

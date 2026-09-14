@@ -199,7 +199,7 @@ Controller Mac itself usually does **not** run LoLBench agents; it hosts the que
 ### Worker (`role: worker`) — agent install and registration
 
 ```text
-Jenkins controller URL [http://127.0.0.1:17070]:
+Jenkins controller URL [http://43.107.42.252:17070]:
 Jenkins API user [admin]:
 Jenkins API token (input hidden):
 Agent name [mac-$(hostname -s)]:

@@ -8,14 +8,14 @@ progress 55 "P5: Pier+iCode harness arm (n=$N_TASKS)"
 [ -d "$DEEPSWE_DIR/tasks" ] || die "run P2 first (missing deep-swe/tasks)"
 [ -f "$WORKDIR/icode_bin_path.txt" ] || bash "$(dirname "$0")/p3_icode.sh"
 [ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
-[ -f "$MAC_K3D_ROOT/eval/icode_pier_agent.py" ] || die "missing eval/icode_pier_agent.py"
+[ -f "$PIPELINE_LIB/icode_pier_agent.py" ] || die "missing pipeline/lib/icode_pier_agent.py"
 have pier || die "pier not on PATH (run P1)"
 
 export ICODE_BIN
 ICODE_BIN="$(cat "$WORKDIR/icode_bin_path.txt")"
 export PIER_AGENTS_PATH="${PIER_AGENTS_PATH:-$PIER_AGENT_DIR}"
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
-export PYTHONPATH="$MAC_K3D_ROOT/eval${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PIPELINE_LIB${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$HARNESS_DIR"
 
 ensure_selected_tasks
@@ -125,7 +125,7 @@ fi
 echo "$rc" >"$HARNESS_DIR/exit_code.txt"
 
 HOLLOW="$(
-  python3 - "$MAC_K3D_ROOT/eval/pier_result.py" "$HARNESS_DIR" "$STARTED_AT" <<'PY'
+  python3 - "$PIPELINE_LIB/pier_result.py" "$HARNESS_DIR" "$STARTED_AT" <<'PY'
 import json, sys
 from datetime import datetime, timezone
 from pathlib import Path

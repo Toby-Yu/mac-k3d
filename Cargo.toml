@@ -1,6 +1,6 @@
 [package]
 name = "mac-k3d"
-version = "0.4.0"
+version = "0.5.0-rc.1"
 edition = "2021"
 description = "Prepare, start, configure, and tear down k3d + Docker on macOS and Linux (optional Jenkins)"
 authors = ["MichaelLing83"]
@@ -27,6 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 atty = "0.2"
 dialoguer = "0.11"
 libc = "0.2"
+include_dir = "0.7"
 
 [dev-dependencies]
 assert_cmd = "2"

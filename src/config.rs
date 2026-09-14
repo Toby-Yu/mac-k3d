@@ -382,7 +382,7 @@ impl MacK3dConfig {
         match self.role {
             NodeRole::Standalone => 40,
             NodeRole::Controller => 60,
-            NodeRole::Worker => 100,
+            NodeRole::Worker => 40,
         }
     }
 }

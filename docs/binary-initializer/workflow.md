@@ -80,14 +80,14 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 | Stage | What | Why |
 |-------|------|-----|
 | Choose harness / LLM / benchmark | v1: **icode** / **deepseek** / **deepswe** only | Fixed options reduce misconfiguration |
-| Choose N and iCode binary vs source | Limit cost; source path defaults to `~/Documents/Toby/iCode-main` on the worker | Same machine that runs Pier must see iCode |
+| Choose N and iCode binary vs source | Limit cost; users drop a binary at `~/.local/share/mac-k3d/icode` | Same machine that runs Pier must see iCode |
 | Install Pier | `uv tool install datacurve-pier` | DeepSWE is Harbor/Pier-format tasks |
 | Clone DeepSWE | `git clone https://github.com/datacurve-ai/deep-swe` | Not vendored in this repo |
 | Pier agent `icode` | Install script + DeepSeek allowlist inside the sandbox | Puts iCode **inside** the task Docker image Pier builds |
-| Arm A | `pier run … --agent-import-path icode_pier_agent:ICodeAgent --model deepseek-v4-pro` | Harness under test (`DEEPSEEK_MODEL`; key from gitignored `.env`) |
+| Arm A | `pier run … --agent-import-path icode_pier_agent:ICodeAgent --model deepseek-v4-pro` | Harness under test (Jenkins credential; developer `.env`) |
 | Arm B | Baseline DeepSeek chat (`deepseek-v4-pro`) on the same `instruction.md` | Compare without iCode scaffolding |
 | Grade | Verifier → f2p / p2p / `resolved` / pass@1, tokens, time, model | DeepSWE’s held-out tests plus API usage |
-| JSON | `output/eval-icode-deepseek-deepswe-n{N}-{utc}.json` | Clear naming for which eval ran |
+| JSON | `eval-runs/reports/eval-icode-deepseek-deepswe-n{N}-{utc}.json` | Clear naming for which eval ran |
 
 Trigger:
 

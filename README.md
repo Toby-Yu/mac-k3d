@@ -38,7 +38,7 @@ mkdir -p ~/.local/bin
 cp mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
 ```
 
-Open **Terminal** (do not rely on double-click). Full walkthrough: [docs/binary-initializer/binary-initializer-new-machine.md](docs/binary-initializer/binary-initializer-new-machine.md). Workflow (bootstrap → eval): [docs/binary-initializer/workflow.md](docs/binary-initializer/workflow.md).
+Open **Terminal** (do not rely on double-click). **Start here (controller + worker + eval):** [docs/binary-initializer/user-guide.md](docs/binary-initializer/user-guide.md). Extra walkthrough: [docs/binary-initializer/binary-initializer-new-machine.md](docs/binary-initializer/binary-initializer-new-machine.md).
 
 v0.3.0 cargo/`prepare` path: [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
 

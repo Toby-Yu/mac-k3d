@@ -13,6 +13,47 @@ pub fn logical_cpu_cores() -> u32 {
         .max(1)
 }
 
+/// True when `kb` kilobytes is at least `min_gb` gigabytes.
+pub fn ram_kb_meets(kb: u64, min_gb: u64) -> bool {
+    kb / 1024 / 1024 >= min_gb
+}
+
+/// Worker/controller eval needs roughly 8 GB RAM.
+pub fn ensure_ram_min(min_gb: u64) -> Result<()> {
+    let kb = mem_total_kb().unwrap_or(0);
+    if kb == 0 {
+        tracing::warn!("could not read MemTotal; skipping RAM preflight");
+        return Ok(());
+    }
+    if !ram_kb_meets(kb, min_gb) {
+        return Err(Error::Validation(format!(
+            "only {} MB RAM; need at least {min_gb} GB for eval (keep N_TASKS=1)",
+            kb / 1024
+        )));
+    }
+    tracing::info!(min_gb, "RAM check passed");
+    Ok(())
+}
+
+fn mem_total_kb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                return rest.split_whitespace().next()?.parse().ok();
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let out = Command::new("sysctl").args(["-n", "hw.memsize"]).output().ok()?;
+        let bytes: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+        Some(bytes / 1024)
+    }
+}
+
 /// Ensure free space on the volume containing `path` is at least `min_gb`.
 pub fn ensure_disk_min(path: &Path, min_gb: u64) -> Result<()> {
     let check_path = if path.exists() {
@@ -307,6 +348,12 @@ mod tests {
     #[test]
     fn logical_cpu_cores_nonzero() {
         assert!(logical_cpu_cores() >= 1);
+    }
+
+    #[test]
+    fn ram_kb_meets_thresholds() {
+        assert!(ram_kb_meets(8 * 1024 * 1024, 8));
+        assert!(!ram_kb_meets(7 * 1024 * 1024, 8));
     }
 
     #[test]

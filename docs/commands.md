@@ -59,17 +59,17 @@ mac-k3d eval                         # interactive → local or Jenkins icode_ev
 
 | Flag | Description |
 |------|-------------|
-| `--stage p0..p8` | Run one stage script under `scripts/eval/` |
+| `--stage p0..p8` | Run one stage script under `pipeline/stages/` |
 | `--local` | Full local `run_all.sh` (no Jenkins) |
 | `--n-tasks N` | Number of DeepSWE tasks (default 1) |
-| `--icode-mode source\|binary` | How to obtain iCode |
-| `--icode-release PATH\|URL` | Binary mode input |
-| `--icode-source PATH` | Source tree (default `~/Documents/Toby/iCode-main`) |
-| `--workdir PATH` | Eval workdir (default `./eval-work`) |
+| `--icode-mode source\|binary` | Users: `binary` (drop file). Developers: `source` |
+| `--icode-release PATH\|URL` | Binary mode; empty discovers `~/.local/share/mac-k3d/icode` |
+| `--icode-source PATH` | Source tree (developer); discovered if unset |
+| `--workdir PATH` | Eval workdir (default `./eval-runs`) |
 | `--model ID` | DeepSeek model id (default `deepseek-v4-pro`, env `DEEPSEEK_MODEL`) |
 | `--yes` | Skip prompts: Jenkins `icode_eval` unless `--local` |
 
-v1 choices are fixed: harness=`icode`, llm=`deepseek`, benchmark=`deepswe`. Output: `output/eval-icode-deepseek-deepswe-n{N}-{utc}.json`.
+v1 choices are fixed: harness=`icode`, llm=`deepseek`, benchmark=`deepswe`. Output: `eval-runs/reports/eval-icode-deepseek-deepswe-n{N}-{utc}.json`.
 
 ---
 
@@ -130,7 +130,7 @@ If `config.yaml` already exists and stdin is a TTY, `prepare` (without `-i`) pro
 4. **Dependencies**: discover Docker Desktop, k3d, kubectl, helm, Harbor (`uv`/`pipx`), Java; prompt to use existing, specify path, or install.
 5. **LoLBench**: prefer a found checkout; otherwise print `git clone` / release unpack commands and optionally clone.
 6. **Resources**: controller → ensure `CPU_CORES` Lockable Resources label; worker → Jenkins URL, download `agent.jar`, optional API registration, capacity = logical CPU cores.
-7. **Disk check**: fail if free space on storage volume is below role minimum (standalone 40 GB, controller 60 GB, worker 100 GB).
+7. **Disk check**: fail if free space on storage volume is below role minimum (standalone 40 GB, controller 60 GB, worker 40 GB). RAM preflight is 8 GB.
 8. Write `~/.config/mac-k3d/config.yaml` and run validation.
 
 ### Exit codes

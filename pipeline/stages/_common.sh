@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-# Shared env for eval stage scripts.
+# Shared env for pipeline stage scripts (pipeline/stages).
 set -euo pipefail
 
+# Repo or share dir that contains pipeline/stages + pipeline/lib.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export MAC_K3D_ROOT="$ROOT"
-export WORKDIR="${MAC_K3D_EVAL_WORKDIR:-$ROOT/eval-work}"
-export OUTPUT_DIR="${MAC_K3D_EVAL_OUTPUT:-$WORKDIR/output}"
+export PIPELINE_LIB="$ROOT/pipeline/lib"
+export PIPELINE_STAGES="$ROOT/pipeline/stages"
+export WORKDIR="${MAC_K3D_EVAL_WORKDIR:-$ROOT/eval-runs}"
+export OUTPUT_DIR="${MAC_K3D_EVAL_OUTPUT:-$WORKDIR/reports}"
 export DEEPSWE_DIR="${DEEPSWE_DIR:-$WORKDIR/deep-swe}"
-export ICODE_MODE="${ICODE_MODE:-source}"
+export ICODE_MODE="${ICODE_MODE:-binary}"
 export ICODE_RELEASE="${ICODE_RELEASE:-}"
 export N_TASKS="${N_TASKS:-1}"
 export HARNESS="${HARNESS:-icode}"
 export LLM="${LLM:-deepseek}"
 export BENCHMARK="${BENCHMARK:-deepswe}"
 export LLM_NAME="${LLM_NAME:-DeepSeek V4 Pro}"
-export PIER_AGENT_DIR="$ROOT/eval/pier-agent-icode"
+export PIER_AGENT_DIR="$PIPELINE_LIB/pier-agent-icode"
 export BASELINE_DIR="$WORKDIR/baseline"
 export HARNESS_DIR="$WORKDIR/harness"
 export RESULTS_DIR="$WORKDIR/results"
+export MAC_K3D_SHARE="${MAC_K3D_SHARE:-${XDG_DATA_HOME:-$HOME/.local/share}/mac-k3d}"
 
 mkdir -p "$WORKDIR" "$OUTPUT_DIR" "$BASELINE_DIR" "$HARNESS_DIR" "$RESULTS_DIR"
 
@@ -37,7 +41,11 @@ have() {
 }
 
 missing_deepseek_key_hint() {
-  echo "DEEPSEEK_API_KEY missing. Copy .env.example to .env (gitignored), set the key there, chmod 600 .env. Do not export the key in the terminal or paste it into chat. For Jenkins E7, bind credential deepseek-api-key."
+  if [ -n "${JENKINS_URL:-}" ] || [ -n "${BUILD_ID:-}" ] || [ -n "${WORKSPACE:-}" ]; then
+    echo "DEEPSEEK_API_KEY missing. On the Jenkins controller store credential id deepseek-api-key (mac-k3d setup / config). Workers do not use a local .env."
+  else
+    echo "DEEPSEEK_API_KEY missing. Developer local run: copy .env.example to .env (gitignored), chmod 600. Workers: use Jenkins job icode_eval (controller credential). Do not export the key or paste it into chat."
+  fi
 }
 
 _env_key_allowed() {
@@ -73,6 +81,7 @@ _apply_env_line() {
 
 # If DEEPSEEK_API_KEY is already set (Jenkins / rare export), leave it.
 # Else load the first existing allowlisted file. Never print secret values.
+# Developer-only: workers should get the key from Jenkins credentials.
 load_local_env() {
   local f mode
   local candidates=()
@@ -100,12 +109,77 @@ load_local_env() {
 load_local_env
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
 
+# Memory (GB) and disk (GB) fail-fast. Override with MAC_K3D_MIN_RAM_GB / MAC_K3D_MIN_DISK_GB.
+ensure_eval_preflight() {
+  local min_ram="${MAC_K3D_MIN_RAM_GB:-8}"
+  local min_disk="${MAC_K3D_MIN_DISK_GB:-40}"
+  local mem_kb mem_gb disk_kb disk_gb check_path
+  mem_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  if [ "${mem_kb:-0}" -gt 0 ]; then
+    mem_gb=$((mem_kb / 1024 / 1024))
+    if [ "$mem_gb" -lt "$min_ram" ]; then
+      die "only ${mem_gb} GB RAM; need at least ${min_ram} GB for eval (N=1). Free memory or use a larger machine."
+    fi
+    echo "OK RAM ${mem_gb} GB (min ${min_ram})"
+  fi
+  check_path="$WORKDIR"
+  mkdir -p "$check_path"
+  disk_kb="$(df -Pk "$check_path" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [ -n "${disk_kb:-}" ] && [ "$disk_kb" -gt 0 ] 2>/dev/null; then
+    disk_gb=$((disk_kb / 1024 / 1024))
+    if [ "$disk_gb" -lt "$min_disk" ]; then
+      die "only ${disk_gb} GB free at $check_path; need at least ${min_disk} GB. Free disk (docker system df) and keep N_TASKS=1."
+    fi
+    echo "OK disk ${disk_gb} GB free at $check_path (min ${min_disk})"
+  fi
+}
+
 _icode_tree_ok() {
   [ -d "$1" ] || return 1
   [ -x "$1/.venv/bin/icode" ] || [ -f "$1/pyproject.toml" ]
 }
 
-# Per-machine iCode path. Toby's lab tree is a candidate only if it exists.
+_icode_bin_or_tarball() {
+  local p="$1"
+  [ -n "$p" ] || return 1
+  if [ -f "$p" ] && [ -x "$p" ]; then
+    echo "$p"
+    return 0
+  fi
+  if [ -f "$p" ] && [[ "$(basename "$p")" == *.tar.gz || "$(basename "$p")" == *.tgz ]]; then
+    echo "$p"
+    return 0
+  fi
+  return 1
+}
+
+# Official user drop: ~/.local/share/mac-k3d/icode or *-full-*.tar.gz. Fallback /opt/mac-k3d/.
+discover_icode_release() {
+  local c d
+  if [ -n "${ICODE_RELEASE:-}" ]; then
+    echo "$ICODE_RELEASE"
+    return 0
+  fi
+  for c in \
+    "$MAC_K3D_SHARE/icode" \
+    /opt/mac-k3d/icode
+  do
+    if _icode_bin_or_tarball "$c"; then
+      return 0
+    fi
+  done
+  for d in "$MAC_K3D_SHARE" /opt/mac-k3d; do
+    [ -d "$d" ] || continue
+    for c in "$d"/*-full-*.tar.gz "$d"/*.tgz "$d"/*full*.tar.gz; do
+      [ -f "$c" ] || continue
+      echo "$c"
+      return 0
+    done
+  done
+  return 1
+}
+
+# Developer source tree. Toby's lab path is a candidate only if it exists.
 discover_icode_source() {
   local c
   if [ -n "${ICODE_SOURCE:-}" ] && [ -d "$ICODE_SOURCE" ]; then
@@ -131,6 +205,11 @@ if [ -z "${ICODE_SOURCE:-}" ]; then
   ICODE_SOURCE="$(discover_icode_source)"
 fi
 export ICODE_SOURCE
+
+if [ -z "${ICODE_RELEASE:-}" ]; then
+  ICODE_RELEASE="$(discover_icode_release || true)"
+fi
+export ICODE_RELEASE
 
 write_selected_tasks() {
   local list="$WORKDIR/selected_tasks.txt" n

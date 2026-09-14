@@ -4,6 +4,8 @@ Operator path for **this lab**: Alibaba Cloud VM hosts Jenkins; this PC runs the
 
 Pass/fail table and stage detail stay in [testing-eval-pipeline.md](testing-eval-pipeline.md). Product story: [workflow.md](workflow.md). User bootstrap: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
 
+**Users:** copy-paste commands in [user-guide.md](user-guide.md). This file is the **lab** runbook (this cloud IP + this PC).
+
 **Sign-off:** E0–E7 with `--n-tasks 1`. Harbor / LoLBench stay skip. After each phase, paste the checkpoint output before starting the next.
 
 ---
@@ -210,7 +212,7 @@ If a **local** lab controller still binds `:17070`, teardown it or leave it unus
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 cd ~/Documents/Toby/mac-k3d
-JENKINS_URL=http://43.107.42.252:17070 ./scripts/eval/e1_reach_jenkins.sh
+JENKINS_URL=http://43.107.42.252:17070 ./pipeline/stages/e1_reach_jenkins.sh
 ```
 
 **Expected:** `HTTP 200` and `OK Jenkins reachable`. If this fails, fix the security group before the wizard.
@@ -280,7 +282,7 @@ mac-k3d eval --stage p2
 mac-k3d eval --stage p3
 mac-k3d eval --stage p4
 
-./scripts/eval/check_report.sh eval/testdata/report-min.json
+./pipeline/stages/check_report.sh pipeline/lib/testdata/report-min.json
 # optional: python3 eval/test_report.py
 ```
 
@@ -310,7 +312,7 @@ mac-k3d eval --stage p5 --n-tasks 1
 mac-k3d eval --stage p6 --n-tasks 1
 mac-k3d eval --stage p7
 mac-k3d eval --stage p8 --n-tasks 1
-./scripts/eval/check_report.sh
+./pipeline/stages/check_report.sh
 ```
 
 **Expected:**

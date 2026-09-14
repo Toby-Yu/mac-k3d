@@ -157,7 +157,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 
 If **Config already exists** (re-test): **Validate existing config only**, then **yes** on apply. Worker apply runs **config** only.
 
-First-run (no live `worker.yaml`): Task 8a wipe, then Task 8b. At **Jenkins controller URL**, the wizard default is `http://127.0.0.1:17070`. This lab’s cloud Jenkins: type `http://43.107.42.252:17070` (or export `JENKINS_URL`). Same-PC controller: Enter. Do not paste a command block while prompts are open. If URL/name/labels are garbled: edit `jenkins_agent` in `worker.yaml` (`controller_url`, `api_user`, `api_token`, `name`, `labels`, `remote_fs`) then `mac-k3d config`, or **Re-run wizard (overwrite config)**.
+First-run (no live `worker.yaml`): Task 8a wipe, then Task 8b. At **Jenkins controller URL**, the wizard default is `http://43.107.42.252:17070`. Type a new URL or export `JENKINS_URL` for another controller. Same-PC controller: type `http://127.0.0.1:17070`. Do not paste a command block while prompts are open. If URL/name/labels are garbled: edit `jenkins_agent` in `worker.yaml` (`controller_url`, `api_user`, `api_token`, `name`, `labels`, `remote_fs`) then `mac-k3d config`, or **Re-run wizard (overwrite config)**.
 
 Then:
 

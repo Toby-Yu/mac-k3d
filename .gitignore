@@ -12,8 +12,8 @@ __pycache__/
 
 # Local runtime state (managed by mac-k3d)
 .mac-k3d/
+eval-runs/
 eval-work/
-output/
 iCode/
 
 # Local secrets — never commit. Copy .env.example → .env (chmod 600).

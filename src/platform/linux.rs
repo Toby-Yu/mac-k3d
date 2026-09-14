@@ -109,6 +109,7 @@ pub fn install_package(name: &str) -> Result<()> {
         "kubectl" => apt_install(&["kubectl"]).or_else(|_| install_kubectl_curl())?,
         "helm" => install_helm_curl()?,
         "uv" => install_uv_curl()?,
+        "git" => apt_install(&["git"])?,
         other => {
             return Err(Error::Config(format!(
                 "unknown dependency for apt/curl install: {other}"
@@ -198,8 +199,7 @@ fn install_docker_engine() -> Result<()> {
         .unwrap_or(false);
     if !info_ok {
         return Err(Error::Validation(format!(
-            "Docker Engine is installed, but this shell cannot talk to it yet \
-             (usually the docker group is not active until a new login).\n{}",
+            "Docker Engine is installed, but this shell cannot talk to it yet.\n{}",
             docker_not_ready_hint()
         )));
     }
@@ -207,8 +207,22 @@ fn install_docker_engine() -> Result<()> {
 }
 
 pub fn docker_not_ready_hint() -> &'static str {
-    "Log out of the desktop completely, log back in, then run `mac-k3d setup` again \
-     so your docker group applies. Check: groups | grep docker; sudo systemctl status docker"
+    if is_root() {
+        "As root: sudo systemctl enable --now docker, then retry `docker info` / `mac-k3d setup`."
+    } else {
+        "Log out of the desktop completely, log back in, then run `mac-k3d setup` again \
+         so your docker group applies. Check: groups | grep docker; sudo systemctl status docker"
+    }
+}
+
+fn is_root() -> bool {
+    Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .unwrap_or(1)
+        == 0
 }
 
 fn install_k3d_curl() -> Result<()> {
@@ -388,7 +402,10 @@ mod tests {
     #[test]
     fn docker_hint_mentions_logout() {
         let h = docker_not_ready_hint();
-        assert!(h.contains("Log out"), "{h}");
-        assert!(h.contains("mac-k3d setup"), "{h}");
+        assert!(
+            h.contains("Log out") || h.contains("systemctl enable --now docker"),
+            "{h}"
+        );
+        assert!(h.contains("mac-k3d setup") || h.contains("docker info"), "{h}");
     }
 }

@@ -8,7 +8,9 @@ progress 35 "P3: resolving iCode ($ICODE_MODE)"
 ICODE_BIN=""
 case "$ICODE_MODE" in
   binary)
-    [ -n "$ICODE_RELEASE" ] || die "ICODE_RELEASE required for ICODE_MODE=binary"
+    if [ -z "$ICODE_RELEASE" ]; then
+      die "ICODE_MODE=binary: place the iCode binary or *-full-*.tar.gz at ${MAC_K3D_SHARE}/icode (or /opt/mac-k3d/icode), then re-run. Example: mkdir -p ${MAC_K3D_SHARE} && cp /path/to/icode ${MAC_K3D_SHARE}/icode && chmod +x ${MAC_K3D_SHARE}/icode"
+    fi
     unpack="$WORKDIR/icode-bin"
     rm -rf "$unpack"
     mkdir -p "$unpack"

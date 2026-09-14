@@ -236,6 +236,7 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         .as_deref()
         .unwrap_or(std::path::Path::new("/"));
     resources::ensure_disk_min(disk_path, config.disk_min_gb())?;
+    resources::ensure_ram_min(8)?;
 
     match role {
         MacRole::Worker => println!("\nPrepare complete. Next: mac-k3d config (or mac-k3d setup)"),
@@ -625,6 +626,9 @@ struct WorkerAgentPrompt {
     config: JenkinsAgentConfig,
 }
 
+/// Lab cloud Jenkins; type a new URL when you stand up another controller.
+pub const DEFAULT_CONTROLLER_JENKINS_URL: &str = "http://43.107.42.252:17070";
+
 fn default_worker_jenkins_url() -> String {
     for key in ["MAC_K3D_JENKINS_URL", "JENKINS_URL"] {
         if let Ok(v) = std::env::var(key) {
@@ -634,13 +638,16 @@ fn default_worker_jenkins_url() -> String {
             }
         }
     }
-    "http://127.0.0.1:17070".into()
+    DEFAULT_CONTROLLER_JENKINS_URL.into()
 }
 
 fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgentPrompt> {
     println!("\n--- Jenkins worker agent ---\n");
     println!("Detected logical CPU cores: {cpu_cores} (will register as CPU_CORES capacity)");
-    println!("Jenkins URL: this PC (default), or type http://<controller-ip>:17070");
+    println!(
+        "Jenkins URL: Enter to use the current cloud controller ({DEFAULT_CONTROLLER_JENKINS_URL}),\n\
+         or type http://<new-ip>:17070 when you create another controller."
+    );
 
     let controller_url: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Jenkins controller URL")
@@ -1000,20 +1007,39 @@ fn install_pending_dependencies(config: &mut MacK3dConfig) -> Result<()> {
         }
     }
 
+    if matches!(config.role, crate::config::NodeRole::Worker) {
+        let _ = crate::prepare::eval_assets::ensure_share_pipeline();
+        if let Err(e) = crate::prepare::install::ensure_eval_toolchain() {
+            tracing::warn!(error = %e, "eval toolchain install incomplete");
+            println!("Note: eval tools (git/uv/pier) not fully installed: {e}");
+        }
+        let share = crate::prepare::eval_assets::share_dir();
+        println!(
+            "\nEval scripts extracted to {}/pipeline\n{}\n",
+            share.display(),
+            crate::prepare::eval_assets::icode_drop_hint(&share)
+        );
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::default_worker_jenkins_url;
+    use super::{default_worker_jenkins_url, DEFAULT_CONTROLLER_JENKINS_URL};
 
     #[test]
-    fn worker_jenkins_url_defaults_to_localhost() {
+    fn worker_jenkins_url_default_and_env_override() {
         let prev_j = std::env::var_os("JENKINS_URL");
         let prev_m = std::env::var_os("MAC_K3D_JENKINS_URL");
         std::env::remove_var("JENKINS_URL");
         std::env::remove_var("MAC_K3D_JENKINS_URL");
-        let got = default_worker_jenkins_url();
+        assert_eq!(
+            default_worker_jenkins_url(),
+            DEFAULT_CONTROLLER_JENKINS_URL
+        );
+        std::env::set_var("JENKINS_URL", "http://192.0.2.9:17070");
+        assert_eq!(default_worker_jenkins_url(), "http://192.0.2.9:17070");
         match prev_j {
             Some(v) => std::env::set_var("JENKINS_URL", v),
             None => std::env::remove_var("JENKINS_URL"),
@@ -1022,6 +1048,5 @@ mod tests {
             Some(v) => std::env::set_var("MAC_K3D_JENKINS_URL", v),
             None => std::env::remove_var("MAC_K3D_JENKINS_URL"),
         }
-        assert_eq!(got, "http://127.0.0.1:17070");
     }
 }

@@ -119,11 +119,12 @@ Does **not** prove DeepSeek credentials or full P5–P8. For those see [testing-
 
 ---
 
-## Relationship to `scripts/eval/`
+## Relationship to `pipeline/`
 
 | Directory | Focus |
 |-----------|--------|
 | `scripts/env_set_up/` | Machine bootstrap: binary, controller, worker, eval-**ready** |
-| `scripts/eval/` | Eval pipeline stages P0–P8 (Pier, DeepSWE, iCode, scoring) |
+| `pipeline/stages/` | Eval pipeline stages P0–P8 (Pier, DeepSWE, iCode, scoring) |
+| `pipeline/lib/` | Python adapter, baseline, scoring |
 
-After `run_all.sh` passes, continue with `mac-k3d eval --stage p0` … or `scripts/eval/run_all.sh`.
+After env checks pass, continue with `mac-k3d eval --stage p0` or `pipeline/stages/run_all.sh`. Operator start: [docs/binary-initializer/user-guide.md](../../docs/binary-initializer/user-guide.md).

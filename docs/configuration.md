@@ -65,7 +65,7 @@ lolbench:
   git_url: https://github.com/MichaelLing83/LoLBench-Preview.git
 
 jenkins_agent:
-  controller_url: null    # worker: Jenkins base URL (wizard default http://127.0.0.1:17070 or $JENKINS_URL)
+  controller_url: null    # worker: Jenkins base URL (wizard default http://43.107.42.252:17070 or $JENKINS_URL)
   name: null
   labels: [macos, docker, lolbench]
   remote_fs: null
@@ -76,7 +76,7 @@ jenkins_agent:
 
 resources:
   cpu_cores_label: CPU_CORES
-  disk_min_gb: 0          # 0 = role default (40 / 60 / 100)
+  disk_min_gb: 0          # 0 = role default (40 / 60 / 40)
 ```
 
 All fields are optional; omitted keys use defaults above.

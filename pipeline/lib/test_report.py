@@ -11,15 +11,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent.parent
+LIB = Path(__file__).resolve().parent
+sys.path.insert(0, str(LIB))
 
 from check_report import validate  # noqa: E402
 from pier_result import hollow_job_reason  # noqa: E402
 from score_results import pass_at_1  # noqa: E402
 
 
-FIXTURE = ROOT / "eval" / "testdata" / "report-min.json"
+FIXTURE = LIB / "testdata" / "report-min.json"
 
 
 class PassAt1Tests(unittest.TestCase):
@@ -42,7 +43,7 @@ class CheckReportTests(unittest.TestCase):
 
     def test_cli_fixture(self):
         proc = subprocess.run(
-            [sys.executable, str(ROOT / "eval" / "check_report.py"), str(FIXTURE)],
+            [sys.executable, str(LIB / "check_report.py"), str(FIXTURE)],
             check=False,
             capture_output=True,
             text=True,
@@ -115,7 +116,7 @@ class ScoreResultsTests(unittest.TestCase):
             proc = subprocess.run(
                 [
                     sys.executable,
-                    str(ROOT / "eval" / "score_results.py"),
+                    str(LIB / "score_results.py"),
                     "--harness-dir",
                     str(harness),
                     "--baseline-dir",
@@ -161,7 +162,7 @@ class LocalEnvAndPierAdapterTests(unittest.TestCase):
         self.assertIn(".env", proc.stdout)
 
     def test_common_loads_env_file_without_overwrite(self):
-        common = ROOT / "scripts" / "eval" / "_common.sh"
+        common = ROOT / "pipeline" / "stages" / "_common.sh"
         with tempfile.TemporaryDirectory() as tmp:
             envf = Path(tmp) / "keys.env"
             envf.write_text(
@@ -172,8 +173,8 @@ class LocalEnvAndPierAdapterTests(unittest.TestCase):
             script = f"""
 unset DEEPSEEK_API_KEY
 export MAC_K3D_ENV_FILE={envf}
-# isolate workdir so tests do not touch the real eval-work tree
-export MAC_K3D_EVAL_WORKDIR={tmp}/eval-work
+# isolate workdir so tests do not touch the real eval-runs tree
+export MAC_K3D_EVAL_WORKDIR={tmp}/eval-runs
 source {common}
 printf '%s' "$DEEPSEEK_API_KEY"
 """
@@ -190,7 +191,7 @@ printf '%s' "$DEEPSEEK_API_KEY"
             script_keep = f"""
 export DEEPSEEK_API_KEY=already-set
 export MAC_K3D_ENV_FILE={envf}
-export MAC_K3D_EVAL_WORKDIR={tmp}/eval-work2
+export MAC_K3D_EVAL_WORKDIR={tmp}/eval-runs2
 source {common}
 printf '%s' "$DEEPSEEK_API_KEY"
 """
@@ -204,7 +205,7 @@ printf '%s' "$DEEPSEEK_API_KEY"
             self.assertTrue(keep.stdout.endswith("already-set"), keep.stdout)
 
     def test_p5_uses_import_path_not_bare_agent_icode(self):
-        text = (ROOT / "scripts" / "eval" / "p5_harness.sh").read_text(encoding="utf-8")
+        text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertIn("icode_pier_agent:ICodeAgent", text)
         self.assertIn("No such option", text)
         self.assertIn("selected_tasks", text)
@@ -212,7 +213,7 @@ printf '%s' "$DEEPSEEK_API_KEY"
         self.assertNotIn("--agent icode", text)
 
     def test_p1_requires_agent_import_path(self):
-        text = (ROOT / "scripts" / "eval" / "p1_pier.sh").read_text(encoding="utf-8")
+        text = (ROOT / "pipeline" / "stages" / "p1_pier.sh").read_text(encoding="utf-8")
         self.assertIn("--agent-import-path", text)
 
     def test_hollow_pier_result(self):
@@ -239,13 +240,13 @@ printf '%s' "$DEEPSEEK_API_KEY"
         self.assertIsNone(hollow_job_reason(ran))
 
     def test_icode_adapter_module_parses(self):
-        path = ROOT / "eval" / "icode_pier_agent.py"
+        path = LIB / "icode_pier_agent.py"
         src = path.read_text(encoding="utf-8")
         compile(src, str(path), "exec")
         self.assertIn("class ICodeAgent", src)
 
     def test_icode_adapter_imports_when_pier_installed(self):
-        env = {**os.environ, "PYTHONPATH": str(ROOT / "eval")}
+        env = {**os.environ, "PYTHONPATH": str(LIB)}
         proc = subprocess.run(
             [
                 sys.executable,

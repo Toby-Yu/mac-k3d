@@ -119,6 +119,13 @@ fn print_done_summary(config: &MacK3dConfig, config_path: &Path) {
     );
 
     if matches!(config.role, NodeRole::Worker) {
+        if let Ok(share) = crate::prepare::eval_assets::ensure_share_pipeline() {
+            println!(
+                "Eval pipeline: {}/pipeline\n{}\n",
+                share.display(),
+                crate::prepare::eval_assets::icode_drop_hint(&share)
+            );
+        }
         let token_ok = config
             .jenkins_agent
             .api_token

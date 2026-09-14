@@ -871,12 +871,12 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
     choice(name: 'LLM', choices: ['deepseek'], description: 'v1: deepseek only')
     choice(name: 'BENCHMARK', choices: ['deepswe'], description: 'v1: deepswe only')
     string(name: 'N_TASKS', defaultValue: '1', description: 'Number of DeepSWE questions')
-    choice(name: 'ICODE_MODE', choices: ['source', 'binary'], description: 'iCode delivery')
-    string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: -full- tarball URL/path')
-    string(name: 'ICODE_SOURCE', defaultValue: '', description: 'source: path on worker; empty = discover on the worker')
+    choice(name: 'ICODE_MODE', choices: ['binary', 'source'], description: 'iCode delivery (users: binary drop)')
+    string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: empty = ~/.local/share/mac-k3d/icode or /opt/mac-k3d/icode')
+    string(name: 'ICODE_SOURCE', defaultValue: '', description: 'source: path on worker; empty = discover (developers)')
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4')
-    string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Checkout path with scripts/eval (optional)')
+    string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Dir with pipeline/stages/run_all.sh (optional)')
     string(name: 'DEEPSEEK_MODEL', defaultValue: 'deepseek-v4-pro', description: 'DeepSeek Chat Completions model id')
   }}
 
@@ -890,28 +890,33 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
             export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
             command -v docker >/dev/null
             docker info >/dev/null
+            SHARE="${{XDG_DATA_HOME:-$HOME/.local/share}}/mac-k3d"
             ROOT="${{MAC_K3D_ROOT:-}}"
-            if [ -z "$ROOT" ] || [ ! -f "$ROOT/scripts/eval/run_all.sh" ]; then
-              if [ -f "${{WORKSPACE}}/scripts/eval/run_all.sh" ]; then
+            if [ -z "$ROOT" ] || [ ! -f "$ROOT/pipeline/stages/run_all.sh" ]; then
+              if [ -f "${{WORKSPACE}}/pipeline/stages/run_all.sh" ]; then
                 ROOT="${{WORKSPACE}}"
-              elif [ -f "${{HOME}}/Documents/Toby/mac-k3d/scripts/eval/run_all.sh" ]; then
-                ROOT="${{HOME}}/Documents/Toby/mac-k3d"
+              elif [ -f "$SHARE/pipeline/stages/run_all.sh" ]; then
+                ROOT="$SHARE"
               else
-                echo "MAC_K3D_ROOT missing scripts/eval; clone mac-k3d binary-initializer onto the worker" >&2
+                echo "MAC_K3D_ROOT missing pipeline/stages/run_all.sh. On this worker run: mac-k3d setup -c ~/.config/mac-k3d/worker.yaml" >&2
                 exit 1
               fi
             fi
             export MAC_K3D_ROOT="$ROOT"
-            export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-work"
+            export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
             export N_TASKS="${{N_TASKS:-1}}"
-            export ICODE_MODE="${{ICODE_MODE:-source}}"
+            export ICODE_MODE="${{ICODE_MODE:-binary}}"
             export ICODE_RELEASE="${{ICODE_RELEASE:-}}"
             export ICODE_SOURCE="${{ICODE_SOURCE:-}}"
             export HARNESS=icode LLM=deepseek BENCHMARK=deepswe
             export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-deepseek-v4-pro}}"
             export LLM_NAME="${{LLM_NAME:-DeepSeek V4 Pro}}"
-            echo "PROGRESS 10% running local eval scripts"
-            bash "$MAC_K3D_ROOT/scripts/eval/run_all.sh"
+            if [ -z "${{DEEPSEEK_API_KEY:-}}" ]; then
+              echo "DEEPSEEK_API_KEY missing. Store credential deepseek-api-key on the Jenkins controller." >&2
+              exit 1
+            fi
+            echo "PROGRESS 10% running pipeline/stages"
+            bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
             echo "PROGRESS 100% done"
             if [ -f "$MAC_K3D_EVAL_WORKDIR/last_output.txt" ]; then
               echo "RESULT $(cat "$MAC_K3D_EVAL_WORKDIR/last_output.txt")"
@@ -924,7 +929,7 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
 
   post {{
     always {{
-      archiveArtifacts artifacts: 'eval-work/output/**/*.json', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'eval-runs/reports/**/*.json', allowEmptyArchive: true
     }}
   }}
 }}
@@ -1081,7 +1086,9 @@ mod tests {
     fn icode_eval_xml_mentions_progress_and_scripts() {
         let xml = icode_eval_job_xml(&["deepseek-api-key".into()]);
         assert!(xml.contains("<![CDATA["));
-        assert!(xml.contains("scripts/eval/run_all.sh"));
+        assert!(xml.contains("pipeline/stages/run_all.sh"));
+        assert!(xml.contains(".local/share"));
+        assert!(!xml.contains("Documents/Toby/mac-k3d"));
         assert!(xml.contains("PROGRESS"));
         assert!(xml.contains("deepswe"));
         assert!(xml.contains("deepseek"));

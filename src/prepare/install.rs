@@ -11,7 +11,7 @@ use crate::prepare::path_env;
 pub fn install_and_discover(name: &str) -> Result<DependencyEntry> {
     match name {
         "harbor" => install_harbor(),
-        "java" | "docker" | "k3d" | "kubectl" | "helm" => {
+        "java" | "docker" | "k3d" | "kubectl" | "helm" | "git" | "uv" => {
             platform::install_package(name)?;
             discover_single(name)
                 .map(|t| tool_to_entry(&t))
@@ -25,6 +25,59 @@ pub fn install_and_discover(name: &str) -> Result<DependencyEntry> {
             "unknown dependency for install: {other}"
         ))),
     }
+}
+
+/// git + uv + Pier 0.3.x for worker eval. Safe to re-run.
+pub fn ensure_eval_toolchain() -> Result<()> {
+    path_env::ensure_user_local_bin_in_process()?;
+    if discovery::which("git").is_none() {
+        platform::install_package("git")?;
+    }
+    if discovery::which("uv").is_none() {
+        platform::install_package("uv")?;
+        path_env::ensure_user_local_bin_in_process()?;
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            let _ = path_env::prepend_to_process_path(&home.join(".cargo").join("bin"));
+            let _ = path_env::prepend_to_process_path(&home.join(".local").join("bin"));
+        }
+    }
+    path_env::ensure_user_local_bin(true)?;
+    if discovery::which("git").is_none() {
+        return Err(Error::DependencyMissing(
+            "git not on PATH after install".into(),
+        ));
+    }
+    if discovery::which("uv").is_none() {
+        return Err(Error::DependencyMissing(
+            "uv not on PATH after install".into(),
+        ));
+    }
+    if discovery::which("pier").is_none() {
+        tracing::info!("installing datacurve-pier via uv tool");
+        if let Err(e) = run_cmd("uv", &["tool", "install", "datacurve-pier"]) {
+            tracing::warn!(error = %e, "uv tool install datacurve-pier failed; trying git URL");
+            run_cmd(
+                "uv",
+                &["tool", "install", "git+https://github.com/datacurve-ai/pier"],
+            )?;
+        }
+        path_env::ensure_user_local_bin_in_process()?;
+    }
+    let pier = discovery::which("pier").ok_or_else(|| {
+        Error::DependencyMissing("pier not on PATH after uv tool install".into())
+    })?;
+    let help = Command::new(&pier)
+        .args(["run", "--help"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr))
+        .unwrap_or_default();
+    if !help.contains("--agent-import-path") {
+        return Err(Error::DependencyMissing(
+            "this pier has no --agent-import-path; need datacurve-pier 0.3.x (uv tool install datacurve-pier)"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 fn install_harbor() -> Result<DependencyEntry> {

@@ -128,7 +128,7 @@ If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **17070**). That 
 | k3d / kubectl | **Skip** unless you want a local cluster |
 | Harbor / LoLBench | **No** (optional only for oracle/debug) |
 | Add `~/.local/bin` to PATH | **yes** if asked |
-| Jenkins controller URL | Wizard default `http://127.0.0.1:17070` (this PC). Remote controller: type `http://<controller-ip>:17070` or export `JENKINS_URL` |
+| Jenkins controller URL | Wizard default `http://43.107.42.252:17070`. Type `http://<new-ip>:17070` or export `JENKINS_URL` |
 | API user / token | Fill in if Jenkins is already up; **empty** if not |
 | Agent name / labels / remote root | Defaults are fine |
 | Write configuration? | **yes** |

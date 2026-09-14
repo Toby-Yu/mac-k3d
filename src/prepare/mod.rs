@@ -1,5 +1,6 @@
 pub mod agent_service;
 pub mod discovery;
+pub mod eval_assets;
 pub mod install;
 pub mod jenkins_agent;
 pub mod jenkins_credentials;

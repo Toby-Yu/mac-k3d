@@ -9,12 +9,12 @@ progress 45 "P4: Pier agent icode"
 [ -f "$PIER_AGENT_DIR/install.sh" ] || die "missing install.sh"
 [ -f "$PIER_AGENT_DIR/run.sh" ] || die "missing run.sh"
 [ -f "$PIER_AGENT_DIR/agent.toml" ] || die "missing agent.toml"
-[ -f "$MAC_K3D_ROOT/eval/icode_pier_agent.py" ] || die "missing eval/icode_pier_agent.py"
+[ -f "$PIPELINE_LIB/icode_pier_agent.py" ] || die "missing pipeline/lib/icode_pier_agent.py"
 chmod +x "$PIER_AGENT_DIR/install.sh" "$PIER_AGENT_DIR/run.sh" 2>/dev/null || true
 
 PIER_RUN_HELP="$(pier run --help 2>&1 || true)"
 if echo "$PIER_RUN_HELP" | grep -q -- '--agent-import-path'; then
-  echo "OK Pier 0.3.x adapter $MAC_K3D_ROOT/eval/icode_pier_agent.py (--agent-import-path icode_pier_agent:ICodeAgent)"
+  echo "OK Pier 0.3.x adapter $PIPELINE_LIB/icode_pier_agent.py (--agent-import-path icode_pier_agent:ICodeAgent)"
 elif pier agents 2>/dev/null | grep -qi icode; then
   echo "OK pier lists agent icode"
 else

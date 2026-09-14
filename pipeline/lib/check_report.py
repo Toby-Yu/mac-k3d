@@ -95,18 +95,20 @@ def validate(doc: object) -> list[str]:
 def resolve_path(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit)
-    workdir = Path(os.environ.get("MAC_K3D_EVAL_WORKDIR") or "eval-work")
+    workdir = Path(os.environ.get("MAC_K3D_EVAL_WORKDIR") or "eval-runs")
     last = workdir / "last_output.txt"
     if last.is_file():
         p = Path(last.read_text(encoding="utf-8").strip())
         if p.is_file():
             return p
-    out_dir = workdir / "output"
+    out_dir = workdir / "reports"
+    if not out_dir.is_dir():
+        out_dir = workdir / "output"
     jsons = sorted(out_dir.glob("eval-*.json")) if out_dir.is_dir() else []
     if jsons:
         return jsons[-1]
     raise FileNotFoundError(
-        "no report path given and no $MAC_K3D_EVAL_WORKDIR/last_output.txt or output/eval-*.json"
+        "no report path given and no $MAC_K3D_EVAL_WORKDIR/last_output.txt or eval-runs/reports/eval-*.json"
     )
 
 

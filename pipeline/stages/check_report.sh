@@ -5,9 +5,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export MAC_K3D_ROOT="$ROOT"
 TARGET="${1:-}"
 if [ -z "$TARGET" ]; then
-  WORKDIR="${MAC_K3D_EVAL_WORKDIR:-$ROOT/eval-work}"
+  WORKDIR="${MAC_K3D_EVAL_WORKDIR:-$ROOT/eval-runs}"
   if [ -f "$WORKDIR/last_output.txt" ]; then
     TARGET="$(cat "$WORKDIR/last_output.txt")"
   fi
 fi
-exec python3 "$ROOT/eval/check_report.py" ${TARGET:+"$TARGET"}
+exec python3 "$ROOT/pipeline/lib/check_report.py" ${TARGET:+"$TARGET"}

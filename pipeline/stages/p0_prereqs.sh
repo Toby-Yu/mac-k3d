@@ -6,6 +6,8 @@ source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
 progress 5 "P0: checking Docker and mac-k3d"
 
+ensure_eval_preflight
+
 have docker || die "docker not on PATH"
 docker info >/dev/null 2>&1 || die "docker info failed (no Server / permission). Log out/in on Linux or open Docker Desktop on macOS."
 # shellcheck source=./ensure_compose.sh

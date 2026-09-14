@@ -141,6 +141,7 @@ pub fn install_package(name: &str) -> Result<()> {
         "kubectl" => vec!["install", "kubectl"],
         "helm" => vec!["install", "helm"],
         "uv" => vec!["install", "uv"],
+        "git" => vec!["install", "git"],
         other => {
             return Err(Error::Config(format!(
                 "unknown dependency for Homebrew install: {other}"

@@ -2,11 +2,11 @@
 
 Per-stage CLI checks for Process 2 (DeepSWE + Pier + iCode vs DeepSeek V4 Pro baseline).  
 Machine bootstrap first: [testing-binary-initializer.md](testing-binary-initializer.md) and [workflow.md](workflow.md).  
-**This lab (cloud root + this PC):** copy-paste phases and flowcharts in [cloud-eval-runbook.md](cloud-eval-runbook.md).
+**This lab (cloud root + this PC):** copy-paste phases and flowcharts in [cloud-eval-runbook.md](cloud-eval-runbook.md). **Users:** [user-guide.md](user-guide.md).
 
 **Sign-off:** pass **E0–E7** with `--n-tasks 1` (Harbor/LoLBench stay skip). E8 is optional N>1. Keep P0–P4 cheap (no LLM).
 
-Scripts live under [`scripts/eval/`](../../scripts/eval/). The CLI wraps them:
+Scripts live under [`pipeline/stages/`](../../pipeline/stages/). Helpers under [`pipeline/lib/`](../../pipeline/lib/). The CLI wraps them:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -17,8 +17,8 @@ mac-k3d eval --local --n-tasks 1    # full local pipeline after stages pass
 mac-k3d eval                        # interactive → Jenkins job icode_eval
 ```
 
-Default workdir: `./eval-work` (override with `MAC_K3D_EVAL_WORKDIR`).  
-Default iCode source: first existing tree among `$HOME/Documents/iCode-main`, `$HOME/iCode-main`, `$HOME/src/iCode-main`, a sibling of this checkout, or `$HOME/Documents/Toby/iCode-main` if present (override with `ICODE_SOURCE`).  
+Default workdir: `./eval-runs` (override with `MAC_K3D_EVAL_WORKDIR`).  
+Default iCode for users: `ICODE_MODE=binary` and `~/.local/share/mac-k3d/icode` (or `/opt/mac-k3d/icode`). Developer source trees are discovered only when `ICODE_MODE=source`.  
 Default model: `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`). API `model` in the response is stored as `llm_model_served` (routing to Flash is possible).
 
 ---
@@ -35,7 +35,7 @@ This PC: Jenkins agent + Docker + iCode
     └── archive JSON back to cloud Jenkins
 ```
 
-Worker wizard default is `http://127.0.0.1:17070`. For this lab’s cloud Jenkins, export or type `JENKINS_URL=http://43.107.42.252:17070`. Never `mac-k3d start -c worker.yaml`.
+Worker wizard default is `http://43.107.42.252:17070`. Type a new `http://<ip>:17070` or export `JENKINS_URL` for another controller. Never `mac-k3d start -c worker.yaml`.
 
 After changing the `icode_eval` job XML, refresh on the **cloud** controller:
 
@@ -55,7 +55,7 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 | Jenkins API token | **Secret**, not the token *name*, for worker register |
 | Credential `deepseek-api-key` | Stored on the **cloud** controller |
 | iCode tree on this PC | Discovered path (often `$HOME/Documents/iCode-main`) or a `-full-` tarball |
-| `MAC_K3D_ROOT` on this PC | mac-k3d checkout (or Release binary + `scripts/eval`) |
+| `MAC_K3D_ROOT` on this PC | mac-k3d checkout (or Release share dir `~/.local/share/mac-k3d`) |
 | API model string | `deepseek-v4-pro` (override with `DEEPSEEK_MODEL` if docs change) |
 | N for smoke | **1**; larger N later (E8) |
 
@@ -70,13 +70,13 @@ Copy-paste commands. Use `--n-tasks 1` until E4–E6 are green.
 | Check | Command | Expected | Pass (y/n) | Notes |
 |-------|---------|----------|------------|-------|
 | **E0** Cloud controller | On the **cloud** VM: Release binary, first-run wizard, role **CI controller**, Jenkins **17070**, Harbor skip, credential `deepseek-api-key`. Open security group **17070**. Then `JENKINS_URL=http://127.0.0.1:17070 ./scripts/env_set_up/02_check_controller.sh` | Browser `http://<cloud-ip>:17070` HTTP 200; job `icode_eval` present | | Once per VM |
-| **E1** This PC as worker | On this PC: `setup -c worker.yaml`. Type or export `JENKINS_URL=http://43.107.42.252:17070` (wizard default is localhost). User `admin`, API **secret**, distinct agent name. Never `start -c worker.yaml`. `JENKINS_URL=http://43.107.42.252:17070 ./scripts/eval/e1_reach_jenkins.sh` then `REQUIRE_WORKER=1 JENKINS_URL=http://43.107.42.252:17070 ./scripts/env_set_up/03_check_worker.sh` | `e1`: HTTP 200; start rejected; unit active; node **online** in **cloud** Jenkins → Nodes | | |
+| **E1** This PC as worker | On this PC: `setup -c worker.yaml`. Enter keeps `http://43.107.42.252:17070`. User `admin`, API **secret**, distinct agent name. Never `start -c worker.yaml`. `JENKINS_URL=http://43.107.42.252:17070 ./pipeline/stages/e1_reach_jenkins.sh` then `REQUIRE_WORKER=1 JENKINS_URL=http://43.107.42.252:17070 ./scripts/env_set_up/03_check_worker.sh` | `e1`: HTTP 200; start rejected; unit active; node **online** in **cloud** Jenkins → Nodes | | |
 | **E2** P0–P4 (no LLM) | See commands below | Existing P0–P4 OK lines; Pier agent `icode` present | | Fast |
-| **E3** Report schema (no LLM) | `./scripts/eval/check_report.sh eval/testdata/report-min.json` | `OK report schema` | | Instant |
+| **E3** Report schema (no LLM) | `./pipeline/stages/check_report.sh pipeline/lib/testdata/report-min.json` | `OK report schema` | | Instant |
 | **E4** P5 n=1 harness (paid) | `mac-k3d eval --stage p5 --n-tasks 1` with gitignored `.env` (or Jenkins bind `deepseek-api-key`) | `PROGRESS` P5; minutes of Pier/Docker/LLM; `harness/` artifacts. CLI usage errors fail the stage | | |
 | **E5** P6 baseline | `DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage p6 --n-tasks 1` | `baseline/<task>/agent.patch`; `baseline/summary.json` includes usage/time/model | | |
-| **E6** P7/P8 report fields | `mac-k3d eval --stage p7` then `--stage p8 --n-tasks 1`; then `./scripts/eval/check_report.sh` | `output/eval-icode-deepseek-deepswe-n1-<utc>.json` with f2p, p2p, `pass_at_1_*`, `token_usage`, `duration_seconds`, `access_date_utc`, `llm_model_id` / `llm_name` | | |
-| **E7** Jenkins `icode_eval` | From cloud or this PC with controller URL: `mac-k3d eval --n-tasks 1 --icode-mode source --yes` **without** `--local`, or UI Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`) | Build on **this** node; archived JSON; same schema | | |
+| **E6** P7/P8 report fields | `mac-k3d eval --stage p7` then `--stage p8 --n-tasks 1`; then `./pipeline/stages/check_report.sh` | `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` with f2p, p2p, `pass_at_1_*`, `token_usage`, `duration_seconds`, `access_date_utc`, `llm_model_id` / `llm_name` | | |
+| **E7** Jenkins `icode_eval` | From this PC: `mac-k3d eval --n-tasks 1 --icode-mode binary --yes` **without** `--local`, or UI Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`, `ICODE_MODE=binary`) | Build on **this** node; archived JSON; same schema | | |
 | **E8** optional N>1 | Same as E6/E7 with `--n-tasks` > 1 | Same schema; `n_tasks` matches N | | After E6 green |
 
 ### E2 commands
@@ -97,7 +97,7 @@ Schema unit test (no network): `python3 eval/test_report.py`
 
 ## JSON report fields
 
-Written by [`eval/score_results.py`](../../eval/score_results.py) at P7/P8. Validate with [`scripts/eval/check_report.sh`](../../scripts/eval/check_report.sh).
+Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py) at P7/P8. Validate with [`pipeline/stages/check_report.sh`](../../pipeline/stages/check_report.sh).
 
 | Field | Meaning |
 |-------|---------|
@@ -120,7 +120,7 @@ Written by [`eval/score_results.py`](../../eval/score_results.py) at P7/P8. Vali
 
 ```bash
 mac-k3d eval --stage p0
-# or: scripts/eval/p0_prereqs.sh
+# or: pipeline/stages/p0_prereqs.sh
 ```
 
 **Expected:** `docker info` shows Server; `mac-k3d --help` lists `eval`; optional note if Jenkins worker is offline (OK for `--local`).
@@ -166,7 +166,7 @@ mac-k3d eval --stage p3
 mac-k3d eval --stage p4
 ```
 
-**Expected:** `eval/icode_pier_agent.py` present; `eval/pier-agent-icode` scripts executable; P4 prints `--agent-import-path icode_pier_agent:ICodeAgent`.
+**Expected:** `pipeline/lib/icode_pier_agent.py` present; `pipeline/lib/pier-agent-icode` scripts executable; P4 prints `--agent-import-path icode_pier_agent:ICodeAgent`.
 
 ## P5 — One DeepSWE task through iCode (N=1)
 
@@ -199,13 +199,13 @@ mac-k3d eval --stage p7
 
 **Expected:** temp JSON with per-task `harness_resolved`, `baseline_resolved`, `f2p`, `p2p`, `pass_at_1_*`, tokens, timing, and model fields (lists may be empty if the task only exposes a single verdict).
 
-## P8 — Named file under `output/`
+## P8 — Named file under `eval-runs/reports/`
 
 **Why:** Stable identification of which eval ran.
 
 ```bash
 mac-k3d eval --stage p8 --n-tasks 1
-./scripts/eval/check_report.sh
+./pipeline/stages/check_report.sh
 ```
 
 **Expected:** `output/eval-icode-deepseek-deepswe-n1-<utc>.json` (or under `$WORKDIR/output/`) with the fields in **JSON report fields**. `check_report.sh` prints `OK report schema`.
