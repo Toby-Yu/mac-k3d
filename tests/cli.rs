@@ -34,6 +34,16 @@ fn eval_help_mentions_stage() {
 }
 
 #[test]
+fn eval_help_mentions_model() {
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["eval", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("model"));
+}
+
+#[test]
 fn no_subcommand_without_tty_exits_2() {
     Command::cargo_bin("mac-k3d")
         .unwrap()

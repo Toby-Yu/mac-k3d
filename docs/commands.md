@@ -51,7 +51,7 @@ Run the iCode vs DeepSeek DeepSWE evaluation (Process 2). See [binary-initialize
 ```bash
 mac-k3d eval --stage p0
 mac-k3d eval --stage p5 --n-tasks 1
-mac-k3d eval --local --n-tasks 1 --icode-mode source
+mac-k3d eval --local --n-tasks 1 --icode-mode source --model deepseek-v4-pro
 mac-k3d eval                         # interactive → local or Jenkins icode_eval
 ```
 
@@ -66,7 +66,8 @@ mac-k3d eval                         # interactive → local or Jenkins icode_ev
 | `--icode-release PATH\|URL` | Binary mode input |
 | `--icode-source PATH` | Source tree (default `~/Documents/Toby/iCode-main`) |
 | `--workdir PATH` | Eval workdir (default `./eval-work`) |
-| `--yes` | Non-interactive defaults |
+| `--model ID` | DeepSeek model id (default `deepseek-v4-pro`, env `DEEPSEEK_MODEL`) |
+| `--yes` | Skip prompts: Jenkins `icode_eval` unless `--local` |
 
 v1 choices are fixed: harness=`icode`, llm=`deepseek`, benchmark=`deepswe`. Output: `output/eval-icode-deepseek-deepswe-n{N}-{utc}.json`.
 

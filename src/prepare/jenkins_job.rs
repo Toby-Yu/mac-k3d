@@ -877,6 +877,7 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4')
     string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Checkout path with scripts/eval (optional)')
+    string(name: 'DEEPSEEK_MODEL', defaultValue: 'deepseek-v4-pro', description: 'DeepSeek Chat Completions model id')
   }}
 
   stages {{
@@ -907,6 +908,8 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
             export ICODE_RELEASE="${{ICODE_RELEASE:-}}"
             export ICODE_SOURCE="${{ICODE_SOURCE:-/home/Toby/Documents/Toby/iCode-main}}"
             export HARNESS=icode LLM=deepseek BENCHMARK=deepswe
+            export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-deepseek-v4-pro}}"
+            export LLM_NAME="${{LLM_NAME:-DeepSeek V4 Pro}}"
             echo "PROGRESS 10% running local eval scripts"
             bash "$MAC_K3D_ROOT/scripts/eval/run_all.sh"
             echo "PROGRESS 100% done"
@@ -1082,6 +1085,8 @@ mod tests {
         assert!(xml.contains("PROGRESS"));
         assert!(xml.contains("deepswe"));
         assert!(xml.contains("deepseek"));
+        assert!(xml.contains("DEEPSEEK_MODEL"));
+        assert!(xml.contains("deepseek-v4-pro"));
         assert!(xml.contains("withCredentials"));
     }
 }

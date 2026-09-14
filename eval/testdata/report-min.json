@@ -1,0 +1,48 @@
+{
+  "run_id": "20260914T000000Z",
+  "access_date_utc": "2026-09-14T00:00:00Z",
+  "harness": "icode",
+  "llm": "deepseek",
+  "llm_name": "DeepSeek V4 Pro",
+  "llm_model_id": "deepseek-v4-pro",
+  "llm_model_served": "deepseek-v4-pro",
+  "llm_version": null,
+  "benchmark": "deepswe",
+  "n_tasks": 1,
+  "tasks": [
+    {
+      "id": "example-task",
+      "harness_resolved": true,
+      "baseline_resolved": false,
+      "f2p": ["test_example.py::test_fix"],
+      "p2p": ["test_example.py::test_still_passes"],
+      "harness_patch_path": "harness/example-task/agent.patch",
+      "baseline_patch_path": "baseline/example-task/agent.patch",
+      "token_usage": {
+        "harness": {"prompt": 10, "completion": 5, "total": 15},
+        "baseline": {"prompt": 8, "completion": 4, "total": 12}
+      },
+      "duration_seconds": {"harness": 1.0, "baseline": 0.5}
+    }
+  ],
+  "duration_seconds": {
+    "harness": 1.0,
+    "baseline": 0.5,
+    "total": 1.5
+  },
+  "token_usage": {
+    "prompt": 18,
+    "completion": 9,
+    "total": 27,
+    "harness": {"prompt": 10, "completion": 5, "total": 15},
+    "baseline": {"prompt": 8, "completion": 4, "total": 12}
+  },
+  "totals": {
+    "harness_resolved": 1,
+    "baseline_resolved": 0,
+    "n": 1,
+    "pass_at_1_harness": 1.0,
+    "pass_at_1_baseline": 0.0
+  },
+  "notes": "fixture for E3 / check_report (no LLM)"
+}

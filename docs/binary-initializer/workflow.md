@@ -75,7 +75,7 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 
 ## Process 2 — evaluation pipeline
 
-**Pass/fail per stage:** [testing-eval-pipeline.md](testing-eval-pipeline.md) (P0–P8, then full runner)
+**Pass/fail per stage:** [testing-eval-pipeline.md](testing-eval-pipeline.md) (E0–E8 tracking; P0–P8 stage detail)
 
 | Stage | What | Why |
 |-------|------|-----|
@@ -84,9 +84,9 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 | Install Pier | `uv tool install datacurve-pier` | DeepSWE is Harbor/Pier-format tasks |
 | Clone DeepSWE | `git clone https://github.com/datacurve-ai/deep-swe` | Not vendored in this repo |
 | Pier agent `icode` | Install script + DeepSeek allowlist inside the sandbox | Puts iCode **inside** the task Docker image Pier builds |
-| Arm A | `pier run … --agent icode --model deepseek` | Harness under test |
-| Arm B | Baseline DeepSeek chat on the same `instruction.md` | Compare without iCode scaffolding |
-| Grade | Verifier → f2p / p2p / `resolved` | DeepSWE’s held-out tests |
+| Arm A | `pier run … --agent icode --model deepseek-v4-pro` | Harness under test (`DEEPSEEK_MODEL`) |
+| Arm B | Baseline DeepSeek chat (`deepseek-v4-pro`) on the same `instruction.md` | Compare without iCode scaffolding |
+| Grade | Verifier → f2p / p2p / `resolved` / pass@1, tokens, time, model | DeepSWE’s held-out tests plus API usage |
 | JSON | `output/eval-icode-deepseek-deepswe-n{N}-{utc}.json` | Clear naming for which eval ran |
 
 Trigger:

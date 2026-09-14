@@ -37,6 +37,10 @@ pub struct EvalArgs {
     #[arg(long)]
     pub workdir: Option<PathBuf>,
 
+    /// DeepSeek Chat Completions model id (env DEEPSEEK_MODEL)
+    #[arg(long)]
+    pub model: Option<String>,
+
     /// Skip interactive prompts (use flags / env only)
     #[arg(long)]
     pub yes: bool,
@@ -63,6 +67,11 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
     let workdir = args
         .workdir
         .unwrap_or_else(|| PathBuf::from("eval-work"));
+    let mut model = args
+        .model
+        .or_else(|| std::env::var("DEEPSEEK_MODEL").ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "deepseek-v4-pro".into());
     let local = args.local;
 
     if args.stage.is_none() && !args.yes && atty::is(atty::Stream::Stdin) {
@@ -115,20 +124,36 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
                 .interact_text()
                 .map_err(|_| Error::Cancelled)?;
         }
+        model = Input::with_theme(&theme)
+            .with_prompt("DEEPSEEK_MODEL")
+            .default(model)
+            .interact_text()
+            .map_err(|_| Error::Cancelled)?;
     }
 
     if args.stage.is_none() && !args.yes && !atty::is(atty::Stream::Stdin) {
         return Err(Error::Config(
-            "not a TTY: pass --local, --stage p0..p8, or --yes --local".into(),
+            "not a TTY: pass --local, --stage p0..p8, or --yes (Jenkins) / --yes --local".into(),
         ));
     }
 
     if let Some(stage) = args.stage.as_deref() {
-        return run_stage(&repo, stage, n_tasks, &icode_mode, &icode_release, &icode_source, &workdir);
+        return run_stage(
+            &repo,
+            stage,
+            n_tasks,
+            &icode_mode,
+            &icode_release,
+            &icode_source,
+            &workdir,
+            &model,
+        );
     }
 
-    let run_local = if local || args.yes {
+    let run_local = if local {
         true
+    } else if args.yes {
+        false
     } else if atty::is(atty::Stream::Stdin) {
         Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Run locally now (--local)? No = trigger Jenkins job icode_eval")
@@ -148,10 +173,18 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             &icode_release,
             &icode_source,
             &workdir,
+            &model,
         );
     }
 
-    trigger_jenkins_icode_eval(config, n_tasks, &icode_mode, &icode_release, &icode_source)
+    trigger_jenkins_icode_eval(
+        config,
+        n_tasks,
+        &icode_mode,
+        &icode_release,
+        &icode_source,
+        &model,
+    )
 }
 
 fn normalize_mode(s: &str) -> String {
@@ -201,6 +234,7 @@ fn run_stage(
     icode_release: &str,
     icode_source: &str,
     workdir: &Path,
+    model: &str,
 ) -> Result<()> {
     let script = match stage {
         "p0" => "scripts/eval/p0_prereqs.sh",
@@ -236,6 +270,8 @@ fn run_stage(
         .env("HARNESS", "icode")
         .env("LLM", "deepseek")
         .env("BENCHMARK", "deepswe")
+        .env("DEEPSEEK_MODEL", model)
+        .env("LLM_NAME", "DeepSeek V4 Pro")
         .status()
         .map_err(|e| Error::CommandFailed {
             cmd: format!("bash {}", path.display()),
@@ -256,6 +292,7 @@ fn trigger_jenkins_icode_eval(
     icode_mode: &str,
     icode_release: &str,
     icode_source: &str,
+    model: &str,
 ) -> Result<()> {
     let url = config
         .jenkins_agent
@@ -291,9 +328,10 @@ fn trigger_jenkins_icode_eval(
     let build_url = format!(
         "{base}/job/icode_eval/buildWithParameters?\
          HARNESS=icode&LLM=deepseek&BENCHMARK=deepswe&N_TASKS={n_tasks}\
-         &ICODE_MODE={icode_mode}&ICODE_RELEASE={}&ICODE_SOURCE={}",
+         &ICODE_MODE={icode_mode}&ICODE_RELEASE={}&ICODE_SOURCE={}&DEEPSEEK_MODEL={}",
         urlencoding_simple(icode_release),
         urlencoding_simple(icode_source),
+        urlencoding_simple(model),
     );
 
     println!("Triggering Jenkins job icode_eval at {base} …");

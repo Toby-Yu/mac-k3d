@@ -13,6 +13,7 @@ python3 "$MAC_K3D_ROOT/eval/baseline_deepseek.py" \
   --tasks-dir "$DEEPSWE_DIR/tasks" \
   --n-tasks "$N_TASKS" \
   --out-dir "$BASELINE_DIR" \
+  --model "${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
   | tee "$BASELINE_DIR/baseline.log"
 
 progress 85 "P6 complete"
