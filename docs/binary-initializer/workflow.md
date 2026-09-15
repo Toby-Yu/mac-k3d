@@ -21,7 +21,7 @@ New Mac/Linux
        arm A: pier + iCode + DeepSeek
        arm B: DeepSeek chat API only (no iCode)
        grade patches (f2p / p2p)
-  → output/eval-icode-deepseek-deepswe-n{N}-{utc}.json
+  → eval-runs/reports/eval-icode-deepseek-deepswe-n{N}-{utc}.json
 ```
 
 ```mermaid
@@ -37,7 +37,7 @@ flowchart TD
   pierA["Pier + iCode inside sandbox"]
   pierB["Baseline: DeepSeek API no iCode"]
   grade["Verifier: patches f2p p2p"]
-  json["output named JSON"]
+  json["eval-runs/reports named JSON"]
 
   newHost --> bin --> setup --> role
   role --> ctrl
@@ -97,6 +97,26 @@ mac-k3d eval --stage p5 --n-tasks 1   # isolated stage test
 ```
 
 Jenkins job name: **`icode_eval`**. Logs print `PROGRESS n% …` so you can see completion over time. Agent label `lolbench`; builds take a `CPU_CORES` lock.
+
+---
+
+## Where output lives
+
+Workdir is **`eval-runs/`** (`MAC_K3D_EVAL_WORKDIR`). Jenkins sets it to `$WORKSPACE/eval-runs`.
+
+| What | Path |
+|------|------|
+| Official report (P8) | `eval-runs/reports/eval-icode-deepseek-deepswe-n{N}-{utc}.json` |
+| On the worker (Jenkins) | `$HOME/jenkins-agent/workspace/icode_eval/eval-runs/reports/` |
+| Jenkins artifact | same glob on the build |
+| P7 scratch | `eval-runs/results/score-temp.json` |
+| Last report path | `eval-runs/last_output.txt` |
+| Arm A logs/patches | `eval-runs/harness/` |
+| Arm B logs/patches | `eval-runs/baseline/` |
+| DeepSWE clone | `eval-runs/deep-swe/` |
+| Copied iCode for the run | `eval-runs/icode-bin/icode` |
+
+If `jenkins_agent.remote_fs` in `worker.yaml` is not the default, reports are at `{remote_fs}/workspace/icode_eval/eval-runs/reports/`. Repo-root `output/` and `eval-work/` are leftovers (removed); do not look there. Share `~/.local/share/mac-k3d/eval-runs` is not the Jenkins report dir.
 
 ---
 

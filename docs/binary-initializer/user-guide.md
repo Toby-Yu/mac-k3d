@@ -137,6 +137,7 @@ Do **not** put the file inside `~/.local/share/mac-k3d/pipeline/` (that folder i
 
 3. Click **Build**. Console must say `Running on <this-worker-name>`.
 4. Download **Build Artifacts** → `eval-runs/reports/eval-icode-deepseek-deepswe-n1-*.json`.
+   On the worker the same files are at `$HOME/jenkins-agent/workspace/icode_eval/eval-runs/reports/` (or `{remote_fs}/workspace/icode_eval/eval-runs/reports/` if `jenkins_agent.remote_fs` was changed).
 
 ### CLI from the worker (queues Jenkins; no `--local`)
 

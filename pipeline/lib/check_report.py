@@ -102,8 +102,6 @@ def resolve_path(explicit: str | None) -> Path:
         if p.is_file():
             return p
     out_dir = workdir / "reports"
-    if not out_dir.is_dir():
-        out_dir = workdir / "output"
     jsons = sorted(out_dir.glob("eval-*.json")) if out_dir.is_dir() else []
     if jsons:
         return jsons[-1]
