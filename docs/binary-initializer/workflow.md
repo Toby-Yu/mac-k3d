@@ -146,4 +146,4 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 | [cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | Operator runbook: cloud root controller → local worker → JSON |
 | [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | Pipeline stage CLI tests |
 | [../secrets.md](../secrets.md) | Controller credentials (`deepseek-api-key`) |
-| [../lolbench-jenkins.md](../lolbench-jenkins.md) | Leftover `lolbench_one_task` (not the eval; use `icode_eval`) |
+| [../lolbench-jenkins.md](../lolbench-jenkins.md) | LoLBench Harbor job design (`lolbench_one_task`; DeepSWE eval is `icode_eval`) |
