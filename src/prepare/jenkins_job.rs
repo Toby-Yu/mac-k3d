@@ -946,6 +946,80 @@ fn icode_eval_job_xml(credential_ids: &[String]) -> String {
 <flow-definition plugin="workflow-job">
   <description>iCode is an agent harness. This job measures whether the harness helps an LLM on DeepSWE (via Pier): Arm A = iCode + LLM (DeepSeek); Arm B = the same LLM without iCode (baseline). Compare pass@1 / resolved / tokens / time in the archived JSON. See docs/binary-initializer/user-guide.md.</description>
   <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>HARNESS</name>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>icode</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>LLM</name>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>deepseek</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>BENCHMARK</name>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>deepswe</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>N_TASKS</name>
+          <defaultValue>1</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>ICODE_MODE</name>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>binary</string>
+              <string>source</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>ICODE_RELEASE</name>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>ICODE_SOURCE</name>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>AGENT_LABEL</name>
+          <defaultValue>lolbench</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>CPU_LOCK_QTY</name>
+          <defaultValue>4</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>MAC_K3D_ROOT</name>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>DEEPSEEK_MODEL</name>
+          <defaultValue>deepseek-v4-pro</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
     <script><![CDATA[{script}]]></script>
     <sandbox>true</sandbox>
@@ -1097,6 +1171,8 @@ mod tests {
         assert!(xml.contains("DEEPSEEK_MODEL"));
         assert!(xml.contains("deepseek-v4-pro"));
         assert!(xml.contains("withCredentials"));
+        assert!(xml.contains("ParametersDefinitionProperty"));
+        assert!(xml.contains("<name>N_TASKS</name>"));
         assert!(xml.contains("mac-k3d config -c worker.yaml"));
         assert!(xml.contains("eval --stage p0"));
         assert!(xml.contains("agent harness"));

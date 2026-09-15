@@ -402,25 +402,15 @@ fn trigger_jenkins_icode_eval(
     );
 
     println!("Triggering Jenkins job icode_eval at {base} …");
-    let status = Command::new("curl")
-        .args([
-            "-sS",
-            "-u",
-            &format!("{user}:{token}"),
-            "-X",
-            "POST",
-            &build_url,
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-        ])
-        .output()
-        .map_err(|e| Error::CommandFailed {
-            cmd: "curl buildWithParameters icode_eval".into(),
-            source: e.into(),
-        })?;
-    let code = String::from_utf8_lossy(&status.stdout).trim().to_string();
+    let auth = format!("{user}:{token}");
+    let code = jenkins_post_http(&auth, &build_url)?;
+    let code = if code == "400" {
+        // Job XML rewrite can drop ParametersDefinitionProperty until the next controller config.
+        let fallback = format!("{base}/job/icode_eval/build");
+        jenkins_post_http(&auth, &fallback)?
+    } else {
+        code
+    };
     if code != "201" && code != "200" && code != "302" && code != "303" {
         return Err(Error::Config(format!(
             "failed to trigger icode_eval (HTTP {code}). Ensure the job exists \
@@ -433,6 +423,28 @@ fn trigger_jenkins_icode_eval(
     );
     let _ = config;
     Ok(())
+}
+
+fn jenkins_post_http(auth: &str, url: &str) -> Result<String> {
+    let status = Command::new("curl")
+        .args([
+            "-sS",
+            "-u",
+            auth,
+            "-X",
+            "POST",
+            url,
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+        ])
+        .output()
+        .map_err(|e| Error::CommandFailed {
+            cmd: "curl icode_eval trigger".into(),
+            source: e.into(),
+        })?;
+    Ok(String::from_utf8_lossy(&status.stdout).trim().to_string())
 }
 
 fn urlencoding_simple(s: &str) -> String {

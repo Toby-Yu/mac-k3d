@@ -1,6 +1,6 @@
 # User guide: cloud controller, worker, and eval
 
-Copy-paste these blocks. Every command has a `#` comment. Prefer GitHub pre-release **v0.5.0-rc.1** (or newer) so the installed CLI matches this tree.
+Copy-paste these blocks. Every command has a `#` comment. Prefer GitHub **Latest** **v0.5.0** (or newer) so the installed CLI matches this tree.
 
 Harbor / LoLBench stay **skip**. Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
 
@@ -33,7 +33,7 @@ mkdir -p "$HOME/.local/bin"
 
 # Download the Linux asset from the pre-release (change tag/arch if needed)
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.0-rc.1/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.0/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 
@@ -65,7 +65,7 @@ export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$HOME/.local/bin"
 # Linux x86_64 example — pick darwin-aarch64 / linux-aarch64 as needed
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.0-rc.1/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.0/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 mac-k3d --help   # must list setup and eval
@@ -141,13 +141,15 @@ Do **not** put the file inside `~/.local/share/mac-k3d/pipeline/` (that folder i
 ### CLI from the worker (queues Jenkins; no `--local`)
 
 ```bash
-# Queue icode_eval on the controller. Needs worker.yaml API token.
+# Queue icode_eval on the controller. Uses worker.yaml when config.yaml is absent.
 # Does not run Pier on this shell — watch Jenkins Console Output.
 export PATH="$HOME/.local/bin:$PATH"
 mac-k3d eval --n-tasks 1 --icode-mode binary --yes
+# Same thing, explicit file:
+# mac-k3d eval -c ~/.config/mac-k3d/worker.yaml --n-tasks 1 --icode-mode binary --yes
 ```
 
-`--yes` without `--local` means **Jenkins**. An old binary may run a local eval instead; replace `~/.local/bin/mac-k3d` with v0.5.0-rc.1 or newer.
+`--yes` without `--local` means **Jenkins**. An old binary may run a local eval instead; replace `~/.local/bin/mac-k3d` with v0.5.0 or newer.
 
 Expect: build **SUCCESS**, artifact present. `pass_at_1_harness` may be `0.0` on N=1 — that is a task result, not a setup failure. Empty `f2p`/`p2p` lists and harness tokens `0` are known scorer limits.
 
@@ -182,7 +184,7 @@ mac-k3d eval --local --n-tasks 1 --icode-mode binary
 | iCode not found | Copy binary to `~/.local/share/mac-k3d/icode` |
 | `DEEPSEEK_API_KEY missing` on Jenkins | Add credential `deepseek-api-key` on the **controller** |
 | Disk/RAM preflight | Free space (`docker system df`); keep `N_TASKS=1` |
-| `--yes` ran a local eval | Old CLI; install v0.5.0-rc.1+ |
+| `--yes` ran a local eval | Old CLI; install v0.5.0+ |
 | Job still `deepseek-chat` or Toby paths | Controller: install new binary, `config --skip-secrets` |
 
 E8 (N>1) is optional after N=1 is green. Lab operator notes: [cloud-eval-runbook.md](cloud-eval-runbook.md).

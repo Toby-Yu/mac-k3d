@@ -321,6 +321,15 @@ impl MacK3dConfig {
         Self::config_dir().join("config.yaml")
     }
 
+    pub fn default_worker_path() -> PathBuf {
+        Self::config_dir().join("worker.yaml")
+    }
+
+    /// `-c` wins. Else `config.yaml` if it exists, else `worker.yaml` (clean worker-only machines).
+    pub fn resolve_config_path(explicit: Option<&Path>) -> PathBuf {
+        resolve_config_path_in(&Self::config_dir(), explicit)
+    }
+
     /// Pending CI secrets from prepare (0600 YAML); consumed by `config` into Jenkins Credentials.
     pub fn pending_credentials_path() -> PathBuf {
         Self::config_dir().join("credentials.pending.yaml")
@@ -333,9 +342,7 @@ impl MacK3dConfig {
     }
 
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let path = path
-            .map(PathBuf::from)
-            .unwrap_or_else(Self::default_config_path);
+        let path = Self::resolve_config_path(path);
 
         if !path.exists() {
             return Ok(Self::default());
@@ -402,4 +409,57 @@ impl DependenciesConfig {
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn resolve_config_path_in(dir: &Path, explicit: Option<&Path>) -> PathBuf {
+    if let Some(p) = explicit {
+        return p.to_path_buf();
+    }
+    let primary = dir.join("config.yaml");
+    if primary.exists() {
+        return primary;
+    }
+    let worker = dir.join("worker.yaml");
+    if worker.exists() {
+        return worker;
+    }
+    primary
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_prefers_config_yaml_when_present() {
+        let dir = std::env::temp_dir().join(format!(
+            "mac-k3d-cfg-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.yaml"), "role: controller\n").unwrap();
+        std::fs::write(dir.join("worker.yaml"), "role: worker\n").unwrap();
+        assert_eq!(
+            resolve_config_path_in(&dir, None),
+            dir.join("config.yaml")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_worker_yaml() {
+        let dir = std::env::temp_dir().join(format!(
+            "mac-k3d-cfg-worker-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("worker.yaml"), "role: worker\n").unwrap();
+        assert_eq!(
+            resolve_config_path_in(&dir, None),
+            dir.join("worker.yaml")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
