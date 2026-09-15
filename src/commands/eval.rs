@@ -48,6 +48,9 @@ pub struct EvalArgs {
 
 /// Interactive or staged iCode / DeepSeek / DeepSWE evaluation.
 pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
+    if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
+        println!("Warning: could not extract pipeline ({err}).");
+    }
     let repo = discover_repo_root()?;
     let mut n_tasks = args.n_tasks.max(1);
     let mut icode_mode = normalize_mode(&args.icode_mode);

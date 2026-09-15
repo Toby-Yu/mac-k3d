@@ -46,7 +46,7 @@ Keep `prepare` / `start` / `config` for power users. Controller `config`/`start`
 
 ## `eval`
 
-Run the iCode vs DeepSeek DeepSWE evaluation (Process 2). See [binary-initializer/workflow.md](binary-initializer/workflow.md) and [binary-initializer/testing-eval-pipeline.md](binary-initializer/testing-eval-pipeline.md).
+Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on DeepSWE (Process 2). See [binary-initializer/user-guide.md](binary-initializer/user-guide.md) and [binary-initializer/testing-eval-pipeline.md](binary-initializer/testing-eval-pipeline.md).
 
 ```bash
 mac-k3d eval --stage p0
@@ -194,7 +194,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 | `--show-jenkins` | false | Print Jenkins URL and admin password |
 | `--skip-agent` | false | Worker: skip Jenkins agent register / launch-script update |
 | `--skip-job` | false | Skip creating Pipeline job `lolbench_one_task` when Jenkins is enabled |
-| `--skip-secrets` | false | Skip creating/updating Jenkins Credentials from pending secrets |
+| `--skip-secrets` | false | Skip creating/updating Jenkins Credentials from pending secrets; still lists existing IDs so job XML keeps `withCredentials` binds |
 | `--update-secrets` | false | Re-prompt for CI secrets even if credentials already exist |
 
 ### Behavior
@@ -203,7 +203,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
 4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with `EVAL_MODE` (`binary` / `source`), `ICODE_RELEASE`, `ICODE_GIT_URL`, `TASK`, `ICODE_ARGS`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md).
-5. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
+5. **Worker:** extract `~/.local/share/mac-k3d/pipeline` (does not overwrite `icode`); using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
 

@@ -17,6 +17,8 @@ Default worker Jenkins URL is `http://43.107.42.252:17070`. Type a new `http://<
 
 Developer checkout + `.env` is optional (appendix). Users run eval through Jenkins.
 
+iCode is an **agent harness**. The job measures whether the harness helps an LLM on DeepSWE (via Pier): **Arm A** = iCode + LLM (DeepSeek); **Arm B** = the same LLM **without** iCode (baseline). Compare pass@1 / resolved / tokens / time in the archived JSON.
+
 ---
 
 ## 1. Create the controller on the cloud
@@ -46,7 +48,7 @@ JENKINS_URL=http://127.0.0.1:17070 ./scripts/env_set_up/02_check_controller.sh
 If you already cloned this repo on the VM, run `02_check` from that checkout. After upgrading the binary, refresh the job XML:
 
 ```bash
-# Re-apply Jenkins jobs without re-entering secrets
+# Re-apply Jenkins jobs without re-entering secrets (keeps existing credential binds)
 export PATH="$HOME/.local/bin:$PATH"
 mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 ```
@@ -74,6 +76,10 @@ mac-k3d --help   # must list setup and eval
 # Harbor / LoLBench: No
 # Never run: mac-k3d start -c worker.yaml
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
+
+# Agent refresh without re-wizard also extracts ~/.local/share/mac-k3d/pipeline
+# (does not overwrite ~/.local/share/mac-k3d/icode)
+mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
 Linux without sudo will fail Docker install. As **root**, Docker is ready without a logout. As a normal user, log out/in after the `docker` group is added, then re-run `setup`. macOS: open **Docker Desktop** until it is idle.
@@ -172,7 +178,7 @@ mac-k3d eval --local --n-tasks 1 --icode-mode binary
 | Symptom | What to do |
 |---------|------------|
 | Waiting for executor | Worker node offline; do not `start -c worker.yaml` |
-| `pipeline/stages/run_all.sh` missing | Re-run worker `mac-k3d setup` (extracts `~/.local/share/mac-k3d/pipeline`) |
+| `pipeline/stages/run_all.sh` missing | Worker: `mac-k3d config -c worker.yaml` (extracts) **or** `mac-k3d eval --stage p0` |
 | iCode not found | Copy binary to `~/.local/share/mac-k3d/icode` |
 | `DEEPSEEK_API_KEY missing` on Jenkins | Add credential `deepseek-api-key` on the **controller** |
 | Disk/RAM preflight | Free space (`docker system df`); keep `N_TASKS=1` |

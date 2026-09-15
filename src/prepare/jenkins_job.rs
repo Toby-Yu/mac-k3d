@@ -362,6 +362,8 @@ fn eval_mode_choices(default_mode: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// Bind listed Jenkins credential IDs into the Pipeline. Empty IDs omit the block
+/// (`--skip-secrets` / `start` must pass IDs from `existing_ids_on_controller`, not `[]`).
 fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
     use crate::prepare::jenkins_credentials::CREDENTIAL_DEFS;
     let mut binds = Vec::new();
@@ -898,7 +900,7 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
               elif [ -f "$SHARE/pipeline/stages/run_all.sh" ]; then
                 ROOT="$SHARE"
               else
-                echo "MAC_K3D_ROOT missing pipeline/stages/run_all.sh. On this worker run: mac-k3d setup -c ~/.config/mac-k3d/worker.yaml" >&2
+                echo "MAC_K3D_ROOT missing pipeline/stages/run_all.sh. On this worker run: mac-k3d config -c worker.yaml (extracts ~/.local/share/mac-k3d/pipeline) or: mac-k3d eval --stage p0" >&2
                 exit 1
               fi
             fi
@@ -942,7 +944,7 @@ fn icode_eval_job_xml(credential_ids: &[String]) -> String {
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>iCode vs DeepSeek on DeepSWE via Pier. See docs/binary-initializer/workflow.md.</description>
+  <description>iCode is an agent harness. This job measures whether the harness helps an LLM on DeepSWE (via Pier): Arm A = iCode + LLM (DeepSeek); Arm B = the same LLM without iCode (baseline). Compare pass@1 / resolved / tokens / time in the archived JSON. See docs/binary-initializer/user-guide.md.</description>
   <keepDependencies>false</keepDependencies>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
     <script><![CDATA[{script}]]></script>
@@ -1095,9 +1097,32 @@ mod tests {
         assert!(xml.contains("DEEPSEEK_MODEL"));
         assert!(xml.contains("deepseek-v4-pro"));
         assert!(xml.contains("withCredentials"));
+        assert!(xml.contains("mac-k3d config -c worker.yaml"));
+        assert!(xml.contains("eval --stage p0"));
+        assert!(xml.contains("agent harness"));
+        assert!(xml.contains("without"));
+        assert!(xml.contains("user-guide"));
         assert!(
             !xml.contains("/home/Toby/Documents/Toby/iCode-main"),
             "job must not hardcode a lab iCode path"
         );
+    }
+
+    #[test]
+    fn icode_eval_xml_omits_bind_when_credential_ids_empty() {
+        let xml = icode_eval_job_xml(&[]);
+        assert!(
+            !xml.contains("withCredentials"),
+            "empty IDs must omit the bind"
+        );
+    }
+
+    #[test]
+    fn skip_secrets_must_pass_listed_ids_to_keep_bind() {
+        // --skip-secrets / start list existing IDs then call this helper; [] would strip the bind.
+        let xml = icode_eval_job_xml(&["deepseek-api-key".into()]);
+        assert!(xml.contains("withCredentials"));
+        assert!(xml.contains("deepseek-api-key"));
+        assert!(xml.contains("DEEPSEEK_API_KEY"));
     }
 }

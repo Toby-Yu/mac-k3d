@@ -26,7 +26,7 @@ pub struct ConfigArgs {
     #[arg(long)]
     pub skip_job: bool,
 
-    /// Skip creating/updating Jenkins Credentials from pending secrets
+    /// Skip creating/updating Jenkins Credentials; still list existing IDs for job binds
     #[arg(long)]
     pub skip_secrets: bool,
 
@@ -86,32 +86,67 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
     }
 
     let mut credential_ids = Vec::new();
-    if config.jenkins.enabled && !args.skip_secrets {
+    // --skip-secrets must list existing IDs before rewrite; empty Vec would strip withCredentials.
+    let mut rewrite_jobs = config.jenkins.enabled && !args.skip_job;
+    if config.jenkins.enabled {
         if let Some(password) = admin_password.as_deref() {
-            println!("Ensuring Jenkins Credentials…");
-            match jenkins_credentials::ensure_credentials_on_controller(
-                &jenkins::ui_url(config),
-                "admin",
-                password,
-                args.update_secrets,
-            ) {
-                Ok(ids) => {
-                    credential_ids = ids;
-                    if credential_ids.is_empty() {
+            if args.skip_secrets {
+                match jenkins_credentials::existing_ids_on_controller(
+                    &jenkins::ui_url(config),
+                    "admin",
+                    password,
+                ) {
+                    Ok(ids) => {
+                        if ids.is_empty() {
+                            println!(
+                                "No CI credentials listed in Jenkins yet; job XML will omit withCredentials binds."
+                            );
+                        } else {
+                            println!(
+                                "Keeping existing Jenkins credential binds ({} id(s)).",
+                                ids.len()
+                            );
+                        }
+                        credential_ids = ids;
+                    }
+                    Err(err) => {
                         println!(
-                            "No CI credentials in Jenkins yet (oracle still works).\n\
-                             Re-run with `--update-secrets` or set pending secrets — see docs/secrets.md."
+                            "Warning: could not list Jenkins credentials ({err}). Skipping job rewrite so existing binds stay."
                         );
+                        rewrite_jobs = false;
                     }
                 }
-                Err(err) => {
-                    println!("Warning: could not ensure Jenkins Credentials ({err}).");
+            } else {
+                println!("Ensuring Jenkins Credentials…");
+                match jenkins_credentials::ensure_credentials_on_controller(
+                    &jenkins::ui_url(config),
+                    "admin",
+                    password,
+                    args.update_secrets,
+                ) {
+                    Ok(ids) => {
+                        credential_ids = ids;
+                        if credential_ids.is_empty() {
+                            println!(
+                                "No CI credentials in Jenkins yet (oracle still works).\n\
+                                 Re-run with `--update-secrets` or set pending secrets — see docs/secrets.md."
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        println!("Warning: could not ensure Jenkins Credentials ({err}).");
+                    }
                 }
             }
+        } else if args.skip_secrets {
+            println!(
+                "Warning: could not read Jenkins admin password; skipping job rewrite so existing binds stay."
+            );
+            rewrite_jobs = false;
         }
     }
 
-    if config.jenkins.enabled && !args.skip_job {
+    if rewrite_jobs {
         println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
         if let Err(err) = jenkins_job::ensure_lolbench_one_task_from_cluster(
             &tools.kubectl,
@@ -134,6 +169,12 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
                 "Warning: could not ensure '{}' ({err}).",
                 jenkins_job::ICODE_EVAL
             );
+        }
+    }
+
+    if matches!(config.role, NodeRole::Worker) {
+        if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
+            println!("Warning: could not extract pipeline ({err}).");
         }
     }
 

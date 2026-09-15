@@ -291,7 +291,19 @@ pub fn ensure_credentials_on_controller(
     Ok(after)
 }
 
-fn list_credential_ids(base: &str, auth: &str) -> Result<Vec<String>> {
+/// IDs already stored on the controller. Does not prompt or upload secrets.
+/// Used by `--skip-secrets` and `start` so job rewrite keeps `withCredentials` binds.
+pub(crate) fn existing_ids_on_controller(
+    jenkins_url: &str,
+    api_user: &str,
+    api_token_or_password: &str,
+) -> Result<Vec<String>> {
+    let base = jenkins_url.trim_end_matches('/');
+    let auth = format!("{api_user}:{api_token_or_password}");
+    list_credential_ids(base, &auth)
+}
+
+pub(crate) fn list_credential_ids(base: &str, auth: &str) -> Result<Vec<String>> {
     let groovy = r#"
 import com.cloudbees.plugins.credentials.CredentialsProvider
 import com.cloudbees.plugins.credentials.common.StandardCredentials

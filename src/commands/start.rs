@@ -7,7 +7,7 @@ use crate::cli::JenkinsMode;
 use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::{Error, Result};
 use crate::platform::ensure_supported_os;
-use crate::prepare::jenkins_job;
+use crate::prepare::{jenkins_credentials, jenkins_job};
 use crate::runtime::docker::{self, DockerStatus};
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::kubectl;
@@ -102,26 +102,57 @@ pub async fn run(
         jenkins::install_or_upgrade(helm, &config).await?;
         println!("Jenkins UI: {}", jenkins::ui_url(&config));
         if !args.skip_job {
-            println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
-            // Best-effort: config will retry if Jenkins is still warming up.
-            if let Err(err) =
-                jenkins_job::ensure_lolbench_one_task_from_cluster(&tools.kubectl, &config, Vec::new())
-                    .await
-            {
-                println!(
-                    "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
-                    jenkins_job::LOLBENCH_ONE_TASK
-                );
-            }
-            println!("Ensuring Jenkins job '{}'…", jenkins_job::ICODE_EVAL);
-            if let Err(err) =
-                jenkins_job::ensure_icode_eval_from_cluster(&tools.kubectl, &config, Vec::new())
-                    .await
-            {
-                println!(
-                    "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
-                    jenkins_job::ICODE_EVAL
-                );
+            let credential_ids = match jenkins::admin_password(&tools.kubectl, &config).await {
+                Ok(password) if !password.is_empty() => {
+                    match jenkins_credentials::existing_ids_on_controller(
+                        &jenkins::ui_url(&config),
+                        "admin",
+                        &password,
+                    ) {
+                        Ok(ids) => Some(ids),
+                        Err(err) => {
+                            println!(
+                                "Note: could not list Jenkins credentials ({err}). Skipping job rewrite. Re-run `mac-k3d config`."
+                            );
+                            None
+                        }
+                    }
+                }
+                Ok(_) | Err(_) => {
+                    println!(
+                        "Note: could not read Jenkins admin password yet. Skipping job rewrite. Re-run `mac-k3d config`."
+                    );
+                    None
+                }
+            };
+            if let Some(credential_ids) = credential_ids {
+                println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
+                // Best-effort: config will retry if Jenkins is still warming up.
+                if let Err(err) = jenkins_job::ensure_lolbench_one_task_from_cluster(
+                    &tools.kubectl,
+                    &config,
+                    credential_ids.clone(),
+                )
+                .await
+                {
+                    println!(
+                        "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
+                        jenkins_job::LOLBENCH_ONE_TASK
+                    );
+                }
+                println!("Ensuring Jenkins job '{}'…", jenkins_job::ICODE_EVAL);
+                if let Err(err) = jenkins_job::ensure_icode_eval_from_cluster(
+                    &tools.kubectl,
+                    &config,
+                    credential_ids,
+                )
+                .await
+                {
+                    println!(
+                        "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
+                        jenkins_job::ICODE_EVAL
+                    );
+                }
             }
         }
     }

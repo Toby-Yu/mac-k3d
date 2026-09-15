@@ -70,6 +70,27 @@ pub fn ensure_share_pipeline() -> Result<PathBuf> {
     Ok(share)
 }
 
+fn icode_drop_present(share: &Path) -> bool {
+    share.join("icode").is_file() || Path::new("/opt/mac-k3d/icode").is_file()
+}
+
+/// Extract `pipeline/` into the share dir and print the path (plus an iCode drop hint if missing).
+/// Never writes into `share/icode`.
+pub fn ensure_share_pipeline_reported() -> Result<PathBuf> {
+    let share = ensure_share_pipeline()?;
+    let pipeline = share.join("pipeline");
+    if icode_drop_present(&share) {
+        println!("Extracted pipeline to {}", pipeline.display());
+    } else {
+        println!(
+            "Extracted pipeline to {}. {}",
+            pipeline.display(),
+            icode_drop_hint(&share)
+        );
+    }
+    Ok(share)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,6 +102,22 @@ mod tests {
             "pipeline/stages/run_all.sh must be embedded"
         );
         assert!(PIPELINE.get_file("lib/icode_pier_agent.py").is_some());
+    }
+
+    #[test]
+    fn extract_pipeline_does_not_touch_icode() {
+        let root = std::env::temp_dir().join(format!(
+            "mac-k3d-extract-icode-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let icode = root.join("icode");
+        std::fs::write(&icode, b"keep-me").unwrap();
+        extract_pipeline(&root).unwrap();
+        assert_eq!(std::fs::read(&icode).unwrap(), b"keep-me");
+        assert!(looks_like_root(&root));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
