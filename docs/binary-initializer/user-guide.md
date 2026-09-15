@@ -95,24 +95,39 @@ In Jenkins: **Manage Jenkins → Nodes**. This machine must be **online** with l
 
 ---
 
-## 3. Place the iCode binary (after setup, before eval)
+## 3. Place iCode on the worker (after setup, before eval)
+
+Two methods. New users use **A (binary)**. Type a Jenkins path only when the file or folder is **not** in a default location.
+
+### A. New user — binary (default)
+
+Use **one** of these files on the **worker**:
+
+- An executable named `icode` that runs `icode --help` on that machine **without** needing an extra git tree (standalone binary), **or**
+- A `*-full-*.tar.gz` / `*.tgz` that contains a file named `icode`
+
+Put it here so you can leave Jenkins paths empty:
 
 ```bash
-# Official drop path (no sudo)
 mkdir -p "$HOME/.local/share/mac-k3d"
-
-# Either copy the icode executable:
 cp /path/to/icode "$HOME/.local/share/mac-k3d/icode"
 chmod +x "$HOME/.local/share/mac-k3d/icode"
-
-# Or copy a -full- tarball into the same folder (name may vary):
-# cp /path/to/icode-*-full-*.tar.gz "$HOME/.local/share/mac-k3d/"
-
-# Optional system path (needs sudo):
-# sudo mkdir -p /opt/mac-k3d && sudo cp /path/to/icode /opt/mac-k3d/icode
+# or: cp /path/to/icode-*-full-*.tar.gz "$HOME/.local/share/mac-k3d/"
 ```
 
-Do **not** put the file inside `~/.local/share/mac-k3d/pipeline/` (that folder is extracted by `mac-k3d`).
+Optional (needs sudo): `/opt/mac-k3d/icode`. Do **not** put the file inside `~/.local/share/mac-k3d/pipeline/` (mac-k3d extracts that folder).
+
+Jenkins: `ICODE_MODE=binary`. Leave **`ICODE_RELEASE` and `ICODE_SOURCE` empty**.
+
+Type a path **only if** the file is not in those folders: set `ICODE_RELEASE` (or `mac-k3d eval --icode-release`) to a local path or an `https://…` URL. Still leave `ICODE_SOURCE` empty.
+
+A tiny Python wrapper copied from `.venv/bin/icode` still needs that venv on disk. Strangers should use a standalone `icode` or a `-full-` tarball.
+
+### B. Developer — source
+
+Use a **directory** (git checkout) that has `.venv/bin/icode` or `pyproject.toml` (then `uv sync` on the worker).
+
+Jenkins: `ICODE_MODE=source`. Leave `ICODE_RELEASE` empty. Leave **`ICODE_SOURCE` empty** only if the tree is one of: `$HOME/Documents/iCode-main`, `$HOME/iCode-main`, `$HOME/src/iCode-main`, or `iCode-main` next to the mac-k3d checkout. Otherwise paste the folder path, or `mac-k3d eval --icode-mode source --icode-source /path/to/iCode`.
 
 ---
 
@@ -134,6 +149,8 @@ Do **not** put the file inside `~/.local/share/mac-k3d/pipeline/` (that folder i
 | CPU_LOCK_QTY | `4` |
 | MAC_K3D_ROOT | empty |
 | DEEPSEEK_MODEL | `deepseek-v4-pro` |
+
+Source-mode users: set `ICODE_MODE=source` and fill `ICODE_SOURCE` only when the tree is not in the default list (see §3 B).
 
 3. Click **Build**. Console must say `Running on <this-worker-name>`.
 4. Download **Build Artifacts** → `eval-runs/reports/eval-icode-deepseek-deepswe-n1-*.json`.
@@ -188,4 +205,4 @@ mac-k3d eval --local --n-tasks 1 --icode-mode binary
 | `--yes` ran a local eval | Old CLI; install v0.5.0+ |
 | Job still `deepseek-chat` or Toby paths | Controller: install new binary, `config --skip-secrets` |
 
-E8 (N>1) is optional after N=1 is green. Lab operator notes: [cloud-eval-runbook.md](cloud-eval-runbook.md).
+E8 (N>1) is optional after N=1 is green. Lab operator notes: [cloud-eval-runbook.md](testing/cloud-eval-runbook.md).

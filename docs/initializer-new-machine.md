@@ -1,6 +1,6 @@
 # Initialize a new Linux or Mac computer
 
-This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Binary-initializer (`setup`, Release asset): [binary-initializer/binary-initializer-new-machine.md](binary-initializer/binary-initializer-new-machine.md).
+This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Binary-initializer (`setup`, Release asset): [binary-initializer/testing/binary-initializer-new-machine.md](binary-initializer/testing/binary-initializer-new-machine.md).
 
 **Users:** follow the command lists below to set up a blank machine.
 

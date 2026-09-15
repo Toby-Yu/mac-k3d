@@ -56,8 +56,8 @@ flowchart TD
 
 ## Process 1 — prepare the machine
 
-**User steps:** [binary-initializer-new-machine.md](binary-initializer-new-machine.md) · clean-machine walkthrough: [clean-machine-binary-test.md](clean-machine-binary-test.md)  
-**Pass/fail:** [testing-binary-initializer.md](testing-binary-initializer.md) (Task 0–5 + Task 7 on Linux; Task 6 macOS later) · automated checks: [`scripts/env_set_up/`](../../scripts/env_set_up/README.md)
+**User steps:** [binary-initializer-new-machine.md](testing/binary-initializer-new-machine.md) · clean-machine walkthrough: [clean-machine-binary-test.md](testing/clean-machine-binary-test.md)  
+**Pass/fail:** [testing-binary-initializer.md](testing/testing-binary-initializer.md) (Task 0–5 + Task 7 on Linux; Task 6 macOS later) · automated checks: [`scripts/env_set_up/`](../../scripts/env_set_up/README.md)
 
 | Step | What | Why |
 |------|------|-----|
@@ -75,7 +75,7 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 
 ## Process 2 — evaluation pipeline
 
-**Pass/fail per stage:** [testing-eval-pipeline.md](testing-eval-pipeline.md) (E0–E8 tracking; P0–P8 stage detail)
+**Pass/fail per stage:** [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) (E0–E8 tracking; P0–P8 stage detail)
 
 | Stage | What | Why |
 |-------|------|-----|
@@ -139,11 +139,11 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 
 | Doc | Role |
 |-----|------|
-| [binary-initializer-new-machine.md](binary-initializer-new-machine.md) | User bootstrap commands |
-| [clean-machine-binary-test.md](clean-machine-binary-test.md) | Clean PC → binary → controller/worker → eval-ready |
+| [binary-initializer-new-machine.md](testing/binary-initializer-new-machine.md) | User bootstrap commands |
+| [clean-machine-binary-test.md](testing/clean-machine-binary-test.md) | Clean PC → binary → controller/worker → eval-ready |
 | [`scripts/env_set_up/`](../../scripts/env_set_up/README.md) | Automated controller/worker/eval-ready checks |
-| [testing-binary-initializer.md](testing-binary-initializer.md) | Bootstrap sign-off |
-| [cloud-eval-runbook.md](cloud-eval-runbook.md) | Operator runbook: cloud root controller → local worker → JSON |
-| [testing-eval-pipeline.md](testing-eval-pipeline.md) | Pipeline stage CLI tests |
+| [testing-binary-initializer.md](testing/testing-binary-initializer.md) | Bootstrap sign-off |
+| [cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | Operator runbook: cloud root controller → local worker → JSON |
+| [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | Pipeline stage CLI tests |
 | [../secrets.md](../secrets.md) | Controller credentials (`deepseek-api-key`) |
 | [../lolbench-jenkins.md](../lolbench-jenkins.md) | Older `lolbench_one_task` job pointer |

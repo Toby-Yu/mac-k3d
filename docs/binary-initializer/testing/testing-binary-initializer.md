@@ -1,14 +1,14 @@
 # Binary-initializer testing (Mac + Linux)
 
-This is the **binary-initializer** path (`setup`, Release asset). Full workflow: [workflow.md](workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare` steps 0–7) is [../testing-initializer.md](../testing-initializer.md).
+This is the **binary-initializer** path (`setup`, Release asset). Full workflow: [workflow.md](../workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare` steps 0–7) is [../../testing-initializer.md](../../testing-initializer.md).
 
 Use this document to **verify** a prebuilt `mac-k3d` on macOS and Linux.
 
-**Linux bootstrap sign-off is Task 0–5, Task 7, and Task 8.** Task 6 is macOS (later). Eval pipeline (Task 9 / P1–P8): [testing-eval-pipeline.md](testing-eval-pipeline.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../scripts/env_set_up/run_all.sh).
+**Linux bootstrap sign-off is Task 0–5, Task 7, and Task 8.** Task 6 is macOS (later). Eval pipeline (Task 9 / P1–P8): [testing-eval-pipeline.md](testing-eval-pipeline.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../../scripts/env_set_up/run_all.sh).
 
 If live YAML already exists, `setup` shows **Config already exists** (Validate). To test as a **new user**, wipe first (Task 8a), then follow Task 8b / [clean-machine-binary-test.md](clean-machine-binary-test.md).
 
-Related design: [../prepare-wizard.md](../prepare-wizard.md), [../setup.md](../setup.md), [../commands.md](../commands.md).
+Related design: [../../prepare-wizard.md](../../prepare-wizard.md), [../../setup.md](../../setup.md), [../../commands.md](../../commands.md).
 
 ### Which document
 

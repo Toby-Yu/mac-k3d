@@ -2,9 +2,9 @@
 
 Operator path for **this lab**: Alibaba Cloud VM hosts Jenkins; this PC runs the jobs and writes the JSON.
 
-Pass/fail table and stage detail stay in [testing-eval-pipeline.md](testing-eval-pipeline.md). Product story: [workflow.md](workflow.md). User bootstrap: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
+Pass/fail table and stage detail stay in [testing-eval-pipeline.md](testing-eval-pipeline.md). Product story: [workflow.md](../workflow.md). User bootstrap: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
 
-**Users:** copy-paste commands in [user-guide.md](user-guide.md). This file is the **lab** runbook (this cloud IP + this PC).
+**Users:** copy-paste commands in [user-guide.md](../user-guide.md). This file is the **lab** runbook (this cloud IP + this PC).
 
 **Sign-off:** E0–E7 with `--n-tasks 1`. Harbor / LoLBench stay skip. After each phase, paste the checkpoint output before starting the next.
 

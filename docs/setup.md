@@ -8,7 +8,7 @@ For topology and scheduling design, see [deployment.md](deployment.md). For conf
 
 ## Prerequisites
 
-**Users:** download a Release binary and run `mac-k3d setup`. The wizard installs Docker (and k3d/kubectl/helm/Java) when you choose **Install**. See [binary-initializer/binary-initializer-new-machine.md](binary-initializer/binary-initializer-new-machine.md).
+**Users:** download a Release binary and run `mac-k3d setup`. The wizard installs Docker (and k3d/kubectl/helm/Java) when you choose **Install**. See [binary-initializer/testing/binary-initializer-new-machine.md](binary-initializer/testing/binary-initializer-new-machine.md).
 
 If auto-install fails: Linux `sudo apt-get install -y docker.io` then log out/in; macOS Homebrew + `brew install --cask docker` (or Docker Desktop from docker.com) and open the app.
 
@@ -16,7 +16,7 @@ If auto-install fails: Linux `sudo apt-get install -y docker.io` then log out/in
 
 ## Install mac-k3d
 
-**Users:** download a GitHub Release binary (`mac-k3d-{os}-{arch}`), `chmod +x`, run it in Terminal (`mac-k3d setup`). See [binary-initializer/binary-initializer-new-machine.md](binary-initializer/binary-initializer-new-machine.md). Rust is not required.
+**Users:** download a GitHub Release binary (`mac-k3d-{os}-{arch}`), `chmod +x`, run it in Terminal (`mac-k3d setup`). See [binary-initializer/testing/binary-initializer-new-machine.md](binary-initializer/testing/binary-initializer-new-machine.md). Rust is not required.
 
 **Developers** from the repository:
 

@@ -1,10 +1,10 @@
 # Initialize a new Linux or Mac (binary-initializer)
 
-This is the **binary-initializer** path (`setup`, GitHub Release asset). Full story (bootstrap → iCode eval): [workflow.md](workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare`) is [../initializer-new-machine.md](../initializer-new-machine.md).
+This is the **binary-initializer** path (`setup`, GitHub Release asset). Full story (bootstrap → iCode eval): [workflow.md](../workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare`) is [../../initializer-new-machine.md](../../initializer-new-machine.md).
 
 **Users:** download a Release binary from this repo and run it. The binary installs Docker (and the rest) when you choose **Install**. After Jenkins is up, run `mac-k3d eval` for DeepSWE / iCode / DeepSeek ([testing-eval-pipeline.md](testing-eval-pipeline.md)).
 
-**Developers:** pass/fail checks live in [testing-binary-initializer.md](testing-binary-initializer.md). Clean-machine walkthrough + automated scripts: [clean-machine-binary-test.md](clean-machine-binary-test.md) and [`scripts/env_set_up/`](../../scripts/env_set_up/README.md).
+**Developers:** pass/fail checks live in [testing-binary-initializer.md](testing-binary-initializer.md). Clean-machine walkthrough + automated scripts: [clean-machine-binary-test.md](clean-machine-binary-test.md) and [`scripts/env_set_up/`](../../../scripts/env_set_up/README.md).
 
 One CLI (`mac-k3d`) on Linux and macOS.
 
@@ -60,7 +60,7 @@ Do **not** pick “Local development only” if you need Jenkins or an agent.
 
 Developers building from git still use `cargo build --release` (see [testing-binary-initializer.md](testing-binary-initializer.md)).
 
-Store the DeepSeek API key on the **controller** when prompted for CI secrets (credential id `deepseek-api-key`), or later via Jenkins Credentials — see [../secrets.md](../secrets.md). Workers do not keep a local copy of that key.
+Store the DeepSeek API key on the **controller** when prompted for CI secrets (credential id `deepseek-api-key`), or later via Jenkins Credentials — see [../../secrets.md](../../secrets.md). Workers do not keep a local copy of that key.
 
 ---
 
@@ -94,12 +94,12 @@ Open **http://localhost:17070** (or `http://<this-machine>:17070`). Username **a
 | k3d agent nodes | `0` |
 | Jenkins UI host port | `17070` |
 | Job defaults | Defaults are fine |
-| Enter CI secrets now? | **yes** if you have `deepseek-api-key` (needed for `mac-k3d eval`); else **no** and add later ([../secrets.md](../secrets.md)) |
+| Enter CI secrets now? | **yes** if you have `deepseek-api-key` (needed for `mac-k3d eval`); else **no** and add later ([../../secrets.md](../../secrets.md)) |
 | Write configuration? | **yes** |
 
 Do **not** use `worker.yaml` with `start`. `start` is for the controller file only.
 
-After Jenkins is healthy, run evaluations with `mac-k3d eval` (see [workflow.md](workflow.md)).
+After Jenkins is healthy, run evaluations with `mac-k3d eval` (see [workflow.md](../workflow.md)).
 
 ---
 

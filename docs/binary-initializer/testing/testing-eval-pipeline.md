@@ -1,12 +1,12 @@
 # Testing the iCode eval pipeline (P0–P8 / E0–E8)
 
 Per-stage CLI checks for Process 2 (DeepSWE + Pier + iCode vs DeepSeek V4 Pro baseline).  
-Machine bootstrap first: [testing-binary-initializer.md](testing-binary-initializer.md) and [workflow.md](workflow.md).  
-**This lab (cloud root + this PC):** copy-paste phases and flowcharts in [cloud-eval-runbook.md](cloud-eval-runbook.md). **Users:** [user-guide.md](user-guide.md).
+Machine bootstrap first: [testing-binary-initializer.md](testing-binary-initializer.md) and [workflow.md](../workflow.md).  
+**This lab (cloud root + this PC):** copy-paste phases and flowcharts in [cloud-eval-runbook.md](cloud-eval-runbook.md). **Users:** [user-guide.md](../user-guide.md).
 
 **Sign-off:** pass **E0–E7** with `--n-tasks 1` (Harbor/LoLBench stay skip). E8 is optional N>1. Keep P0–P4 cheap (no LLM).
 
-Scripts live under [`pipeline/stages/`](../../pipeline/stages/). Helpers under [`pipeline/lib/`](../../pipeline/lib/). The CLI wraps them:
+Scripts live under [`pipeline/stages/`](../../../pipeline/stages/). Helpers under [`pipeline/lib/`](../../../pipeline/lib/). The CLI wraps them:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -97,7 +97,7 @@ Schema unit test (no network): `python3 eval/test_report.py`
 
 ## JSON report fields
 
-Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py) at P7/P8. Validate with [`pipeline/stages/check_report.sh`](../../pipeline/stages/check_report.sh).
+Written by [`pipeline/lib/score_results.py`](../../../pipeline/lib/score_results.py) at P7/P8. Validate with [`pipeline/stages/check_report.sh`](../../../pipeline/stages/check_report.sh).
 
 | Field | Meaning |
 |-------|---------|
@@ -232,7 +232,7 @@ mac-k3d eval --n-tasks 1 --icode-mode source --model deepseek-v4-pro
 |---------|------------|
 | pier not found | `uv tool install datacurve-pier` or `uv tool install git+https://github.com/datacurve-ai/pier` |
 | DeepSWE clone fails | Network / git; retry P2 |
-| DEEPSEEK_API_KEY missing | Copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller ([secrets.md](../secrets.md)) |
+| DEEPSEEK_API_KEY missing | Copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller ([secrets.md](../../secrets.md)) |
 | No such option: --agent-dir | Pier 0.3.1 has no `--agent-dir`. Use this tree’s `--agent-import-path icode_pier_agent:ICodeAgent` |
 | Docker OOM / disk | DeepSWE images are large; free disk; lower N |
 | Worker offline | Finish E1; for local-only tests use `--local` |

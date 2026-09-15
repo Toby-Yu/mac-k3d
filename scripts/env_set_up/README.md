@@ -2,7 +2,7 @@
 
 Automated **verify + light smoke** scripts for the binary-initializer path. They download the Release `mac-k3d` binary and assert that this computer’s Jenkins **controller**, **worker**, and **eval-ready** state look healthy.
 
-They do **not** replace interactive `mac-k3d setup` (wizard needs a TTY for role, secrets, and API token). Human bootstrap steps: [docs/binary-initializer/clean-machine-binary-test.md](../../docs/binary-initializer/clean-machine-binary-test.md).
+They do **not** replace interactive `mac-k3d setup` (wizard needs a TTY for role, secrets, and API token). Human bootstrap steps: [docs/binary-initializer/testing/clean-machine-binary-test.md](../../docs/binary-initializer/testing/clean-machine-binary-test.md).
 
 Default Jenkins UI: **`http://localhost:17070`**.
 
@@ -109,7 +109,7 @@ OK eval-ready — safe to start an evaluation task …
 OK 04_check_eval_ready complete
 ```
 
-Does **not** prove DeepSeek credentials or full P5–P8. For those see [testing-eval-pipeline.md](../../docs/binary-initializer/testing-eval-pipeline.md).
+Does **not** prove DeepSeek credentials or full P5–P8. For those see [testing-eval-pipeline.md](../../docs/binary-initializer/testing/testing-eval-pipeline.md).
 
 ### `run_all.sh`
 

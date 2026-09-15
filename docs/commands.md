@@ -46,7 +46,7 @@ Keep `prepare` / `start` / `config` for power users. Controller `config`/`start`
 
 ## `eval`
 
-Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on DeepSWE (Process 2). See [binary-initializer/user-guide.md](binary-initializer/user-guide.md) and [binary-initializer/testing-eval-pipeline.md](binary-initializer/testing-eval-pipeline.md).
+Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on DeepSWE (Process 2). See [binary-initializer/user-guide.md](binary-initializer/user-guide.md) and [binary-initializer/testing/testing-eval-pipeline.md](binary-initializer/testing/testing-eval-pipeline.md).
 
 ```bash
 mac-k3d eval --stage p0

@@ -18,7 +18,7 @@ Leftovers it cannot hide:
 - **sudo** / brew for package install
 - **Worker:** paste a Jenkins API token from the UI
 
-If auto-install fails, install Docker yourself and re-run setup ([docs/binary-initializer/binary-initializer-new-machine.md](docs/binary-initializer/binary-initializer-new-machine.md)).
+If auto-install fails, install Docker yourself and re-run setup ([docs/binary-initializer/testing/binary-initializer-new-machine.md](docs/binary-initializer/testing/binary-initializer-new-machine.md)).
 
 ## Install (users)
 
@@ -38,7 +38,7 @@ mkdir -p ~/.local/bin
 cp mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
 ```
 
-Open **Terminal** (do not rely on double-click). **Start here (controller + worker + eval):** [docs/binary-initializer/user-guide.md](docs/binary-initializer/user-guide.md). Extra walkthrough: [docs/binary-initializer/binary-initializer-new-machine.md](docs/binary-initializer/binary-initializer-new-machine.md).
+Open **Terminal** (do not rely on double-click). **Start here (controller + worker + eval):** [docs/binary-initializer/user-guide.md](docs/binary-initializer/user-guide.md). Extra walkthrough: [docs/binary-initializer/testing/binary-initializer-new-machine.md](docs/binary-initializer/testing/binary-initializer-new-machine.md).
 
 v0.3.0 cargo/`prepare` path: [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
 
@@ -93,9 +93,9 @@ See [docs/configuration.md](docs/configuration.md) for the full schema.
 - [Deployment](docs/deployment.md)
 - [Setup guide](docs/setup.md)
 - [Binary-initializer workflow](docs/binary-initializer/workflow.md)
-- [Binary-initializer (new machine)](docs/binary-initializer/binary-initializer-new-machine.md)
-- [Binary-initializer testing](docs/binary-initializer/testing-binary-initializer.md)
-- [Eval pipeline testing (P0–P8)](docs/binary-initializer/testing-eval-pipeline.md)
+- [Binary-initializer (new machine)](docs/binary-initializer/testing/binary-initializer-new-machine.md)
+- [Binary-initializer testing](docs/binary-initializer/testing/testing-binary-initializer.md)
+- [Eval pipeline testing (P0–P8)](docs/binary-initializer/testing/testing-eval-pipeline.md)
 - [Initialize a new Linux or Mac (v0.3.0)](docs/initializer-new-machine.md)
 - [Prepare wizard](docs/prepare-wizard.md)
 - [Initializer testing checklist (v0.3.0)](docs/testing-initializer.md)
