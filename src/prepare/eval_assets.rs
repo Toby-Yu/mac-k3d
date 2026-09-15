@@ -39,9 +39,87 @@ pub fn share_dir() -> PathBuf {
 
 pub fn icode_drop_hint(share: &Path) -> String {
     format!(
-        "Place the iCode binary or *-full-*.tar.gz at {}/icode (or /opt/mac-k3d/icode)",
+        "Place icode or icode-<os>-<arch>-full-vX.Y.Z (.tar.gz, same name, or unpacked folder) in {} (or /opt/mac-k3d/)",
         share.display()
     )
+}
+
+fn dir_has_named_icode(dir: &Path) -> bool {
+    fn walk(d: &Path, depth: u32) -> bool {
+        if depth > 6 {
+            return false;
+        }
+        let Ok(rd) = std::fs::read_dir(d) else {
+            return false;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_file() && p.file_name().and_then(|s| s.to_str()) == Some("icode") {
+                return true;
+            }
+            if p.is_dir() && walk(&p, depth + 1) {
+                return true;
+            }
+        }
+        false
+    }
+    dir.join("icode").is_file() || walk(dir, 0)
+}
+
+/// File named `icode`, archive, `*-full-*` file, or `*-full-*` directory with `icode` inside.
+pub fn looks_like_icode_release(path: &Path) -> bool {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if path.is_dir() {
+        return name.contains("-full-") && dir_has_named_icode(path);
+    }
+    if !path.is_file() {
+        return false;
+    }
+    name == "icode"
+        || name.ends_with(".tar.gz")
+        || name.ends_with(".tgz")
+        || name.contains("-full-")
+}
+
+fn first_full_drop(dir: &Path) -> Option<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return None;
+    };
+    let mut found: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name == "icode" || name == "pipeline" {
+                return false;
+            }
+            looks_like_icode_release(p)
+                && (name.contains("-full-") || name.ends_with(".tar.gz") || name.ends_with(".tgz"))
+        })
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+/// Search one directory: official `*-full-*` / archives first, then a file named `icode`.
+pub fn discover_icode_release_in(dir: &Path) -> Option<PathBuf> {
+    if let Some(p) = first_full_drop(dir) {
+        return Some(p);
+    }
+    let named = dir.join("icode");
+    if looks_like_icode_release(&named) {
+        return Some(named);
+    }
+    None
+}
+
+/// Share dir first (`MAC_K3D_SHARE`), then `/opt/mac-k3d`.
+pub fn discover_icode_release() -> Option<PathBuf> {
+    let share = share_dir();
+    if let Some(p) = discover_icode_release_in(&share) {
+        return Some(p);
+    }
+    discover_icode_release_in(Path::new("/opt/mac-k3d"))
 }
 
 /// Extract embedded pipeline/ into `root/pipeline/` without touching `root/icode`.
@@ -71,7 +149,8 @@ pub fn ensure_share_pipeline() -> Result<PathBuf> {
 }
 
 fn icode_drop_present(share: &Path) -> bool {
-    share.join("icode").is_file() || Path::new("/opt/mac-k3d/icode").is_file()
+    discover_icode_release_in(share).is_some()
+        || discover_icode_release_in(Path::new("/opt/mac-k3d")).is_some()
 }
 
 /// Extract `pipeline/` into the share dir and print the path (plus an iCode drop hint if missing).
@@ -130,5 +209,62 @@ mod tests {
             None => std::env::remove_var("MAC_K3D_SHARE"),
         }
         assert_eq!(got, PathBuf::from("/tmp/mac-k3d-share-test"));
+    }
+
+    #[test]
+    fn discover_official_full_release_in_share() {
+        let dir = std::env::temp_dir().join(format!(
+            "mac-k3d-full-drop-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tar = dir.join("icode-linux-x86_64-full-v0.1.41.tar.gz");
+        std::fs::write(&tar, b"not-a-real-archive").unwrap();
+        let got = discover_icode_release_in(&dir).expect("find *-full-*.tar.gz");
+        assert_eq!(got, tar);
+
+        let bare_dir = dir.join("icode-linux-x86_64-full-v0.1.41");
+        std::fs::remove_file(&tar).unwrap();
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        std::fs::write(bare_dir.join("icode"), b"#!/bin/sh\n").unwrap();
+        let got = discover_icode_release_in(&dir).expect("find unpacked *-full-* dir");
+        assert_eq!(got, bare_dir);
+
+        std::fs::remove_dir_all(&bare_dir).unwrap();
+        std::fs::write(dir.join("notes.txt"), b"nope").unwrap();
+        assert!(discover_icode_release_in(&dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn looks_like_official_full_name_without_suffix() {
+        let dir = std::env::temp_dir().join(format!(
+            "mac-k3d-full-bare-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bare = dir.join("icode-linux-x86_64-full-v0.1.41");
+        std::fs::write(&bare, b"\x1f\x8bgzip-stub").unwrap();
+        assert!(looks_like_icode_release(&bare));
+        assert!(!looks_like_icode_release(&dir.join("notes.txt")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discover_prefers_full_release_over_named_icode() {
+        let dir = std::env::temp_dir().join(format!(
+            "mac-k3d-full-vs-icode-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("icode"), b"#!/bin/sh\n# leftover wrapper\n").unwrap();
+        let tar = dir.join("icode-linux-x86_64-full-v0.1.41.tar.gz");
+        std::fs::write(&tar, b"stub").unwrap();
+        let got = discover_icode_release_in(&dir).expect("prefer *-full-*");
+        assert_eq!(got, tar);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

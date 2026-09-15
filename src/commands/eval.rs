@@ -25,7 +25,7 @@ pub struct EvalArgs {
     #[arg(long, default_value = "binary")]
     pub icode_mode: String,
 
-    /// Path or URL to icode -full- tarball / binary (ICODE_MODE=binary)
+    /// Official iCode *-full-* path/URL, or empty to discover under ~/.local/share/mac-k3d/
     #[arg(long)]
     pub icode_release: Option<String>,
 
@@ -104,8 +104,11 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             .interact_text()
             .map_err(|_| Error::Cancelled)?;
         let mode_idx = Select::with_theme(&theme)
-            .with_prompt("iCode input")
-            .items(&["binary (drop file under ~/.local/share/mac-k3d/icode)", "source (developer git tree)"])
+            .with_prompt("iCode delivery")
+            .items(&[
+                "binary (official *-full-* or icode under ~/.local/share/mac-k3d/)",
+                "source (developer git tree)",
+            ])
             .default(if icode_mode == "source" { 1 } else { 0 })
             .interact()
             .map_err(|_| Error::Cancelled)?;
@@ -122,8 +125,9 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
                 .map_err(|_| Error::Cancelled)?;
         } else {
             icode_release = Input::with_theme(&theme)
-                .with_prompt("ICODE_RELEASE (URL or path)")
+                .with_prompt("ICODE_RELEASE (empty if already in ~/.local/share/mac-k3d/)")
                 .default(icode_release)
+                .allow_empty(true)
                 .interact_text()
                 .map_err(|_| Error::Cancelled)?;
         }
@@ -209,48 +213,10 @@ fn looks_like_icode(path: &Path) -> bool {
         && (path.join(".venv/bin/icode").is_file() || path.join("pyproject.toml").is_file())
 }
 
-fn looks_like_icode_file(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    path.is_file()
-        && (name == "icode"
-            || name.ends_with(".tar.gz")
-            || name.ends_with(".tgz")
-            || name.contains("-full-"))
-}
-
 fn discover_icode_release() -> String {
-    let share = crate::prepare::eval_assets::share_dir();
-    let candidates = [
-        share.join("icode"),
-        PathBuf::from("/opt/mac-k3d/icode"),
-    ];
-    for c in &candidates {
-        if looks_like_icode_file(c) {
-            return c.display().to_string();
-        }
-    }
-    for dir in [share, PathBuf::from("/opt/mac-k3d")] {
-        if let Ok(rd) = std::fs::read_dir(&dir) {
-            let mut tars: Vec<PathBuf> = rd
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.is_file()
-                        && p.file_name()
-                            .and_then(|s| s.to_str())
-                            .is_some_and(|n| n.contains("full") && (n.ends_with(".tar.gz") || n.ends_with(".tgz")))
-                })
-                .collect();
-            tars.sort();
-            if let Some(p) = tars.into_iter().next() {
-                return p.display().to_string();
-            }
-        }
-    }
-    String::new()
+    crate::prepare::eval_assets::discover_icode_release()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
 }
 
 fn discover_icode_source(repo: &Path) -> PathBuf {
@@ -392,12 +358,17 @@ fn trigger_jenkins_icode_eval(
         })?;
 
     let base = url.trim_end_matches('/');
+    let source_q = if icode_mode == "binary" {
+        ""
+    } else {
+        icode_source
+    };
     let build_url = format!(
         "{base}/job/icode_eval/buildWithParameters?\
          HARNESS=icode&LLM=deepseek&BENCHMARK=deepswe&N_TASKS={n_tasks}\
          &ICODE_MODE={icode_mode}&ICODE_RELEASE={}&ICODE_SOURCE={}&DEEPSEEK_MODEL={}",
         urlencoding_simple(icode_release),
-        urlencoding_simple(icode_source),
+        urlencoding_simple(source_q),
         urlencoding_simple(model),
     );
 
@@ -485,6 +456,27 @@ mod tests {
             None => std::env::remove_var("MAC_K3D_SHARE"),
         }
         assert!(got.is_empty() || !got.contains("Documents/Toby/mac-k3d"));
+    }
+
+    #[test]
+    fn discover_icode_release_finds_full_tarball_in_share() {
+        let dir = std::env::temp_dir().join(format!(
+            "mac-k3d-eval-full-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tar = dir.join("icode-linux-x86_64-full-v0.1.41.tar.gz");
+        std::fs::write(&tar, b"stub").unwrap();
+        let prev = std::env::var_os("MAC_K3D_SHARE");
+        std::env::set_var("MAC_K3D_SHARE", &dir);
+        let got = discover_icode_release();
+        match prev {
+            Some(v) => std::env::set_var("MAC_K3D_SHARE", v),
+            None => std::env::remove_var("MAC_K3D_SHARE"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(got, tar.display().to_string());
     }
 
     #[test]

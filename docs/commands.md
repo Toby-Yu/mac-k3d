@@ -34,13 +34,13 @@ Global `-c / --config` is honored.
 
 1. Run `prepare` (wizard if no config / TTY; existing-config menu if a file already exists).
 2. Prompt **Continue and apply now?**
-3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, job `lolbench_one_task`).
+3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, eval job `icode_eval`).
 4. **Worker:** `config` only (Jenkins agent). Does **not** run `start`.
 5. Print role, config path, Jenkins URL, agent unit/LaunchAgent name.
 
 If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
 
-Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` also ensure Jenkins jobs `lolbench_one_task` and `icode_eval`.
+Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure eval job `icode_eval` (and may still create leftover `lolbench_one_task` — do not use it for DeepSWE).
 
 ---
 
@@ -62,8 +62,8 @@ mac-k3d eval                         # interactive → local or Jenkins icode_ev
 | `--stage p0..p8` | Run one stage script under `pipeline/stages/` |
 | `--local` | Full local `run_all.sh` (no Jenkins) |
 | `--n-tasks N` | Number of DeepSWE tasks (default 1) |
-| `--icode-mode source\|binary` | Users: `binary` (drop file). Developers: `source` |
-| `--icode-release PATH\|URL` | Binary mode; empty discovers `~/.local/share/mac-k3d/icode` |
+| `--icode-mode source\|binary` | Users: `binary` (iCode release drop). Developers: `source` |
+| `--icode-release PATH\|URL` | Binary mode; empty discovers `~/.local/share/mac-k3d/icode-*-full-*` or `icode` |
 | `--icode-source PATH` | Source tree (developer); discovered if unset |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
 | `--model ID` | DeepSeek model id (default `deepseek-v4-pro`, env `DEEPSEEK_MODEL`) |

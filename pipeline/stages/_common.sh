@@ -139,44 +139,110 @@ _icode_tree_ok() {
   [ -x "$1/.venv/bin/icode" ] || [ -f "$1/pyproject.toml" ]
 }
 
-_icode_bin_or_tarball() {
-  local p="$1"
+_icode_gzip_magic() {
+  local hex
+  [ -f "$1" ] || return 1
+  hex="$(od -An -tx1 -N2 "$1" 2>/dev/null | tr -d ' \n')"
+  [ "$hex" = "1f8b" ]
+}
+
+_icode_ustar_magic() {
+  [ -f "$1" ] || return 1
+  dd if="$1" bs=1 skip=257 count=5 2>/dev/null | grep -q ustar
+}
+
+# Gzip/tar by suffix or magic (HTTP saves as icode-release.bin; browsers drop .tar.gz).
+_icode_is_archive() {
+  local base
+  [ -f "$1" ] || return 1
+  base="$(basename "$1")"
+  case "$base" in
+    *.tar.gz|*.tgz) return 0 ;;
+  esac
+  _icode_gzip_magic "$1" || _icode_ustar_magic "$1"
+}
+
+_icode_dir_has_icode() {
+  local f
+  [ -d "$1" ] || return 1
+  [ -f "$1/icode" ] && return 0
+  f="$(find "$1" -type f -name icode -print -quit 2>/dev/null || true)"
+  [ -n "$f" ]
+}
+
+# Discoverable drop: icode file, archive, *-full-* file, or *-full-* dir with icode inside.
+_icode_release_ok() {
+  local p="$1" base
   [ -n "$p" ] || return 1
-  if [ -f "$p" ] && [ -x "$p" ]; then
-    echo "$p"
+  if [ -d "$p" ]; then
+    _icode_dir_has_icode "$p" || return 1
+    [[ "$(basename "$p")" == *-full-* ]] || return 1
     return 0
   fi
-  if [ -f "$p" ] && [[ "$(basename "$p")" == *.tar.gz || "$(basename "$p")" == *.tgz ]]; then
+  [ -f "$p" ] || return 1
+  base="$(basename "$p")"
+  [ "$base" = "icode" ] && return 0
+  case "$base" in
+    *.tar.gz|*.tgz) return 0 ;;
+  esac
+  [[ "$base" == *-full-* ]]
+}
+
+_icode_bin_or_tarball() {
+  local p="$1"
+  if _icode_release_ok "$p"; then
     echo "$p"
     return 0
   fi
   return 1
 }
 
-# Official user drop: ~/.local/share/mac-k3d/icode or *-full-*.tar.gz. Fallback /opt/mac-k3d/.
+# Official user drop: icode-*-full-* first, then a file named icode. Fallback /opt/mac-k3d/.
 discover_icode_release() {
   local c d
   if [ -n "${ICODE_RELEASE:-}" ]; then
     echo "$ICODE_RELEASE"
     return 0
   fi
-  for c in \
-    "$MAC_K3D_SHARE/icode" \
-    /opt/mac-k3d/icode
-  do
-    if _icode_bin_or_tarball "$c"; then
+  for d in "$MAC_K3D_SHARE" /opt/mac-k3d; do
+    [ -d "$d" ] || continue
+    for c in "$d"/*-full-*.tar.gz "$d"/*.tgz "$d"/*full*.tar.gz "$d"/*-full-*; do
+      [ -e "$c" ] || continue
+      if _icode_bin_or_tarball "$c"; then
+        return 0
+      fi
+    done
+    if _icode_bin_or_tarball "$d/icode"; then
       return 0
     fi
   done
-  for d in "$MAC_K3D_SHARE" /opt/mac-k3d; do
-    [ -d "$d" ] || continue
-    for c in "$d"/*-full-*.tar.gz "$d"/*.tgz "$d"/*full*.tar.gz; do
-      [ -f "$c" ] || continue
-      echo "$c"
-      return 0
-    done
-  done
   return 1
+}
+
+# Copy or unpack ICODE_RELEASE into $2. Explicit dirs need a file named icode (any folder name).
+install_icode_release() {
+  local src="$1" unpack="$2" base
+  [ -e "$src" ] || die "ICODE_RELEASE not found: $src"
+  if [ -d "$src" ]; then
+    _icode_dir_has_icode "$src" || die "ICODE_RELEASE directory has no file named icode: $src"
+    cp -a "$src"/. "$unpack"/
+    return 0
+  fi
+  [ -f "$src" ] || die "ICODE_RELEASE not found: $src"
+  if _icode_is_archive "$src"; then
+    if _icode_gzip_magic "$src" || [[ "$(basename "$src")" == *.tar.gz || "$(basename "$src")" == *.tgz ]]; then
+      tar -xzf "$src" -C "$unpack"
+    else
+      tar -xf "$src" -C "$unpack"
+    fi
+    return 0
+  fi
+  base="$(basename "$src")"
+  if [ "$base" != "icode" ] && [[ "$base" != *-full-* ]]; then
+    die "ICODE_RELEASE is not an icode binary or *-full-* release: $src"
+  fi
+  cp "$src" "$unpack/icode"
+  chmod +x "$unpack/icode" || true
 }
 
 # Developer source tree. Toby's lab path is a candidate only if it exists.

@@ -1,8 +1,15 @@
 # User guide: cloud controller, worker, and eval
 
-Copy-paste these blocks. Every command has a `#` comment. Prefer GitHub **Latest** **v0.5.0** (or newer) so the installed CLI matches this tree.
+Copy-paste these blocks. Every command has a `#` comment.
 
-Harbor / LoLBench stay **skip**. Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
+Two different downloads:
+
+- **mac-k3d CLI** — GitHub asset `mac-k3d-linux-x86_64` (or `linux-aarch64` / `darwin-aarch64` / `darwin-x86_64`). Used in steps 1–2.
+- **iCode release** — official `icode-<os>-<arch>-full-vX.Y.Z` from the iCode project. Used in step 3 on the **worker only**. Not the same file as mac-k3d.
+
+Prefer a mac-k3d build that extracts this tree’s `pipeline/` (this checkout’s `cargo build --release`, or a Release **newer than v0.5.0**). Published **v0.5.0** Latest still has the old P3: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs the newer pipeline.
+
+Harbor / LoLBench stay **skip**. The eval job is **`icode_eval`** (DeepSWE). Do not use `lolbench_one_task`. Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
 
 Default worker Jenkins URL is `http://43.107.42.252:17070`. Type a new `http://<ip>:17070` when you buy another controller.
 
@@ -12,8 +19,8 @@ Default worker Jenkins URL is `http://43.107.42.252:17070`. Type a new `http://<
 
 - Cloud Linux VM (this lab: `43.107.42.252`) with **root**, ~8 GB RAM, **60 GB** free, security group **17070** open to the worker.
 - New Mac or Linux worker with **sudo** (Linux may be a single root account), ~8 GB RAM, **40 GB** free, Docker allowed.
-- An iCode **binary** or `*-full-*.tar.gz` to copy after setup.
-- GitHub asset matching the machine (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, `mac-k3d-darwin-x86_64`).
+- **mac-k3d CLI** GitHub asset matching the machine (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, `mac-k3d-darwin-x86_64`).
+- **iCode release** `icode-<os>-<arch>-full-vX.Y.Z` (or a standalone executable named `icode`) to copy onto the worker **after** setup, before eval.
 
 Developer checkout + `.env` is optional (appendix). Users run eval through Jenkins.
 
@@ -27,11 +34,11 @@ iCode is an **agent harness**. The job measures whether the harness helps an LLM
 # SSH to the cloud VM as root (use your IP if it is not this lab)
 ssh root@43.107.42.252
 
-# Put the Release binary on PATH
+# Put the mac-k3d CLI on PATH (not the iCode release)
 export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$HOME/.local/bin"
 
-# Download the Linux asset from the pre-release (change tag/arch if needed)
+# Download the mac-k3d CLI (change tag/arch if needed)
 curl -fsSL -o /tmp/mac-k3d \
   "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.0/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
@@ -60,7 +67,7 @@ Open `http://43.107.42.252:17070` (or your IP). User **admin**. Password from `m
 ## 2. Create a worker on a new Mac or Linux
 
 ```bash
-# On the worker: Release binary on PATH
+# On the worker: mac-k3d CLI on PATH (not the iCode release)
 export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$HOME/.local/bin"
 # Linux x86_64 example — pick darwin-aarch64 / linux-aarch64 as needed
@@ -78,7 +85,7 @@ mac-k3d --help   # must list setup and eval
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 
 # Agent refresh without re-wizard also extracts ~/.local/share/mac-k3d/pipeline
-# (does not overwrite ~/.local/share/mac-k3d/icode)
+# Does not overwrite an iCode drop (icode or icode-*-full-*) in that folder
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
@@ -95,33 +102,36 @@ In Jenkins: **Manage Jenkins → Nodes**. This machine must be **online** with l
 
 ---
 
-## 3. Place iCode on the worker (after setup, before eval)
+## 3. Place the iCode release on the worker (after the node is Online, before eval)
 
-Two methods. New users use **A (binary)**. Type a Jenkins path only when the file or folder is **not** in a default location.
+Do this on the **worker**, not the cloud controller. New users use **A**. Type a Jenkins path only when the file is **not** in the drop folder.
 
 ### A. New user — binary (default)
 
-Use **one** of these files on the **worker**:
-
-- An executable named `icode` that runs `icode --help` on that machine **without** needing an extra git tree (standalone binary), **or**
-- A `*-full-*.tar.gz` / `*.tgz` that contains a file named `icode`
-
-Put it here so you can leave Jenkins paths empty:
+Put **one** official iCode download into `~/.local/share/mac-k3d/` (keep the name GitHub/GitCode gave it; do not invent a `.tar.gz` suffix):
 
 ```bash
 mkdir -p "$HOME/.local/share/mac-k3d"
-cp /path/to/icode "$HOME/.local/share/mac-k3d/icode"
-chmod +x "$HOME/.local/share/mac-k3d/icode"
-# or: cp /path/to/icode-*-full-*.tar.gz "$HOME/.local/share/mac-k3d/"
+# Browser often saves this with no .tar.gz — that is OK:
+cp /path/to/icode-linux-x86_64-full-v0.1.41 "$HOME/.local/share/mac-k3d/"
+# or the archive, if that is what you have:
+# cp /path/to/icode-linux-x86_64-full-v0.1.41.tar.gz "$HOME/.local/share/mac-k3d/"
+# or an unpacked folder of that name:
+# cp -a /path/to/icode-linux-x86_64-full-v0.1.41 "$HOME/.local/share/mac-k3d/"
+# or a standalone executable already named icode:
+# cp /path/to/icode "$HOME/.local/share/mac-k3d/icode" && chmod +x "$HOME/.local/share/mac-k3d/icode"
 ```
 
-Optional (needs sudo): `/opt/mac-k3d/icode`. Do **not** put the file inside `~/.local/share/mac-k3d/pipeline/` (mac-k3d extracts that folder).
+- A `*.tar.gz` / `*.tgz` or unpacked `*-full-*` **folder** must contain a file named `icode`.
+- A **single file** named `icode-…-full-…` (no suffix) is the release itself; P3 copies it to `eval-runs/icode-bin/icode`.
+- Do **not** also leave an old file named `icode` next to a `*-full-*` drop. Discover prefers the official `*-full-*` name, then `icode`.
+- Do **not** copy `.venv/bin/icode` (tiny Python wrapper). Do **not** put iCode inside `pipeline/` (mac-k3d extracts that folder).
 
-Jenkins: `ICODE_MODE=binary`. Leave **`ICODE_RELEASE` and `ICODE_SOURCE` empty**.
+Optional fallback (sudo, not required): the same shapes under `/opt/mac-k3d/`.
 
-Type a path **only if** the file is not in those folders: set `ICODE_RELEASE` (or `mac-k3d eval --icode-release`) to a local path or an `https://…` URL. Still leave `ICODE_SOURCE` empty.
+If the file stays in Downloads, set Jenkins `ICODE_RELEASE` to that path (or `mac-k3d eval --icode-release`). Still leave `ICODE_SOURCE` empty.
 
-A tiny Python wrapper copied from `.venv/bin/icode` still needs that venv on disk. Strangers should use a standalone `icode` or a `-full-` tarball.
+Jenkins UI: `ICODE_MODE=binary`, **`ICODE_RELEASE` and `ICODE_SOURCE` empty**.
 
 ### B. Developer — source
 
@@ -199,7 +209,7 @@ mac-k3d eval --local --n-tasks 1 --icode-mode binary
 |---------|------------|
 | Waiting for executor | Worker node offline; do not `start -c worker.yaml` |
 | `pipeline/stages/run_all.sh` missing | Worker: `mac-k3d config -c worker.yaml` (extracts) **or** `mac-k3d eval --stage p0` |
-| iCode not found | Copy binary to `~/.local/share/mac-k3d/icode` |
+| iCode not found | Drop official `icode-*-full-*` or a file named `icode` in `~/.local/share/mac-k3d/` (see §3). Do not use job `lolbench_one_task`. |
 | `DEEPSEEK_API_KEY missing` on Jenkins | Add credential `deepseek-api-key` on the **controller** |
 | Disk/RAM preflight | Free space (`docker system df`); keep `N_TASKS=1` |
 | `--yes` ran a local eval | Old CLI; install v0.5.0+ |

@@ -16,7 +16,7 @@
 | [initializer-new-machine.md](initializer-new-machine.md) | v0.3.0 user guide: `cargo install` + `prepare` on a blank Linux or Mac |
 | [prepare-wizard.md](prepare-wizard.md) | Interactive `prepare` questionnaire design |
 | [testing-initializer.md](testing-initializer.md) | v0.3.0 initializer tests (Mac + Linux), steps 0–7 |
-| [lolbench-jenkins.md](lolbench-jenkins.md) | Short pointer: `lolbench_one_task` + `EVAL_MODE` |
+| [lolbench-jenkins.md](lolbench-jenkins.md) | Leftover job `lolbench_one_task` (not the eval; use `icode_eval`) |
 | [secrets.md](secrets.md) | CI secrets: configure once on Jenkins controller, use on all agents |
 
 ## Goals

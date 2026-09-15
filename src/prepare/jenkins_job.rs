@@ -874,7 +874,7 @@ fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
     choice(name: 'BENCHMARK', choices: ['deepswe'], description: 'v1: deepswe only')
     string(name: 'N_TASKS', defaultValue: '1', description: 'Number of DeepSWE questions')
     choice(name: 'ICODE_MODE', choices: ['binary', 'source'], description: 'iCode delivery (users: binary drop)')
-    string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: empty = ~/.local/share/mac-k3d/icode or /opt/mac-k3d/icode')
+    string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: empty = ~/.local/share/mac-k3d/icode or icode-*-full-* (tar.gz / folder)')
     string(name: 'ICODE_SOURCE', defaultValue: '', description: 'source: path on worker; empty = discover (developers)')
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4')

@@ -285,6 +285,19 @@ printf '%s' "$DEEPSEEK_API_KEY"
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
+class P3IcodeBinaryTests(unittest.TestCase):
+    def test_official_full_release_shapes(self):
+        script = ROOT / "pipeline" / "stages" / "test_p3_icode.sh"
+        proc = subprocess.run(
+            ["bash", str(script)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("OK test_p3_icode.sh", proc.stdout)
+
+
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
 

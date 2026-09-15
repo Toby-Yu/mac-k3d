@@ -758,9 +758,9 @@ fn apply_worker_agent(config: &mut MacK3dConfig, _creds: Option<&WorkerAgentProm
 
 fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
     println!(
-        "\n`lolbench_one_task` parameter defaults (non-secret).\n\
-         EVAL_MODE=binary uses a GitCode -full- tarball (ICODE_RELEASE).\n\
-         EVAL_MODE=source clones iCode in the *job* and runs uv sync there (not at prepare time).\n\
+        "\nLeftover job `lolbench_one_task` parameter defaults (not the DeepSWE eval).\n\
+         Eval is Jenkins job `icode_eval` — see docs/binary-initializer/user-guide.md.\n\
+         These defaults only apply if that leftover job is still created.\n\
          Secrets (DeepSeek, GitCode PAT) go to Jenkins Credentials.\n"
     );
 

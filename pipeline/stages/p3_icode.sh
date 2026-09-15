@@ -9,7 +9,7 @@ ICODE_BIN=""
 case "$ICODE_MODE" in
   binary)
     if [ -z "$ICODE_RELEASE" ]; then
-      die "ICODE_MODE=binary: place the iCode binary or *-full-*.tar.gz at ${MAC_K3D_SHARE}/icode (or /opt/mac-k3d/icode), then re-run. Example: mkdir -p ${MAC_K3D_SHARE} && cp /path/to/icode ${MAC_K3D_SHARE}/icode && chmod +x ${MAC_K3D_SHARE}/icode"
+      die "ICODE_MODE=binary: place icode or icode-<os>-<arch>-full-vX.Y.Z (.tar.gz, same name without suffix, or unpacked folder) at ${MAC_K3D_SHARE}/ (or /opt/mac-k3d/). Example: cp /path/to/icode-linux-x86_64-full-v0.1.41.tar.gz ${MAC_K3D_SHARE}/"
     fi
     unpack="$WORKDIR/icode-bin"
     rm -rf "$unpack"
@@ -21,17 +21,8 @@ case "$ICODE_MODE" in
         src="$WORKDIR/icode-release.bin"
         ;;
     esac
-    [ -e "$src" ] || die "ICODE_RELEASE not found: $src"
-    case "$(basename "$src")" in
-      *.tar.gz|*.tgz)
-        tar -xzf "$src" -C "$unpack"
-        ;;
-      *)
-        cp "$src" "$unpack/icode"
-        chmod +x "$unpack/icode" || true
-        ;;
-    esac
-    ICODE_BIN="$(find "$unpack" -type f -name icode | head -n 1)"
+    install_icode_release "$src" "$unpack"
+    ICODE_BIN="$(find "$unpack" -type f -name icode -print -quit)"
     [ -n "$ICODE_BIN" ] || die "could not find icode inside release"
     ;;
   source)
