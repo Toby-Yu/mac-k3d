@@ -38,6 +38,12 @@ pub enum Command {
     /// Apply configuration (kubeconfig, port-forwards, Jenkins setup)
     Config(commands::ConfigArgs),
 
+    /// Write a sanitized copy of this machine's config YAML (no secrets)
+    Export(commands::ExportArgs),
+
+    /// Copy a sanitized config YAML onto this machine (write only)
+    Import(commands::ImportArgs),
+
     /// Run iCode / DeepSeek eval (DeepSWE or LoLBench) locally or via Jenkins *_one_task jobs
     Eval(commands::EvalArgs),
 
@@ -53,9 +59,9 @@ pub enum Command {
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub enum JenkinsMode {
-  #[default]
-  /// Do not install or manage Jenkins
-  Skip,
-  /// Deploy Jenkins into the k3d cluster
-  InCluster,
+    #[default]
+    /// Do not install or manage Jenkins
+    Skip,
+    /// Deploy Jenkins into the k3d cluster
+    InCluster,
 }

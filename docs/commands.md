@@ -120,7 +120,7 @@ mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 
 4. Confirm agent files under the worker remote root / downloads, and that the node appears (or launch script is ready) on the controller.
 5. Do **not** `clean --purge-config` the default controller config while testing the worker file.
-
+e
 `mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is optional (second local k3d); workers only need the host agent + Docker. Job parameters: [lolbench-jenkins.md](lolbench-jenkins.md).
 
 ### Behavior
@@ -209,6 +209,51 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 5. **Worker:** extract `~/.local/share/mac-k3d/pipeline` (does not overwrite `icode`); using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
+
+---
+
+## `export`
+
+Write a **sanitized** copy of this machine’s config YAML (controller `config.yaml` or worker `worker.yaml`). Host paths and `jenkins_agent.api_token` are stripped. `credentials.pending.yaml` is never read or copied.
+
+```bash
+mac-k3d export -o /tmp/controller.yaml
+mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o /tmp/worker.yaml
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-o, --output <PATH>` | Destination YAML |
+
+Global `-c` selects the **source** file (same resolve as other commands). Refuses to write `-o` onto the source path.
+
+Kept: `role`, cluster/Jenkins ports, `jenkins_job.*`, Harbor `source`, labels, `controller_url`, `api_user`. Dropped: token, storage paths, tool `binary`/`app`, `lolbench.path`, `platform`, `cpu_cores`, `remote_fs`.
+
+How to change DeepSWE TASK and queue Jenkins, and why `config --skip-secrets` does not mean the YAML has keys: [export-import.md](export-import.md).
+
+---
+
+## `import`
+
+Copy a sanitized YAML onto this machine. **Write only** — does not install Docker, start k3d, or register the agent.
+
+```bash
+mac-k3d import /tmp/controller.yaml
+mac-k3d import /tmp/worker.yaml -c ~/.config/mac-k3d/worker.yaml
+mac-k3d import /tmp/worker.yaml --force
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Overwrite the destination if it already exists |
+
+Positional argument is the incoming file. Global `-c` is the **dest**; if omitted, `role: worker` → `~/.config/mac-k3d/worker.yaml`, otherwise `config.yaml`. Import re-sanitizes (so a hand-copied live `worker.yaml` still loses `api_token`), sets `platform` to this OS, and prints `setup` / `config` next steps.
+
+`--skip-secrets` after a controller import refreshes job XML only; it does not mean the imported file contained credentials. See [export-import.md](export-import.md).
 
 ---
 

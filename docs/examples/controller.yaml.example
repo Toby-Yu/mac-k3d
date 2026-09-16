@@ -1,5 +1,7 @@
 # Example controller config.
 # mac-k3d prepare -i   then mac-k3d start && mac-k3d config --show-jenkins
+# Copy to another host: mac-k3d export -c ~/.config/mac-k3d/config.yaml -o controller.yaml
+#                       mac-k3d import controller.yaml
 
 role: controller
 platform: linux   # or macos

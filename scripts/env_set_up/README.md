@@ -111,6 +111,20 @@ OK 04_check_eval_ready complete
 
 Does **not** prove DeepSeek credentials or full P5–P8. For those see [testing-eval-pipeline.md](../../docs/binary-initializer/testing/testing-eval-pipeline.md).
 
+### `05_check_export_import.sh`
+
+**Purpose:** File-only `mac-k3d export` / `import` on this machine’s live `worker.yaml` or `config.yaml`. Writes scratch files under `/tmp`. Never `--force` onto `~/.config/mac-k3d/`. Does **not** queue Jenkins or call the LLM.
+
+Needs a binary that has `export` (this branch’s `target/release/mac-k3d`, not GitHub v0.5.2).
+
+```bash
+MAC_K3D_BIN="$PWD/target/release/mac-k3d" ./scripts/env_set_up/05_check_export_import.sh
+```
+
+**Expected output (success):** `OK 05_check_export_import complete` and no `api_token:` key in the scratch YAML.
+
+Not part of `run_all.sh` (that suite is Release-binary health). DeepSWE TASK change + Jenkins: [docs/export-import.md](../../docs/export-import.md). `./scripts/list_deepswe_tasks.sh` prints sorted DeepSWE ids.
+
 ### `run_all.sh`
 
 **Purpose:** Run `01` → `02` → `03` (`REQUIRE_WORKER` default 1) → `04` in order.

@@ -1,0 +1,176 @@
+# Export and import lab YAML
+
+Copy a **controller** or **worker** config onto another machine (or a scratch file), change eval parameters such as the DeepSWE question id, then queue Jenkins. Import is **write only**: it does not start Docker, k3d, or Jenkins.
+
+Need the `export` / `import` subcommands: build this branch (`feat/config-export-import`) or a later Release. GitHub **v0.5.2** does not have them.
+
+```bash
+export PATH="$HOME/Documents/Toby/mac-k3d/target/release:$PATH"   # this checkout
+# or on cloud after scp: /tmp/mac-k3d-export
+mac-k3d export --help
+mac-k3d import --help
+```
+
+Operator bootstrap (roles, iCode drop, first eval): [binary-initializer/user-guide.md](binary-initializer/user-guide.md). CLI flags: [commands.md](commands.md). Secrets stores: [secrets.md](secrets.md).
+
+---
+
+## Function
+
+Controller and worker use the same schema. **One file at a time:**
+
+| Live file | Typical role | What you copy |
+|-----------|--------------|----------------|
+| `~/.config/mac-k3d/config.yaml` | controller | Cluster name, Jenkins port, `jenkins_job.*` (TASK default) |
+| `~/.config/mac-k3d/worker.yaml` | worker | `controller_url`, labels, agent name, Harbor skip/install intent |
+
+**Kept** in the portable YAML: `role`, Jenkins ports, `jenkins_job.default_task` (and other `jenkins_job.*`), labels, `controller_url`, `api_user`, dependency `source` (`install` / `skip` / `existing`).
+
+**Stripped:** `jenkins_agent.api_token`, host storage paths, tool `binary`/`app`, `lolbench.path`, `platform`, `cpu_cores`, `remote_fs`. **Never** read or copied: `credentials.pending.yaml`.
+
+This PC in the cloud lab is a **worker** (only `worker.yaml`). The controller YAML lives on the cloud VM (`/root/.config/mac-k3d/config.yaml`). Job defaults (`default_task`) are on the **controller** file.
+
+---
+
+## How to use
+
+```bash
+# Source host — dest must not be the live source path
+mac-k3d export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller-lab.yaml
+mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o /tmp/worker-lab.yaml
+
+# Optional: edit jenkins_job.default_task / labels / controller_url in the copy
+
+# Dest — scratch file (does not touch the live lab)
+mac-k3d import /tmp/controller-lab.yaml -c /tmp/imported-config.yaml
+mac-k3d import /tmp/worker-lab.yaml -c /tmp/imported-worker.yaml
+
+# Dest — live file that already exists needs --force
+# mac-k3d import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
+```
+
+Cheap file check (no Jenkins, no LLM):
+
+```bash
+MAC_K3D_BIN="$HOME/Documents/Toby/mac-k3d/target/release/mac-k3d" \
+  ./scripts/env_set_up/05_check_export_import.sh
+```
+
+On a worker-only machine the script uses `worker.yaml`. Import prints next steps (`setup` / `config`). Do **not** run `start` / `config` against a `/tmp` scratch YAML unless you intend to register a second agent or a second cluster.
+
+---
+
+## Credentials: portable YAML vs live Jenkins (no contradiction)
+
+Export/import YAML **never** contains credentials. Eval on **this lab** can still run without typing the DeepSeek key because that key was stored **earlier** in Jenkins, not in the portable file.
+
+These are **two stores**:
+
+| Store | What it holds | In export/import YAML? |
+|-------|----------------|-------------------------|
+| Portable file (`/tmp/controller-lab.yaml`) | Role, ports, `default_task`, labels, URL | **Never** `api_token`, never `deepseek-api-key`, never `credentials.pending.yaml` |
+| Live worker `~/.config/mac-k3d/worker.yaml` | Agent register token (`api_token`) | **Not** written by a sanitized import. Left as-is unless you `import --force` onto that path (that **wipes** the token — do not do that on this PC) |
+| Jenkins Credentials on the **controller** | `deepseek-api-key` (LLM). Jobs bind it per build | **Not** in YAML. Survives import. `config --skip-secrets` **keeps** this store |
+
+**`--skip-secrets` does not mean “the imported YAML contains credentials.”** It means: rewrite Pipeline job XML from the YAML’s **non-secret** fields (`jenkins_job.default_task`, …) and **do not** create/update Jenkins Credentials from `credentials.pending.yaml`. The flag exists so a **second** `config` on an already-set-up controller does not prompt for the DeepSeek key again. The line `Keeping existing Jenkins credential binds (1 id(s))` means Jenkins already has the id; the build injects it at runtime.
+
+**First-time computer** (no Jenkins credential, no live worker token): the import file still has no secrets. Enter them **once** into the live stores:
+
+- Controller: `mac-k3d config -c ~/.config/mac-k3d/config.yaml` **without** `--skip-secrets` (or `--update-secrets`) so `deepseek-api-key` is uploaded.
+- Worker: paste `api_user` / `api_token` into the **live** `worker.yaml`, then `mac-k3d config -c ~/.config/mac-k3d/worker.yaml`.
+
+After that, later imports of sanitized YAML use `--skip-secrets` and do not ask again.
+
+```mermaid
+flowchart TD
+  portable["Portable YAML: no secrets"] --> importCtrl["import onto controller config.yaml"]
+  importCtrl --> branch{"Does Jenkins already have deepseek-api-key?"}
+  branch -->|"yes this lab"| skipSecrets["config --skip-secrets: refresh job XML only"]
+  branch -->|"no first-time controller"| withSecrets["config: upload key into Jenkins store"]
+  skipSecrets --> evalRun["queue deepswe_one_task; Jenkins injects the stored key"]
+  withSecrets --> evalRun
+```
+
+The “true situation” that live files / Jenkins hold credentials is **first-time setup leftover** (E0 on the controller, worker `setup` on this PC), not a property of the import file. This lab already has `deepseek-api-key` and a live worker token. Import only changes non-secret fields such as `default_task`; `--skip-secrets` is the matching apply step.
+
+---
+
+## Modify eval parameters, then start a task
+
+`jenkins_job.default_task` on the **controller** YAML is the Jenkins **TASK** form default. Worker YAML does not set that default.
+
+Empty `TASK` + `N_TASKS=1` selects the **first** DeepSWE directory after `sort` under `deep-swe/tasks`. The “second question” is the **second** sorted directory name, not “question 2” in a paper.
+
+### 1. List first and second ids (this PC)
+
+After a prior P2, the tree is often `eval-runs-deepswe/deep-swe/tasks` or `eval-runs/deep-swe/tasks`:
+
+```bash
+cd ~/Documents/Toby/mac-k3d
+export PATH="$HOME/Documents/Toby/mac-k3d/target/release:$PATH"
+./scripts/list_deepswe_tasks.sh
+# record FIRST= line 1, SECOND= line 2
+# this lab (2026-09): FIRST=abs-module-cache-flags  SECOND=abs-stepped-slices
+```
+
+If the script exits 2, run `mac-k3d eval --stage p2 --local --benchmark deepswe --n-tasks 2` once (no LLM) so the task dirs exist.
+
+### 2. Export, edit, import on the **cloud** controller
+
+Use the branch binary (`/tmp/mac-k3d-export` if you scp’d it). GitHub v0.5.2 has no `export`.
+
+```bash
+# on cloud
+export PATH="$HOME/.local/bin:$PATH"
+MAC=/tmp/mac-k3d-export   # or mac-k3d if PATH is the branch binary
+$MAC export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller-lab.yaml
+# set default_task to SECOND (the second sorted DeepSWE id, not ruff_2 unless that is a LoLBench test)
+# example: sed -i 's/default_task: .*/default_task: YOUR_SECOND_ID/' /tmp/controller-lab.yaml
+$MAC import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
+$MAC config -c ~/.config/mac-k3d/config.yaml --skip-secrets
+```
+
+`--skip-secrets` refreshes `deepswe_one_task` / `lolbench_one_task` XML. It does **not** re-enter the API key. Confirm in Jenkins: **deepswe_one_task** → Build with Parameters → **TASK** default is `SECOND`.
+
+Do **not** `import --force` onto this PC’s live `worker.yaml` (that strips `api_token`).
+
+### 3. Queue eval from this computer
+
+Jenkins UI: open `deepswe_one_task` → Build with Parameters → leave **TASK** as the imported default → Build. That is the check that import changed the job default.
+
+CLI (this PC). `--yes` with `--benchmark` and **empty** `--task` posts `TASK=` and Jenkins then picks the **first** alphabetical task, **ignoring** the imported default for that build. Pass `--task` explicitly:
+
+```bash
+export PATH="$HOME/Documents/Toby/mac-k3d/target/release:$PATH"
+mac-k3d eval -c ~/.config/mac-k3d/worker.yaml \
+  --benchmark deepswe --task "$SECOND" --icode-mode binary --n-tasks 1 --yes
+```
+
+Pass: build runs on **this** node; the report / `selected_tasks` id is `SECOND`, not `FIRST`. This is a paid DeepSeek run.
+
+### 4. Optional restore
+
+On the cloud, set `default_task` back to empty or `$FIRST`, import `--force`, `config --skip-secrets`.
+
+---
+
+## File-only test (already done on this lab)
+
+Worker (this PC): export `worker.yaml` → no `api_token` in the copy → import to `/tmp/imported-worker.yaml` → `controller_url` kept.
+
+Controller (cloud): export `config.yaml` → `default_task: ruff_1` → edit to `ruff_2` → import `--force` to `/tmp/imported-config.yaml` → `default_task: ruff_2`. Live Jenkins TASK was unchanged until you import onto live `config.yaml` and `config --skip-secrets`.
+
+---
+
+## Failures
+
+| Symptom | What to do |
+|---------|------------|
+| `config not found: …/config.yaml` | This PC is a worker. Export `-c ~/.config/mac-k3d/worker.yaml`, or export on the **cloud** controller. |
+| `already exists; pass --force` | Scratch dest leftover, or you targeted a live file on purpose. |
+| `export -o would overwrite the source` | Pick another `-o` path. |
+| Job TASK still the old id | Import was only `/tmp`; or you skipped `config --skip-secrets` on the live controller. |
+| CLI eval ran the first DeepSWE id | You omitted `--task`; empty TASK overrides the job default for that build. |
+| `Jenkins API token missing` | Live `worker.yaml` has no token (or you imported `--force` onto it). Paste token, then `config -c worker.yaml`. |
+| `DEEPSEEK_API_KEY missing` on Jenkins | First-time controller: `config` **without** `--skip-secrets`. This lab: credential should already exist. |
+| `export: command not found` / no subcommand | PATH is GitHub v0.5.2. Use `target/release/mac-k3d` or `/tmp/mac-k3d-export`. |

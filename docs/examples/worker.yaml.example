@@ -1,6 +1,9 @@
 # Example worker config for LoLBench eval hosts (Mac or Linux).
 # Copy and adjust, then: mac-k3d prepare --non-interactive -c worker.yaml
 # Or generate interactively: mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
+# Or from a live worker: mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o worker.yaml
+#                        mac-k3d import worker.yaml -c ~/.config/mac-k3d/worker.yaml
+# api_token is never included in export/import.
 
 role: worker
 platform: linux   # or macos

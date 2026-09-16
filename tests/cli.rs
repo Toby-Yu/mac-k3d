@@ -8,9 +8,20 @@ fn help_lists_setup_subcommand() {
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
-    assert!(stdout.contains("setup"), "help should list setup:\n{stdout}");
+    assert!(
+        stdout.contains("setup"),
+        "help should list setup:\n{stdout}"
+    );
     assert!(stdout.contains("prepare"));
     assert!(stdout.contains("eval"), "help should list eval:\n{stdout}");
+    assert!(
+        stdout.contains("export"),
+        "help should list export:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("import"),
+        "help should list import:\n{stdout}"
+    );
 }
 
 #[test]
@@ -73,4 +84,24 @@ fn start_help_mentions_cluster() {
         .assert()
         .success()
         .stdout(predicates::str::contains("k3d"));
+}
+
+#[test]
+fn export_help_requires_output() {
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["export", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--output"));
+}
+
+#[test]
+fn import_help_mentions_force() {
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["import", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--force"));
 }

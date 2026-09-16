@@ -56,7 +56,7 @@ LLM API keys, Git forge PATs, and similar CI secrets live in the **Jenkins Crede
 |--------|----------|--------|
 | LLM API keys (OpenRouter, DeepSeek, OpenLux, OpenAI, Anthropic, …) | Harbor / harnesses in Jenkins builds | Jenkins Credentials (Secret text) on **controller** |
 | GitHub / GitCode (etc.) PAT — clone, push, PR comments | Pipeline `git` / `gh` / REST on agent | Jenkins Credentials on **controller** |
-| Jenkins API user/token for `mac-k3d` agent register/clean | CLI on **worker** | Local only (Keychain / encrypted file later; plaintext in YAML is transitional debt) |
+| Jenkins API user/token for `mac-k3d` agent register/clean | CLI on **worker** | Local only (Keychain / encrypted file later; plaintext in YAML is transitional debt). **`mac-k3d export` / `import` never copy `api_token` or `credentials.pending.yaml`.** |
 | Agent JNLP connection secret | LaunchAgent on worker | Local `launch-agent.sh` (node-specific, not shared) |
 | Jenkins initial admin password | Helm chart secret in k3d | Cluster secret; printed by `mac-k3d config` |
 
@@ -136,3 +136,5 @@ Possible later enhancements (not required for the model above):
 - [deployment.md](deployment.md) — controller vs worker topology
 - [architecture.md](architecture.md) — security baseline
 - [configuration.md](configuration.md) — YAML fields (including transitional plaintext API token)
+- [commands.md](commands.md) — `export` / `import` copy role YAML without secrets
+- [export-import.md](export-import.md) — portable YAML never has keys; `config --skip-secrets` keeps the Jenkins store

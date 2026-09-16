@@ -38,10 +38,15 @@ pub enum NodeRole {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docker: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k3d: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jenkins: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub downloads: Option<PathBuf>,
 }
 
@@ -83,7 +88,9 @@ impl Default for DependenciesConfig {
 #[serde(default)]
 pub struct DependencyEntry {
     pub source: DependencySource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<PathBuf>,
 }
 
@@ -129,6 +136,7 @@ pub struct DockerConfig {
 #[serde(default)]
 pub struct LolbenchConfig {
     /// Path to LoLBench-Preview checkout (optional on standalone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
     pub source: LolbenchSource,
     /// Git remote used when cloning (printed/used by prepare).
@@ -149,16 +157,22 @@ pub enum LolbenchSource {
 #[serde(default)]
 pub struct JenkinsAgentConfig {
     /// Worker only: Jenkins controller base URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_fs: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_jar: Option<PathBuf>,
     /// Logical CPU cores recorded at prepare time.
     pub cpu_cores: u32,
     /// Jenkins user for REST API (plaintext for now; encrypt later).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_user: Option<String>,
     /// Jenkins API token (plaintext for now; encrypt later).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_token: Option<String>,
 }
 
@@ -348,30 +362,64 @@ impl MacK3dConfig {
             return Ok(Self::default());
         }
 
-        let contents = std::fs::read_to_string(&path)
+        Self::load_file(&path)
+    }
+
+    /// Load a specific YAML path. Errors if the file is missing or invalid.
+    pub fn load_file(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Err(Error::Config(format!(
+                "config not found: {}",
+                path.display()
+            )));
+        }
+
+        let contents = std::fs::read_to_string(path)
             .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
 
         serde_yaml::from_str(&contents)
             .map_err(|e| Error::Config(format!("failed to parse {}: {e}", path.display())))
     }
 
+    /// Default dest for `import` when `-c` is omitted: worker.yaml vs config.yaml.
+    pub fn default_path_for_role(role: NodeRole) -> PathBuf {
+        match role {
+            NodeRole::Worker => Self::default_worker_path(),
+            NodeRole::Standalone | NodeRole::Controller => Self::default_config_path(),
+        }
+    }
+
+    /// Lab template: keep eval/job/role fields; drop secrets and host-local paths.
+    ///
+    /// Never copies `credentials.pending.yaml`.
+    pub fn for_export(&self) -> Self {
+        let mut out = self.clone();
+        out.platform = None;
+        out.storage = StorageConfig::default();
+        out.lolbench.path = None;
+        strip_dependency_host_paths(&mut out.dependencies);
+        out.jenkins_agent.remote_fs = None;
+        out.jenkins_agent.agent_jar = None;
+        out.jenkins_agent.cpu_cores = 0;
+        out.jenkins_agent.api_token = None;
+        out
+    }
+
+    /// Record the OS of the machine that is importing this file.
+    pub fn apply_host_platform(&mut self) {
+        self.platform = Some(crate::platform::host_os().as_str().to_string());
+    }
+
     pub fn save(&self, path: Option<&Path>) -> Result<()> {
         let path = path
             .map(PathBuf::from)
             .unwrap_or_else(Self::default_config_path);
+        write_yaml(&path, self, None)
+    }
 
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| Error::Config(format!("failed to create config dir: {e}")))?;
-        }
-
-        let contents = serde_yaml::to_string(self)
-            .map_err(|e| Error::Config(format!("failed to serialize config: {e}")))?;
-
-        std::fs::write(&path, contents)
-            .map_err(|e| Error::Config(format!("failed to write {}: {e}", path.display())))?;
-
-        Ok(())
+    /// Write a sanitized export with a header that warns the file has no secrets.
+    pub fn save_sanitized_export(&self, path: &Path) -> Result<()> {
+        write_yaml(path, &self.for_export(), Some(EXPORT_HEADER))
     }
 
     pub fn apply_jenkins_mode(&mut self, mode: JenkinsMode) {
@@ -407,6 +455,47 @@ impl DependenciesConfig {
     }
 }
 
+const EXPORT_HEADER: &str = "\
+# mac-k3d sanitized export — no API tokens, CI keys, or host-local paths.
+# Never copy credentials.pending.yaml. Edit jenkins_job / labels / controller_url, then:
+#   mac-k3d import this-file.yaml
+";
+
+fn strip_dependency_host_paths(deps: &mut DependenciesConfig) {
+    for entry in [
+        &mut deps.docker,
+        &mut deps.k3d,
+        &mut deps.kubectl,
+        &mut deps.helm,
+        &mut deps.harbor,
+        &mut deps.java,
+    ] {
+        entry.binary = None;
+        entry.app = None;
+    }
+}
+
+fn write_yaml(path: &Path, config: &MacK3dConfig, header: Option<&str>) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::Config(format!("failed to create config dir: {e}")))?;
+        }
+    }
+
+    let body = serde_yaml::to_string(config)
+        .map_err(|e| Error::Config(format!("failed to serialize config: {e}")))?;
+    let contents = match header {
+        Some(h) => format!("{h}{body}"),
+        None => body,
+    };
+
+    std::fs::write(path, contents)
+        .map_err(|e| Error::Config(format!("failed to write {}: {e}", path.display())))?;
+
+    Ok(())
+}
+
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
@@ -432,34 +521,101 @@ mod tests {
 
     #[test]
     fn resolve_prefers_config_yaml_when_present() {
-        let dir = std::env::temp_dir().join(format!(
-            "mac-k3d-cfg-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("mac-k3d-cfg-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.yaml"), "role: controller\n").unwrap();
         std::fs::write(dir.join("worker.yaml"), "role: worker\n").unwrap();
-        assert_eq!(
-            resolve_config_path_in(&dir, None),
-            dir.join("config.yaml")
-        );
+        assert_eq!(resolve_config_path_in(&dir, None), dir.join("config.yaml"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn resolve_falls_back_to_worker_yaml() {
-        let dir = std::env::temp_dir().join(format!(
-            "mac-k3d-cfg-worker-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("mac-k3d-cfg-worker-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("worker.yaml"), "role: worker\n").unwrap();
-        assert_eq!(
-            resolve_config_path_in(&dir, None),
-            dir.join("worker.yaml")
-        );
+        assert_eq!(resolve_config_path_in(&dir, None), dir.join("worker.yaml"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn sample_worker() -> MacK3dConfig {
+        let mut cfg = MacK3dConfig::default();
+        cfg.role = NodeRole::Worker;
+        cfg.platform = Some("linux".into());
+        cfg.storage.base_dir = Some(PathBuf::from("/home/src/mac-k3d"));
+        cfg.dependencies.docker.binary = Some(PathBuf::from("/usr/bin/docker"));
+        cfg.dependencies.docker.app = Some(PathBuf::from("/Applications/Docker.app"));
+        cfg.lolbench.path = Some(PathBuf::from("/home/src/lolbench"));
+        cfg.lolbench.source = LolbenchSource::Existing;
+        cfg.jenkins_agent.controller_url = Some("http://43.107.42.252:17070".into());
+        cfg.jenkins_agent.name = Some("linux-eval-1".into());
+        cfg.jenkins_agent.labels = vec!["linux".into(), "docker".into()];
+        cfg.jenkins_agent.remote_fs = Some(PathBuf::from("/home/src/jenkins-agent"));
+        cfg.jenkins_agent.agent_jar = Some(PathBuf::from("/tmp/agent.jar"));
+        cfg.jenkins_agent.cpu_cores = 8;
+        cfg.jenkins_agent.api_user = Some("admin".into());
+        cfg.jenkins_agent.api_token = Some("test-jenkins-token".into());
+        cfg.jenkins_job.default_task = "ruff_1".into();
+        cfg.jenkins_job.default_eval_mode = "binary".into();
+        cfg
+    }
+
+    #[test]
+    fn for_export_strips_token_and_host_paths_keeps_job_defaults() {
+        let exported = sample_worker().for_export();
+        assert_eq!(exported.role, NodeRole::Worker);
+        assert!(exported.platform.is_none());
+        assert!(exported.storage.base_dir.is_none());
+        assert!(exported.dependencies.docker.binary.is_none());
+        assert!(exported.dependencies.docker.app.is_none());
+        assert!(exported.lolbench.path.is_none());
+        assert_eq!(exported.lolbench.source, LolbenchSource::Existing);
+        assert_eq!(
+            exported.jenkins_agent.controller_url.as_deref(),
+            Some("http://43.107.42.252:17070")
+        );
+        assert_eq!(exported.jenkins_agent.name.as_deref(), Some("linux-eval-1"));
+        assert_eq!(exported.jenkins_agent.api_user.as_deref(), Some("admin"));
+        assert!(exported.jenkins_agent.api_token.is_none());
+        assert!(exported.jenkins_agent.remote_fs.is_none());
+        assert!(exported.jenkins_agent.agent_jar.is_none());
+        assert_eq!(exported.jenkins_agent.cpu_cores, 0);
+        assert_eq!(exported.jenkins_job.default_task, "ruff_1");
+        assert_eq!(exported.jenkins_job.default_eval_mode, "binary");
+    }
+
+    #[test]
+    fn sanitized_export_yaml_omits_token() {
+        let dir = std::env::temp_dir().join(format!("mac-k3d-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("worker.yaml");
+        sample_worker().save_sanitized_export(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("sanitized export"));
+        assert!(!text.contains("test-jenkins-token"));
+        assert!(!text.contains("api_token"));
+        assert!(text.contains("default_task: ruff_1"));
+        let loaded = MacK3dConfig::load_file(&path).unwrap();
+        assert!(loaded.jenkins_agent.api_token.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_path_for_role_splits_worker_and_controller() {
+        assert_eq!(
+            MacK3dConfig::default_path_for_role(NodeRole::Worker),
+            MacK3dConfig::default_worker_path()
+        );
+        assert_eq!(
+            MacK3dConfig::default_path_for_role(NodeRole::Controller),
+            MacK3dConfig::default_config_path()
+        );
+        assert_eq!(
+            MacK3dConfig::default_path_for_role(NodeRole::Standalone),
+            MacK3dConfig::default_config_path()
+        );
     }
 }

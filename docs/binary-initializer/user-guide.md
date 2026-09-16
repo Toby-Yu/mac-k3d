@@ -94,6 +94,21 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
+To copy a working controller or worker YAML onto another machine (same pipeline, different host or `jenkins_job` defaults), export on the source host and import on the dest. Secrets are stripped; import only writes the file. Full flow, DeepSWE first→second question, and why `config --skip-secrets` does not put keys in the YAML: [export-import.md](../export-import.md).
+
+```bash
+# Source host: sanitized copy (no api_token, no credentials.pending.yaml)
+mac-k3d export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller.yaml
+mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o /tmp/worker.yaml
+# Optional: edit jenkins_job.default_task / labels / controller_url in those files
+
+# Dest host: write only, then setup or config as usual
+mac-k3d import /tmp/controller.yaml
+mac-k3d import /tmp/worker.yaml -c ~/.config/mac-k3d/worker.yaml
+# Overwrite an existing dest file:
+# mac-k3d import /tmp/worker.yaml -c ~/.config/mac-k3d/worker.yaml --force
+```
+
 Linux without sudo will fail Docker install. As **root**, Docker is ready without a logout. As a normal user, log out/in after the `docker` group is added, then re-run `setup`. macOS: open **Docker Desktop** until it is idle.
 
 ```bash

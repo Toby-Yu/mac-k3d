@@ -8,6 +8,7 @@
 | [deployment.md](deployment.md) | Single-Mac and multi-Mac topology, including physical LAN cabling |
 | [setup.md](setup.md) | Step-by-step setup for single- and multi-Mac environments |
 | [binary-initializer/user-guide.md](binary-initializer/user-guide.md) | **Start here:** cloud controller, new Mac/Linux worker, iCode drop, eval commands |
+| [export-import.md](export-import.md) | Copy controller/worker YAML, change `default_task`, queue Jenkins; credentials stay in Jenkins, not in the portable file |
 | [binary-initializer/workflow.md](binary-initializer/workflow.md) | End-to-end: new machine → controller/worker → iCode eval → JSON |
 | [binary-initializer/testing/binary-initializer-new-machine.md](binary-initializer/testing/binary-initializer-new-machine.md) | User guide: download Release binary, run setup; Docker installed by the binary |
 | [binary-initializer/testing/testing-binary-initializer.md](binary-initializer/testing/testing-binary-initializer.md) | Sign-off Task 0–5 + Task 7 on Linux; Task 6 macOS later |
