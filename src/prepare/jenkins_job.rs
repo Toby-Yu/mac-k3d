@@ -354,6 +354,7 @@ fn groovy_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
+#[allow(dead_code)]
 fn eval_mode_choices(default_mode: &str) -> (&'static str, &'static str) {
     if default_mode == "source" {
         ("source", "binary")
@@ -384,60 +385,182 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
 }
 
 fn job_config_xml(opts: &JobOpts) -> String {
-    let script = jenkinsfile(opts);
-    let task_xml = xml_escape(&opts.default_task);
-    let release_xml = xml_escape(&opts.default_icode_release);
-    let git_url_xml = xml_escape(&opts.default_icode_git_url);
-    let git_ref_xml = xml_escape(&opts.default_icode_git_ref);
-    let args_xml = xml_escape(&opts.default_icode_args);
-    let (mode_first, mode_second) = eval_mode_choices(&opts.default_eval_mode);
+    one_task_job_xml(
+        "lolbench",
+        &opts.default_task,
+        "iCode vs DeepSeek baseline on one LoLBench task (Harbor + iCode + deepseek-v4-pro). DeepSWE stays on Pier. See docs/lolbench-jenkins.md and docs/binary-initializer/user-guide.md.",
+        &opts.credential_ids,
+    )
+}
 
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn one_task_jenkinsfile(benchmark: &str, default_task: &str, credential_ids: &[String]) -> String {
+    let (cred_open, cred_close) = with_credentials_block(credential_ids);
+    let bench = groovy_escape(benchmark);
+    let task = groovy_escape(default_task);
+    format!(
+        r#"pipeline {{
+  agent {{ label params.AGENT_LABEL }}
+
+  options {{
+    timeout(time: 12, unit: 'HOURS')
+  }}
+
+  parameters {{
+    choice(name: 'HARNESS', choices: ['icode'], description: 'v1: icode only')
+    choice(name: 'LLM', choices: ['deepseek'], description: 'v1: deepseek only')
+    choice(name: 'BENCHMARK', choices: ['{bench}'], description: 'This job is one benchmark')
+    string(name: 'TASK', defaultValue: '{task}', description: 'One question id (empty DeepSWE = first alphabetical). LoLBench example: ruff_1')
+    string(name: 'N_TASKS', defaultValue: '1', description: 'Kept at 1 for *_one_task jobs')
+    choice(name: 'ICODE_MODE', choices: ['binary', 'source'], description: 'iCode delivery (users: binary drop)')
+    string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: empty = ~/.local/share/mac-k3d/icode or icode-*-full-* (tar.gz / folder)')
+    string(name: 'ICODE_SOURCE', defaultValue: '', description: 'source: path on worker; empty = discover (developers)')
+    string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
+    string(name: 'CPU_LOCK_QTY', defaultValue: '4')
+    string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Dir with pipeline/stages/run_all.sh (optional)')
+    string(name: 'DEEPSEEK_MODEL', defaultValue: 'deepseek-v4-pro', description: 'DeepSeek Chat Completions model id')
+  }}
+
+  stages {{
+    stage('Prepare') {{
+      steps {{
+        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
+{cred_open}          sh '''
+            set -euo pipefail
+            echo "PROGRESS 5% prepare workspace"
+            export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
+            command -v docker >/dev/null
+            docker info >/dev/null
+            SHARE="${{XDG_DATA_HOME:-$HOME/.local/share}}/mac-k3d"
+            ROOT="${{MAC_K3D_ROOT:-}}"
+            if [ -z "$ROOT" ] || [ ! -f "$ROOT/pipeline/stages/run_all.sh" ]; then
+              if [ -f "${{WORKSPACE}}/pipeline/stages/run_all.sh" ]; then
+                ROOT="${{WORKSPACE}}"
+              elif [ -f "$SHARE/pipeline/stages/run_all.sh" ]; then
+                ROOT="$SHARE"
+              else
+                echo "MAC_K3D_ROOT missing pipeline/stages/run_all.sh. On this worker run: mac-k3d config -c worker.yaml (extracts ~/.local/share/mac-k3d/pipeline) or: mac-k3d eval --stage p0" >&2
+                exit 1
+              fi
+            fi
+            export MAC_K3D_ROOT="$ROOT"
+            export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
+            export N_TASKS="${{N_TASKS:-1}}"
+            export TASK="${{TASK:-}}"
+            export ICODE_MODE="${{ICODE_MODE:-binary}}"
+            export ICODE_RELEASE="${{ICODE_RELEASE:-}}"
+            export ICODE_SOURCE="${{ICODE_SOURCE:-}}"
+            export HARNESS=icode
+            export LLM=deepseek
+            export BENCHMARK="${{BENCHMARK:-{bench}}}"
+            export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-deepseek-v4-pro}}"
+            export LLM_NAME="${{LLM_NAME:-DeepSeek V4 Pro}}"
+            if [ -z "${{DEEPSEEK_API_KEY:-}}" ]; then
+              echo "DEEPSEEK_API_KEY missing. Store credential deepseek-api-key on the Jenkins controller." >&2
+              exit 1
+            fi
+            echo "PROGRESS 10% running pipeline/stages"
+            bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
+            echo "PROGRESS 100% done"
+            if [ -f "$MAC_K3D_EVAL_WORKDIR/last_output.txt" ]; then
+              echo "RESULT $(cat "$MAC_K3D_EVAL_WORKDIR/last_output.txt")"
+            fi
+          '''
+{cred_close}        }}
+      }}
+    }}
+  }}
+
+  post {{
+    always {{
+      archiveArtifacts artifacts: 'eval-runs/reports/**/*.json', allowEmptyArchive: true
+    }}
+  }}
+}}
+"#,
+        bench = bench,
+        task = task,
+        cred_open = cred_open,
+        cred_close = cred_close,
+    )
+}
+
+fn one_task_job_xml(
+    benchmark: &str,
+    default_task: &str,
+    description: &str,
+    credential_ids: &[String],
+) -> String {
+    let script = one_task_jenkinsfile(benchmark, default_task, credential_ids);
+    let bench_xml = xml_escape(benchmark);
+    let task_xml = xml_escape(default_task);
+    let desc_xml = xml_escape(description);
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>iCode eval: EVAL_MODE=binary (GitCode -full- tarball) or source (git + uv). See docs/lolbench-jenkins.md.</description>
+  <description>{desc_xml}</description>
   <keepDependencies>false</keepDependencies>
   <properties>
     <hudson.model.ParametersDefinitionProperty>
       <parameterDefinitions>
         <hudson.model.ChoiceParameterDefinition>
-          <name>EVAL_MODE</name>
-          <description>binary: GitCode -full- tarball; source: git clone + uv sync in the job workspace</description>
+          <name>HARNESS</name>
           <choices class="java.util.Arrays$ArrayList">
             <a class="string-array">
-              <string>{mode_first}</string>
-              <string>{mode_second}</string>
+              <string>icode</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>LLM</name>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>deepseek</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>BENCHMARK</name>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>{bench_xml}</string>
             </a>
           </choices>
         </hudson.model.ChoiceParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>TASK</name>
-          <description>Case id exported as TASK and ICODE_TASK (not a Harbor path)</description>
           <defaultValue>{task_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
+          <name>N_TASKS</name>
+          <defaultValue>1</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>ICODE_MODE</name>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>binary</string>
+              <string>source</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.StringParameterDefinition>
           <name>ICODE_RELEASE</name>
-          <description>binary mode: icode-OS-ARCH-full-vX.Y.Z.tar.gz URL or path, or a stub icode executable</description>
-          <defaultValue>{release_xml}</defaultValue>
+          <defaultValue></defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
-          <name>ICODE_GIT_URL</name>
-          <description>source mode: iCode git URL (private clone uses gitcode-pat)</description>
-          <defaultValue>{git_url_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>ICODE_GIT_REF</name>
-          <description>source mode: branch or tag</description>
-          <defaultValue>{git_ref_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>ICODE_ARGS</name>
-          <description>Extra argv after ./icode (smoke: --help)</description>
-          <defaultValue>{args_xml}</defaultValue>
+          <name>ICODE_SOURCE</name>
+          <defaultValue></defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
@@ -447,8 +570,17 @@ fn job_config_xml(opts: &JobOpts) -> String {
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>CPU_LOCK_QTY</name>
-          <description>CPU_CORES lock quantity</description>
           <defaultValue>4</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>MAC_K3D_ROOT</name>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>DEEPSEEK_MODEL</name>
+          <defaultValue>deepseek-v4-pro</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
       </parameterDefinitions>
@@ -465,183 +597,8 @@ fn job_config_xml(opts: &JobOpts) -> String {
     )
 }
 
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
 fn jenkinsfile(opts: &JobOpts) -> String {
-    let task = groovy_escape(&opts.default_task);
-    let release = groovy_escape(&opts.default_icode_release);
-    let git_url = groovy_escape(&opts.default_icode_git_url);
-    let git_ref = groovy_escape(&opts.default_icode_git_ref);
-    let icode_args = groovy_escape(&opts.default_icode_args);
-    let (mode_first, mode_second) = eval_mode_choices(&opts.default_eval_mode);
-    let (cred_open, cred_close) = with_credentials_block(&opts.credential_ids);
-
-    format!(
-        r#"pipeline {{
-  agent {{ label params.AGENT_LABEL }}
-
-  options {{
-    timeout(time: 7, unit: 'HOURS')
-  }}
-
-  parameters {{
-    choice(name: 'EVAL_MODE', choices: ['{mode_first}', '{mode_second}'], description: 'binary: GitCode -full- tarball; source: git + uv sync')
-    string(name: 'TASK', defaultValue: '{task}', description: 'Case id exported as TASK and ICODE_TASK')
-    string(name: 'ICODE_RELEASE', defaultValue: '{release}', description: 'binary: icode-OS-ARCH-full-vX.Y.Z.tar.gz URL or path, or a stub icode')
-    string(name: 'ICODE_GIT_URL', defaultValue: '{git_url}', description: 'source: iCode git URL')
-    string(name: 'ICODE_GIT_REF', defaultValue: '{git_ref}', description: 'source: branch or tag')
-    string(name: 'ICODE_ARGS', defaultValue: '{icode_args}', description: 'Extra argv after ./icode (smoke: --help)')
-    string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
-    string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'CPU_CORES lock quantity')
-  }}
-
-  stages {{
-    stage('Evaluate') {{
-      steps {{
-        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
-{cred_open}          sh '''
-            set -euo pipefail
-            export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
-            command -v docker >/dev/null
-            docker info >/dev/null
-
-            work="${{WORKSPACE}}/icode-in"
-            rm -rf "$work"
-            mkdir -p "$work"
-            icode=""
-            mode="${{EVAL_MODE:-binary}}"
-
-            run_icode() {{
-              if [ -z "$icode" ] || [ ! -e "$icode" ]; then
-                echo "could not find icode executable" >&2
-                exit 1
-              fi
-              chmod +x "$icode" || true
-              export TASK
-              export ICODE_TASK="${{TASK:-}}"
-              # iCode README documents ./icode --help and ./icode tui; extra flags via ICODE_ARGS.
-              # shellcheck disable=SC2086
-              "$icode" ${{ICODE_ARGS:-}}
-            }}
-
-            case "$mode" in
-              source)
-                if [ -z "${{ICODE_GIT_URL:-}}" ]; then
-                  echo "ICODE_GIT_URL is required when EVAL_MODE=source" >&2
-                  exit 1
-                fi
-                srcdir="$work/src"
-                ref="${{ICODE_GIT_REF:-main}}"
-                clone_url="${{ICODE_GIT_URL}}"
-                if [ -n "${{GITCODE_TOKEN:-}}" ]; then
-                  case "$clone_url" in
-                    https://*)
-                      rest="${{clone_url#https://}}"
-                      clone_url="https://oauth2:${{GITCODE_TOKEN}}@${{rest}}"
-                      ;;
-                  esac
-                fi
-                git clone --depth 1 --branch "$ref" "$clone_url" "$srcdir"
-                git -C "$srcdir" remote set-url origin "${{ICODE_GIT_URL}}"
-                if ! command -v uv >/dev/null; then
-                  curl -LsSf https://astral.sh/uv/install.sh | sh
-                  export PATH="${{HOME}}/.local/bin:${{PATH}}"
-                fi
-                command -v uv >/dev/null
-                ( cd "$srcdir" && uv sync )
-                if [ -x "$srcdir/.venv/bin/icode" ] || [ -f "$srcdir/.venv/bin/icode" ]; then
-                  icode="$srcdir/.venv/bin/icode"
-                elif [ -x "$srcdir/icode" ] || [ -f "$srcdir/icode" ]; then
-                  icode="$srcdir/icode"
-                else
-                  icode="$(find "$srcdir" -type f -name icode | head -n 1)"
-                fi
-                run_icode
-                ;;
-              *)
-                if [ -z "${{ICODE_RELEASE:-}}" ]; then
-                  echo "ICODE_RELEASE is required (full .tar.gz URL/path, or path to icode)" >&2
-                  exit 1
-                fi
-
-                src="${{ICODE_RELEASE}}"
-                case "$src" in
-                  http://*|https://*)
-                    if [ -n "${{GITCODE_TOKEN:-}}" ]; then
-                      curl -fsSL -H "PRIVATE-TOKEN: ${{GITCODE_TOKEN}}" "$src" -o "$work/release.bin"
-                    else
-                      curl -fsSL "$src" -o "$work/release.bin"
-                    fi
-                    src="$work/release.bin"
-                    ;;
-                esac
-
-                if [ ! -e "$src" ]; then
-                  echo "ICODE_RELEASE not found: $src" >&2
-                  exit 1
-                fi
-
-                base="$(basename "$src")"
-                case "$base" in
-                  *-full-*) ;;
-                  icode-*.tar.gz|icode-*.tgz)
-                    echo "Warning: $base does not look like a -full- archive; slim tarballs may hit PyPI." >&2
-                    ;;
-                esac
-
-                case "$src" in
-                  *.tar.gz|*.tgz)
-                    mkdir -p "$work/extract"
-                    tar -xzf "$src" -C "$work/extract"
-                    if [ -x "$work/extract/icode" ] || [ -f "$work/extract/icode" ]; then
-                      icode="$work/extract/icode"
-                    else
-                      icode="$(find "$work/extract" -type f -name icode | head -n 1)"
-                    fi
-                    ;;
-                  *)
-                    icode="$src"
-                    ;;
-                esac
-                run_icode
-                ;;
-            esac
-          '''
-{cred_close}        }}
-      }}
-    }}
-    stage('Report') {{
-      steps {{
-        script {{
-          currentBuild.description = "${{params.TASK}} | ${{params.EVAL_MODE}} | release=${{params.ICODE_RELEASE}} | git=${{params.ICODE_GIT_URL}}"
-        }}
-      }}
-    }}
-  }}
-
-  post {{
-    always {{
-      archiveArtifacts artifacts: "**/reward.json", allowEmptyArchive: true
-    }}
-  }}
-}}
-"#,
-        mode_first = mode_first,
-        mode_second = mode_second,
-        task = task,
-        release = release,
-        git_url = git_url,
-        git_ref = git_ref,
-        icode_args = icode_args,
-        cred_open = cred_open,
-        cred_close = cred_close,
-    )
+    one_task_jenkinsfile("lolbench", &opts.default_task, &opts.credential_ids)
 }
 
 fn tempfile_path(prefix: &str) -> Result<PathBuf> {
@@ -725,10 +682,10 @@ fn urlencoding_simple(s: &str) -> String {
         .collect()
 }
 
-pub const ICODE_EVAL: &str = "icode_eval";
+pub const DEEPSWE_ONE_TASK: &str = "deepswe_one_task";
 
-/// Ensure Pipeline job `icode_eval` (Pier + DeepSWE + iCode vs DeepSeek baseline).
-pub fn ensure_icode_eval(
+/// Ensure Pipeline job `deepswe_one_task` (Pier + DeepSWE + iCode vs DeepSeek baseline).
+pub fn ensure_deepswe_one_task(
     jenkins_url: &str,
     api_user: &str,
     api_token_or_password: &str,
@@ -739,24 +696,24 @@ pub fn ensure_icode_eval(
 
     wait_for_jenkins(base, &auth, Duration::from_secs(90))?;
 
-    let cookie_file = tempfile_path("mac-k3d-icode-eval-cookies")?;
+    let cookie_file = tempfile_path("mac-k3d-deepswe-one-task-cookies")?;
     let crumb = fetch_crumb(base, &auth, &cookie_file);
 
     let exists = curl_status(
         base,
         &auth,
-        &format!("/job/{ICODE_EVAL}/api/json"),
+        &format!("/job/{DEEPSWE_ONE_TASK}/api/json"),
         &crumb,
         &cookie_file,
     )
     .map(|c| c == 200)
     .unwrap_or(false);
 
-    let xml = icode_eval_job_xml(credential_ids);
+    let xml = deepswe_one_task_job_xml(credential_ids);
 
     if exists {
-        println!("Updating Jenkins job '{ICODE_EVAL}'…");
-        let post_url = format!("{base}/job/{ICODE_EVAL}/config.xml");
+        println!("Updating Jenkins job '{DEEPSWE_ONE_TASK}'…");
+        let post_url = format!("{base}/job/{DEEPSWE_ONE_TASK}/config.xml");
         let mut cmd = Command::new("curl");
         cmd.args([
             "-sS",
@@ -780,25 +737,25 @@ pub fn ensure_icode_eval(
             cmd.args(["-H", &format!("{field}: {value}")]);
         }
         let output = cmd.output().map_err(|e| Error::CommandFailed {
-            cmd: "curl config.xml icode_eval".into(),
+            cmd: "curl config.xml deepswe_one_task".into(),
             source: e.into(),
         })?;
         let _ = std::fs::remove_file(&cookie_file);
         let raw = String::from_utf8_lossy(&output.stdout);
         let code = raw.lines().last().unwrap_or("").trim().to_string();
         if code != "200" && code != "201" {
-            println!("Warning: failed to update '{ICODE_EVAL}' (HTTP {code}).");
+            println!("Warning: failed to update '{DEEPSWE_ONE_TASK}' (HTTP {code}).");
         } else {
-            println!("Updated job '{ICODE_EVAL}'.");
+            println!("Updated job '{DEEPSWE_ONE_TASK}'.");
         }
         return Ok(());
     }
 
     let create_url = format!(
         "{base}/createItem?name={}",
-        urlencoding_simple(ICODE_EVAL)
+        urlencoding_simple(DEEPSWE_ONE_TASK)
     );
-    println!("Creating Jenkins job '{ICODE_EVAL}' on {base} …");
+    println!("Creating Jenkins job '{DEEPSWE_ONE_TASK}' on {base} …");
     let mut cmd = Command::new("curl");
     cmd.args([
         "-sS",
@@ -822,24 +779,24 @@ pub fn ensure_icode_eval(
         cmd.args(["-H", &format!("{field}: {value}")]);
     }
     let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: "curl createItem icode_eval".into(),
+        cmd: "curl createItem deepswe_one_task".into(),
         source: e.into(),
     })?;
     let _ = std::fs::remove_file(&cookie_file);
     let raw = String::from_utf8_lossy(&output.stdout);
     let code = raw.lines().last().unwrap_or("").trim().to_string();
     if code != "200" && code != "201" && code != "302" && code != "303" {
-        println!("Warning: failed to create '{ICODE_EVAL}' (HTTP {code}).");
+        println!("Warning: failed to create '{DEEPSWE_ONE_TASK}' (HTTP {code}).");
         return Ok(());
     }
     println!(
-        "Created job '{ICODE_EVAL}'.\n\
-         Trigger: {base}/job/{ICODE_EVAL}/buildWithParameters  (or: mac-k3d eval)"
+        "Created job '{DEEPSWE_ONE_TASK}'.\n\
+         Trigger: {base}/job/{DEEPSWE_ONE_TASK}/buildWithParameters  (or: mac-k3d eval)"
     );
     Ok(())
 }
 
-pub async fn ensure_icode_eval_from_cluster(
+pub async fn ensure_deepswe_one_task_from_cluster(
     kubectl: &Path,
     config: &crate::config::MacK3dConfig,
     credential_ids: Vec<String>,
@@ -851,183 +808,19 @@ pub async fn ensure_icode_eval_from_cluster(
     let password = match crate::runtime::jenkins::admin_password(kubectl, config).await {
         Ok(p) if !p.is_empty() => p,
         Ok(_) | Err(_) => {
-            println!("Skipping '{ICODE_EVAL}' create — could not read Jenkins admin password yet.");
+            println!("Skipping '{DEEPSWE_ONE_TASK}' create — could not read Jenkins admin password yet.");
             return Ok(());
         }
     };
-    ensure_icode_eval(&url, "admin", &password, &credential_ids)
+    ensure_deepswe_one_task(&url, "admin", &password, &credential_ids)
 }
 
-fn icode_eval_jenkinsfile(credential_ids: &[String]) -> String {
-    let (cred_open, cred_close) = with_credentials_block(credential_ids);
-    format!(
-        r#"pipeline {{
-  agent {{ label params.AGENT_LABEL }}
-
-  options {{
-    timeout(time: 12, unit: 'HOURS')
-  }}
-
-  parameters {{
-    choice(name: 'HARNESS', choices: ['icode'], description: 'v1: icode only')
-    choice(name: 'LLM', choices: ['deepseek'], description: 'v1: deepseek only')
-    choice(name: 'BENCHMARK', choices: ['deepswe'], description: 'v1: deepswe only')
-    string(name: 'N_TASKS', defaultValue: '1', description: 'Number of DeepSWE questions')
-    choice(name: 'ICODE_MODE', choices: ['binary', 'source'], description: 'iCode delivery (users: binary drop)')
-    string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: empty = ~/.local/share/mac-k3d/icode or icode-*-full-* (tar.gz / folder)')
-    string(name: 'ICODE_SOURCE', defaultValue: '', description: 'source: path on worker; empty = discover (developers)')
-    string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
-    string(name: 'CPU_LOCK_QTY', defaultValue: '4')
-    string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Dir with pipeline/stages/run_all.sh (optional)')
-    string(name: 'DEEPSEEK_MODEL', defaultValue: 'deepseek-v4-pro', description: 'DeepSeek Chat Completions model id')
-  }}
-
-  stages {{
-    stage('Prepare') {{
-      steps {{
-        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
-{cred_open}          sh '''
-            set -euo pipefail
-            echo "PROGRESS 5% prepare workspace"
-            export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
-            command -v docker >/dev/null
-            docker info >/dev/null
-            SHARE="${{XDG_DATA_HOME:-$HOME/.local/share}}/mac-k3d"
-            ROOT="${{MAC_K3D_ROOT:-}}"
-            if [ -z "$ROOT" ] || [ ! -f "$ROOT/pipeline/stages/run_all.sh" ]; then
-              if [ -f "${{WORKSPACE}}/pipeline/stages/run_all.sh" ]; then
-                ROOT="${{WORKSPACE}}"
-              elif [ -f "$SHARE/pipeline/stages/run_all.sh" ]; then
-                ROOT="$SHARE"
-              else
-                echo "MAC_K3D_ROOT missing pipeline/stages/run_all.sh. On this worker run: mac-k3d config -c worker.yaml (extracts ~/.local/share/mac-k3d/pipeline) or: mac-k3d eval --stage p0" >&2
-                exit 1
-              fi
-            fi
-            export MAC_K3D_ROOT="$ROOT"
-            export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
-            export N_TASKS="${{N_TASKS:-1}}"
-            export ICODE_MODE="${{ICODE_MODE:-binary}}"
-            export ICODE_RELEASE="${{ICODE_RELEASE:-}}"
-            export ICODE_SOURCE="${{ICODE_SOURCE:-}}"
-            export HARNESS=icode LLM=deepseek BENCHMARK=deepswe
-            export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-deepseek-v4-pro}}"
-            export LLM_NAME="${{LLM_NAME:-DeepSeek V4 Pro}}"
-            if [ -z "${{DEEPSEEK_API_KEY:-}}" ]; then
-              echo "DEEPSEEK_API_KEY missing. Store credential deepseek-api-key on the Jenkins controller." >&2
-              exit 1
-            fi
-            echo "PROGRESS 10% running pipeline/stages"
-            bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
-            echo "PROGRESS 100% done"
-            if [ -f "$MAC_K3D_EVAL_WORKDIR/last_output.txt" ]; then
-              echo "RESULT $(cat "$MAC_K3D_EVAL_WORKDIR/last_output.txt")"
-            fi
-          '''
-{cred_close}        }}
-      }}
-    }}
-  }}
-
-  post {{
-    always {{
-      archiveArtifacts artifacts: 'eval-runs/reports/**/*.json', allowEmptyArchive: true
-    }}
-  }}
-}}
-"#
-    )
-}
-
-fn icode_eval_job_xml(credential_ids: &[String]) -> String {
-    let script = icode_eval_jenkinsfile(credential_ids);
-    format!(
-        r#"<?xml version='1.1' encoding='UTF-8'?>
-<flow-definition plugin="workflow-job">
-  <description>iCode is an agent harness. This job measures whether the harness helps an LLM on DeepSWE (via Pier): Arm A = iCode + LLM (DeepSeek); Arm B = the same LLM without iCode (baseline). Compare pass@1 / resolved / tokens / time in the archived JSON. See docs/binary-initializer/user-guide.md.</description>
-  <keepDependencies>false</keepDependencies>
-  <properties>
-    <hudson.model.ParametersDefinitionProperty>
-      <parameterDefinitions>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>HARNESS</name>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-              <string>icode</string>
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>LLM</name>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-              <string>deepseek</string>
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>BENCHMARK</name>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-              <string>deepswe</string>
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>N_TASKS</name>
-          <defaultValue>1</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>ICODE_MODE</name>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-              <string>binary</string>
-              <string>source</string>
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>ICODE_RELEASE</name>
-          <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>ICODE_SOURCE</name>
-          <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>AGENT_LABEL</name>
-          <defaultValue>lolbench</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>CPU_LOCK_QTY</name>
-          <defaultValue>4</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>MAC_K3D_ROOT</name>
-          <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>DEEPSEEK_MODEL</name>
-          <defaultValue>deepseek-v4-pro</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-      </parameterDefinitions>
-    </hudson.model.ParametersDefinitionProperty>
-  </properties>
-  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
-    <script><![CDATA[{script}]]></script>
-    <sandbox>true</sandbox>
-  </definition>
-  <triggers/>
-  <disabled>false</disabled>
-</flow-definition>
-"#
+fn deepswe_one_task_job_xml(credential_ids: &[String]) -> String {
+    one_task_job_xml(
+        "deepswe",
+        "",
+        "iCode vs DeepSeek baseline on one DeepSWE task (Pier + iCode + deepseek-v4-pro). Arm A = iCode + LLM; Arm B = the same LLM without iCode. See docs/binary-initializer/user-guide.md.",
+        credential_ids,
     )
 }
 
@@ -1049,62 +842,21 @@ mod tests {
     }
 
     #[test]
-    fn jenkinsfile_dual_mode_binary_and_source() {
+    fn lolbench_one_task_uses_shared_pipeline() {
         let jf = jenkinsfile(&sample_opts());
-        assert!(jf.contains("EVAL_MODE"));
-        assert!(jf.contains("choice(name: 'EVAL_MODE'"));
-        assert!(jf.contains("ICODE_RELEASE"));
-        assert!(jf.contains("ICODE_GIT_URL"));
-        assert!(jf.contains("ICODE_GIT_REF"));
-        assert!(jf.contains("icode-linux-x86_64-full-v0.1.41.tar.gz"));
-        assert!(jf.contains("tar -xzf"));
-        assert!(jf.contains("ICODE_RELEASE is required"));
-        assert!(jf.contains("PRIVATE-TOKEN"));
-        assert!(jf.contains("GITCODE_TOKEN"));
-        assert!(jf.contains("ICODE_ARGS"));
-        assert!(jf.contains("ICODE_TASK"));
+        assert!(jf.contains("pipeline/stages/run_all.sh"));
+        assert!(jf.contains("BENCHMARK"));
+        assert!(jf.contains("lolbench"));
+        assert!(jf.contains("ruff_1"));
+        assert!(jf.contains("export TASK="));
+        assert!(jf.contains("HARNESS=icode"));
         assert!(jf.contains("lock(label: 'CPU_CORES'"));
         assert!(jf.contains("withCredentials"));
         assert!(jf.contains("deepseek-api-key"));
-        assert!(jf.contains("source)"));
-        assert!(jf.contains("( cd \"$srcdir\" && uv sync )"));
-        assert!(jf.contains("git clone"));
-        assert!(jf.contains("ICODE_GIT_URL is required when EVAL_MODE=source"));
-        assert!(!jf.contains("honeyc"));
-        assert!(!jf.contains("BINARY_TARGET"));
-        assert!(!jf.contains("PYTHONPATH=."));
+        assert!(jf.contains("deepseek-v4-pro"));
         assert!(!jf.contains("harbor run"));
-        assert!(!jf.contains("GitSCM"));
-        assert!(!jf.contains("eval --task"));
-        let case_at = jf.find("case \"$mode\" in").expect("EVAL_MODE case");
-        let uv_at = jf[case_at..].find("uv sync").expect("uv sync in Evaluate");
-        let binary_req = jf[case_at..]
-            .find("ICODE_RELEASE is required")
-            .expect("binary require");
-        assert!(
-            uv_at < binary_req,
-            "uv sync should appear in the source arm, before the binary require"
-        );
-    }
-
-    #[test]
-    fn jenkinsfile_choice_order_follows_default_eval_mode() {
-        let mut opts = sample_opts();
-        opts.default_eval_mode = "source".into();
-        let jf = jenkinsfile(&opts);
-        assert!(jf.contains("choices: ['source', 'binary']"));
-        opts.default_eval_mode = "binary".into();
-        let jf = jenkinsfile(&opts);
-        assert!(jf.contains("choices: ['binary', 'source']"));
-    }
-
-    #[test]
-    fn jenkinsfile_downloads_http_and_warns_slim() {
-        let jf = jenkinsfile(&sample_opts());
-        assert!(jf.contains("http://*|https://*"));
-        assert!(jf.contains("icode-in"));
-        assert!(jf.contains("-full-"));
-        assert!(jf.contains("slim tarballs"));
+        assert!(!jf.contains("EVAL_MODE"));
+        assert!(!jf.contains("icode-in"));
     }
 
     #[test]
@@ -1112,16 +864,16 @@ mod tests {
         let xml = job_config_xml(&sample_opts());
         assert!(xml.contains("<![CDATA["));
         assert!(xml.contains("flow-definition"));
-        assert!(xml.contains("<name>EVAL_MODE</name>"));
-        assert!(xml.contains("<name>ICODE_RELEASE</name>"));
-        assert!(xml.contains("<name>ICODE_GIT_URL</name>"));
-        assert!(xml.contains("<name>ICODE_GIT_REF</name>"));
-        assert!(xml.contains("<name>ICODE_ARGS</name>"));
+        assert!(xml.contains("<name>TASK</name>"));
+        assert!(xml.contains("<name>ICODE_MODE</name>"));
+        assert!(xml.contains("<name>BENCHMARK</name>"));
+        assert!(xml.contains("<string>lolbench</string>"));
+        assert!(xml.contains("<defaultValue>ruff_1</defaultValue>"));
         assert!(xml.contains("<string>binary</string>"));
-        assert!(!xml.contains("<name>HONEYC_BIN</name>"));
-        assert!(!xml.contains("<name>BINARY_TARGET</name>"));
+        assert!(!xml.contains("<name>EVAL_MODE</name>"));
         assert!(!xml.contains("<name>LOLBENCH_PATH</name>"));
         assert!(xml.contains("pipeline {"));
+        assert!(xml.contains("run_all.sh"));
     }
 
     #[test]
@@ -1159,8 +911,8 @@ mod tests {
     }
 
     #[test]
-    fn icode_eval_xml_mentions_progress_and_scripts() {
-        let xml = icode_eval_job_xml(&["deepseek-api-key".into()]);
+    fn deepswe_one_task_xml_mentions_progress_and_scripts() {
+        let xml = deepswe_one_task_job_xml(&["deepseek-api-key".into()]);
         assert!(xml.contains("<![CDATA["));
         assert!(xml.contains("pipeline/stages/run_all.sh"));
         assert!(xml.contains(".local/share"));
@@ -1173,11 +925,11 @@ mod tests {
         assert!(xml.contains("withCredentials"));
         assert!(xml.contains("ParametersDefinitionProperty"));
         assert!(xml.contains("<name>N_TASKS</name>"));
+        assert!(xml.contains("<name>TASK</name>"));
         assert!(xml.contains("mac-k3d config -c worker.yaml"));
         assert!(xml.contains("eval --stage p0"));
-        assert!(xml.contains("agent harness"));
-        assert!(xml.contains("without"));
         assert!(xml.contains("user-guide"));
+        assert!(!xml.contains("harbor run"));
         assert!(
             !xml.contains("/home/Toby/Documents/Toby/iCode-main"),
             "job must not hardcode a lab iCode path"
@@ -1185,8 +937,8 @@ mod tests {
     }
 
     #[test]
-    fn icode_eval_xml_omits_bind_when_credential_ids_empty() {
-        let xml = icode_eval_job_xml(&[]);
+    fn deepswe_one_task_xml_omits_bind_when_credential_ids_empty() {
+        let xml = deepswe_one_task_job_xml(&[]);
         assert!(
             !xml.contains("withCredentials"),
             "empty IDs must omit the bind"
@@ -1196,9 +948,23 @@ mod tests {
     #[test]
     fn skip_secrets_must_pass_listed_ids_to_keep_bind() {
         // --skip-secrets / start list existing IDs then call this helper; [] would strip the bind.
-        let xml = icode_eval_job_xml(&["deepseek-api-key".into()]);
+        let xml = deepswe_one_task_job_xml(&["deepseek-api-key".into()]);
         assert!(xml.contains("withCredentials"));
         assert!(xml.contains("deepseek-api-key"));
         assert!(xml.contains("DEEPSEEK_API_KEY"));
+    }
+
+    #[test]
+    fn both_jobs_share_run_all_and_differ_by_benchmark() {
+        let deepswe = deepswe_one_task_job_xml(&["deepseek-api-key".into()]);
+        let lolbench = job_config_xml(&sample_opts());
+        assert!(deepswe.contains("<string>deepswe</string>"));
+        assert!(lolbench.contains("<string>lolbench</string>"));
+        assert!(deepswe.contains("run_all.sh"));
+        assert!(lolbench.contains("run_all.sh"));
+        assert!(lolbench.contains("Harbor + iCode"));
+        assert!(deepswe.contains("Pier + iCode"));
+        assert!(!deepswe.contains("harbor run"));
+        assert!(!lolbench.contains("harbor run"));
     }
 }

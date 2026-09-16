@@ -1,8 +1,17 @@
 # LoLBench Jenkins Job Design
 
-DeepSWE / iCode harness eval is job **`icode_eval`**: [binary-initializer/user-guide.md](binary-initializer/user-guide.md).
+**What `config` writes today:** two separate runners, both iCode + `deepseek-v4-pro`:
 
-This page is the **LoLBench Harbor** design (previous worker). The Pipeline `mac-k3d config` writes today is still the iCode-argv smoke in [`src/prepare/jenkins_job.rs`](../src/prepare/jenkins_job.rs), not this Harbor Jenkinsfile yet.
+- **`deepswe_one_task`** — DeepSWE only. P5 = `pier run` + `icode_pier_agent` + worker `*-full-*` drop.
+- **`lolbench_one_task`** — LoLBench only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent` + `deepseek-v4-pro`. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop (same as DeepSWE). LoLBench's in-repo gitcode clone is not used. First run: `uv tool install harbor` if missing; on x86_64, P5 builds or retags the task image (Hub tags are arm64-only).
+
+Operator start: [binary-initializer/user-guide.md](binary-initializer/user-guide.md). Jenkinsfile still only calls `pipeline/stages/run_all.sh` (Harbor stays in P5, not in job XML).
+
+The rest of this page is an earlier **opencode / OpenRouter** Harbor design. That Jenkinsfile is **not** the current job. Current LoLBench eval is iCode + DeepSeek via Harbor as above.
+
+---
+
+# Harbor design (not implemented)
 
 ---
 

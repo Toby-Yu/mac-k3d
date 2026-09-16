@@ -140,8 +140,8 @@ pub async fn run(
                         jenkins_job::LOLBENCH_ONE_TASK
                     );
                 }
-                println!("Ensuring Jenkins job '{}'…", jenkins_job::ICODE_EVAL);
-                if let Err(err) = jenkins_job::ensure_icode_eval_from_cluster(
+                println!("Ensuring Jenkins job '{}'…", jenkins_job::DEEPSWE_ONE_TASK);
+                if let Err(err) = jenkins_job::ensure_deepswe_one_task_from_cluster(
                     &tools.kubectl,
                     &config,
                     credential_ids,
@@ -150,7 +150,7 @@ pub async fn run(
                 {
                     println!(
                         "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
-                        jenkins_job::ICODE_EVAL
+                        jenkins_job::DEEPSWE_ONE_TASK
                     );
                 }
             }

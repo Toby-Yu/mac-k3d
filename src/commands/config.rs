@@ -160,14 +160,14 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
                 jenkins_job::LOLBENCH_ONE_TASK
             );
         }
-        println!("Ensuring Jenkins job '{}'…", jenkins_job::ICODE_EVAL);
+        println!("Ensuring Jenkins job '{}'…", jenkins_job::DEEPSWE_ONE_TASK);
         if let Err(err) =
-            jenkins_job::ensure_icode_eval_from_cluster(&tools.kubectl, config, credential_ids)
+            jenkins_job::ensure_deepswe_one_task_from_cluster(&tools.kubectl, config, credential_ids)
                 .await
         {
             println!(
                 "Warning: could not ensure '{}' ({err}).",
-                jenkins_job::ICODE_EVAL
+                jenkins_job::DEEPSWE_ONE_TASK
             );
         }
     }

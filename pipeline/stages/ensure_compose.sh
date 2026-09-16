@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ensure `docker compose` (v2 plugin). Safe to source after _common.sh or run alone.
+# Ensure `docker compose` (v2 plugin) and `docker buildx`. Safe to source after _common.sh or run alone.
 # shellcheck disable=SC2034
 
 _compose_die() {
@@ -9,6 +9,15 @@ _compose_die() {
     echo "ERROR: $*" >&2
     exit 1
   fi
+}
+
+_cli_plugin_arch() {
+  case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64 | Darwin-aarch64) echo "darwin-arm64" ;;
+    Darwin-x86_64) echo "darwin-amd64" ;;
+    Linux-aarch64 | Linux-arm64) echo "linux-arm64" ;;
+    *) echo "linux-amd64" ;;
+  esac
 }
 
 ensure_docker_compose() {
@@ -36,8 +45,29 @@ ensure_docker_compose() {
   echo "OK docker compose $(docker compose version 2>/dev/null | head -n 1)"
 }
 
+ensure_docker_buildx() {
+  if docker buildx version >/dev/null 2>&1; then
+    echo "OK docker buildx $(docker buildx version 2>/dev/null | head -n 1)"
+    return 0
+  fi
+
+  echo "Installing Docker buildx plugin under ~/.docker/cli-plugins (Harbor allowlist sidecar needs it)…"
+  mkdir -p "${HOME}/.docker/cli-plugins"
+  local ver="v0.29.1" arch url
+  arch="$(_cli_plugin_arch)"
+  url="https://github.com/docker/buildx/releases/download/${ver}/buildx-${ver}.${arch}"
+  if ! curl -fsSL "$url" -o "${HOME}/.docker/cli-plugins/docker-buildx"; then
+    _compose_die "failed to download Docker buildx from $url"
+  fi
+  chmod +x "${HOME}/.docker/cli-plugins/docker-buildx"
+  docker buildx version >/dev/null 2>&1 \
+    || _compose_die "docker buildx still missing after plugin install. Harbor LoLBench tasks need buildx to build the egress sidecar."
+  echo "OK docker buildx $(docker buildx version 2>/dev/null | head -n 1)"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   set -euo pipefail
   command -v docker >/dev/null || _compose_die "docker not on PATH"
   ensure_docker_compose
+  ensure_docker_buildx
 fi

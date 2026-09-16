@@ -17,9 +17,17 @@ pub struct EvalArgs {
     #[arg(long)]
     pub local: bool,
 
-    /// Number of DeepSWE tasks (default 1)
+    /// Number of tasks when TASK is empty (default 1; *_one_task jobs stay at 1)
     #[arg(long, default_value_t = 1)]
     pub n_tasks: u32,
+
+    /// Benchmark: deepswe | lolbench
+    #[arg(long)]
+    pub benchmark: Option<String>,
+
+    /// One question id (DeepSWE task dir or LoLBench harbor_tasks id, e.g. ruff_1)
+    #[arg(long)]
+    pub task: Option<String>,
 
     /// iCode delivery: binary | source (users: binary drop; developers: source)
     #[arg(long, default_value = "binary")]
@@ -53,6 +61,18 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
     }
     let repo = discover_repo_root()?;
     let mut n_tasks = args.n_tasks.max(1);
+    let env_bench = std::env::var("BENCHMARK").ok();
+    let mut benchmark = normalize_benchmark(
+        args.benchmark
+            .as_deref()
+            .or(env_bench.as_deref())
+            .unwrap_or("deepswe"),
+    );
+    let mut task = inherit_eval_task(
+        args.task.clone(),
+        args.benchmark.as_deref(),
+        std::env::var("TASK").ok(),
+    );
     let mut icode_mode = normalize_mode(&args.icode_mode);
     let mut icode_release = args
         .icode_release
@@ -78,7 +98,7 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
     let local = args.local;
 
     if args.stage.is_none() && !args.yes && atty::is(atty::Stream::Stdin) {
-        println!("mac-k3d eval — iCode harness vs DeepSeek baseline on DeepSWE\n");
+        println!("mac-k3d eval — iCode harness vs DeepSeek baseline (DeepSWE or LoLBench)\n");
         let theme = ColorfulTheme::default();
         let _h = Select::with_theme(&theme)
             .with_prompt("Harness")
@@ -92,14 +112,28 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             .default(0)
             .interact()
             .map_err(|_| Error::Cancelled)?;
-        let _b = Select::with_theme(&theme)
+        let b_idx = Select::with_theme(&theme)
             .with_prompt("Benchmark")
-            .items(&["deepswe"])
-            .default(0)
+            .items(&["deepswe", "lolbench"])
+            .default(if benchmark == "lolbench" { 1 } else { 0 })
             .interact()
             .map_err(|_| Error::Cancelled)?;
+        benchmark = if b_idx == 1 {
+            "lolbench".into()
+        } else {
+            "deepswe".into()
+        };
+        if benchmark == "lolbench" && task.is_empty() {
+            task = "ruff_1".into();
+        }
+        task = Input::with_theme(&theme)
+            .with_prompt("TASK (one question id; empty DeepSWE = first alphabetical)")
+            .default(task)
+            .allow_empty(true)
+            .interact_text()
+            .map_err(|_| Error::Cancelled)?;
         n_tasks = Input::with_theme(&theme)
-            .with_prompt("Number of questions (tasks)")
+            .with_prompt("Number of questions (used only when TASK is empty)")
             .default(n_tasks)
             .interact_text()
             .map_err(|_| Error::Cancelled)?;
@@ -154,6 +188,8 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             &icode_source,
             &workdir,
             &model,
+            &benchmark,
+            &task,
         );
     }
 
@@ -163,7 +199,10 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
         false
     } else if atty::is(atty::Stream::Stdin) {
         Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Run locally now (--local)? No = trigger Jenkins job icode_eval")
+            .with_prompt(format!(
+                "Run locally now (--local)? No = trigger Jenkins job {}",
+                eval_job_name(&benchmark)
+            ))
             .default(true)
             .interact()
             .map_err(|_| Error::Cancelled)?
@@ -181,16 +220,20 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             &icode_source,
             &workdir,
             &model,
+            &benchmark,
+            &task,
         );
     }
 
-    trigger_jenkins_icode_eval(
+    trigger_jenkins_one_task(
         config,
         n_tasks,
         &icode_mode,
         &icode_release,
         &icode_source,
         &model,
+        &benchmark,
+        &task,
     )
 }
 
@@ -199,6 +242,41 @@ fn normalize_mode(s: &str) -> String {
         "binary".into()
     } else {
         "source".into()
+    }
+}
+
+/// `--task` wins. If `--benchmark` is set, do not steal a leftover shell `TASK`
+/// (e.g. ruff_1 after a LoLBench run). Jenkins still gets TASK from `--task` / prompts.
+fn inherit_eval_task(
+    cli_task: Option<String>,
+    cli_benchmark: Option<&str>,
+    env_task: Option<String>,
+) -> String {
+    if let Some(t) = cli_task.filter(|s| !s.trim().is_empty()) {
+        return t;
+    }
+    if cli_benchmark.is_some() {
+        return String::new();
+    }
+    env_task
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
+}
+
+fn normalize_benchmark(s: &str) -> String {
+    if s.eq_ignore_ascii_case("lolbench") {
+        "lolbench".into()
+    } else {
+        "deepswe".into()
+    }
+}
+
+fn eval_job_name(benchmark: &str) -> &'static str {
+    if benchmark == "lolbench" {
+        "lolbench_one_task"
+    } else {
+        "deepswe_one_task"
     }
 }
 
@@ -268,6 +346,8 @@ fn run_stage(
     icode_source: &str,
     workdir: &Path,
     model: &str,
+    benchmark: &str,
+    task: &str,
 ) -> Result<()> {
     let script = match stage {
         "p0" => "pipeline/stages/p0_prereqs.sh",
@@ -297,12 +377,13 @@ fn run_stage(
         .env("MAC_K3D_ROOT", repo)
         .env("MAC_K3D_EVAL_WORKDIR", workdir)
         .env("N_TASKS", n_tasks.to_string())
+        .env("TASK", task)
         .env("ICODE_MODE", icode_mode)
         .env("ICODE_RELEASE", icode_release)
         .env("ICODE_SOURCE", icode_source)
         .env("HARNESS", "icode")
         .env("LLM", "deepseek")
-        .env("BENCHMARK", "deepswe")
+        .env("BENCHMARK", benchmark)
         .env("DEEPSEEK_MODEL", model)
         .env("LLM_NAME", "DeepSeek V4 Pro")
         .status()
@@ -319,13 +400,15 @@ fn run_stage(
     Ok(())
 }
 
-fn trigger_jenkins_icode_eval(
+fn trigger_jenkins_one_task(
     config: &MacK3dConfig,
     n_tasks: u32,
     icode_mode: &str,
     icode_release: &str,
     icode_source: &str,
     model: &str,
+    benchmark: &str,
+    task: &str,
 ) -> Result<()> {
     let url = config
         .jenkins_agent
@@ -363,33 +446,36 @@ fn trigger_jenkins_icode_eval(
     } else {
         icode_source
     };
+    let job = eval_job_name(benchmark);
     let build_url = format!(
-        "{base}/job/icode_eval/buildWithParameters?\
-         HARNESS=icode&LLM=deepseek&BENCHMARK=deepswe&N_TASKS={n_tasks}\
+        "{base}/job/{job}/buildWithParameters?\
+         HARNESS=icode&LLM=deepseek&BENCHMARK={}&TASK={}&N_TASKS={n_tasks}\
          &ICODE_MODE={icode_mode}&ICODE_RELEASE={}&ICODE_SOURCE={}&DEEPSEEK_MODEL={}",
+        urlencoding_simple(benchmark),
+        urlencoding_simple(task),
         urlencoding_simple(icode_release),
         urlencoding_simple(source_q),
         urlencoding_simple(model),
     );
 
-    println!("Triggering Jenkins job icode_eval at {base} …");
+    println!("Triggering Jenkins job {job} at {base} …");
     let auth = format!("{user}:{token}");
     let code = jenkins_post_http(&auth, &build_url)?;
     let code = if code == "400" {
         // Job XML rewrite can drop ParametersDefinitionProperty until the next controller config.
-        let fallback = format!("{base}/job/icode_eval/build");
+        let fallback = format!("{base}/job/{job}/build");
         jenkins_post_http(&auth, &fallback)?
     } else {
         code
     };
     if code != "201" && code != "200" && code != "302" && code != "303" {
         return Err(Error::Config(format!(
-            "failed to trigger icode_eval (HTTP {code}). Ensure the job exists \
+            "failed to trigger {job} (HTTP {code}). Ensure the job exists \
              (mac-k3d config on controller) or use --local."
         )));
     }
     println!(
-        "Triggered. Watch progress in Jenkins UI:\n  {base}/job/icode_eval/\n\
+        "Triggered. Watch progress in Jenkins UI:\n  {base}/job/{job}/\n\
          Look for PROGRESS n% lines in the console log."
     );
     let _ = config;
@@ -397,25 +483,76 @@ fn trigger_jenkins_icode_eval(
 }
 
 fn jenkins_post_http(auth: &str, url: &str) -> Result<String> {
-    let status = Command::new("curl")
+    let cookie = std::env::temp_dir().join(format!("mac-k3d-eval-crumb-{}", std::process::id()));
+    let _ = std::fs::File::create(&cookie);
+    let base = url
+        .split("/job/")
+        .next()
+        .unwrap_or(url)
+        .trim_end_matches('/');
+    let crumb = Command::new("curl")
         .args([
-            "-sS",
+            "-fsS",
+            "-b",
+            &cookie.display().to_string(),
+            "-c",
+            &cookie.display().to_string(),
             "-u",
             auth,
-            "-X",
-            "POST",
-            url,
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
+            &format!("{base}/crumbIssuer/api/json"),
         ])
         .output()
-        .map_err(|e| Error::CommandFailed {
-            cmd: "curl icode_eval trigger".into(),
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let field = extract_json_str(&text, "crumbRequestField")?;
+            let value = extract_json_str(&text, "crumb")?;
+            Some((field, value))
+        });
+    let mut args = vec![
+        "-sS".into(),
+        "-b".into(),
+        cookie.display().to_string(),
+        "-c".into(),
+        cookie.display().to_string(),
+        "-u".into(),
+        auth.to_string(),
+        "-X".into(),
+        "POST".into(),
+        url.to_string(),
+        "-o".into(),
+        "/dev/null".into(),
+        "-w".into(),
+        "%{http_code}".into(),
+    ];
+    if let Some((field, value)) = crumb {
+        args.push("-H".into());
+        args.push(format!("{field}: {value}"));
+    }
+    let status = Command::new("curl").args(&args).output().map_err(|e| {
+        let _ = std::fs::remove_file(&cookie);
+        Error::CommandFailed {
+            cmd: "curl one_task trigger".into(),
             source: e.into(),
-        })?;
+        }
+    })?;
+    let _ = std::fs::remove_file(&cookie);
     Ok(String::from_utf8_lossy(&status.stdout).trim().to_string())
+}
+
+fn extract_json_str(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let idx = json.find(&needle)?;
+    let after = &json[idx + needle.len()..];
+    let colon = after.find(':')?;
+    let rest = after[colon + 1..].trim_start();
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let rest = &rest[1..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 fn urlencoding_simple(s: &str) -> String {
@@ -482,5 +619,49 @@ mod tests {
     #[test]
     fn looks_like_root_needs_pipeline_stages() {
         assert!(!crate::prepare::eval_assets::looks_like_root(Path::new("/tmp")));
+    }
+
+    #[test]
+    fn normalize_benchmark_accepts_lolbench() {
+        assert_eq!(normalize_benchmark("lolbench"), "lolbench");
+        assert_eq!(normalize_benchmark("LOLBENCH"), "lolbench");
+        assert_eq!(normalize_benchmark("deepswe"), "deepswe");
+        assert_eq!(normalize_benchmark("other"), "deepswe");
+    }
+
+    #[test]
+    fn eval_job_name_matches_benchmark() {
+        assert_eq!(eval_job_name("lolbench"), "lolbench_one_task");
+        assert_eq!(eval_job_name("deepswe"), "deepswe_one_task");
+    }
+
+    #[test]
+    fn inherit_eval_task_ignores_env_when_benchmark_flag_set() {
+        assert_eq!(
+            inherit_eval_task(None, Some("deepswe"), Some("ruff_1".into())),
+            ""
+        );
+        assert_eq!(
+            inherit_eval_task(
+                Some("abs-module-cache-flags".into()),
+                Some("deepswe"),
+                Some("ruff_1".into())
+            ),
+            "abs-module-cache-flags"
+        );
+        assert_eq!(
+            inherit_eval_task(None, None, Some("ruff_1".into())),
+            "ruff_1"
+        );
+    }
+
+    #[test]
+    fn extract_json_str_reads_crumb_fields() {
+        let json = r#"{"_class":"hudson.security.csrf.DefaultCrumbIssuer","crumb":"abc123","crumbRequestField":"Jenkins-Crumb"}"#;
+        assert_eq!(extract_json_str(json, "crumb").as_deref(), Some("abc123"));
+        assert_eq!(
+            extract_json_str(json, "crumbRequestField").as_deref(),
+            Some("Jenkins-Crumb")
+        );
     }
 }

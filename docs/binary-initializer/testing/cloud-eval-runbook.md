@@ -6,7 +6,7 @@ Pass/fail table and stage detail stay in [testing-eval-pipeline.md](testing-eval
 
 **Users:** copy-paste commands in [user-guide.md](../user-guide.md). This file is the **lab** runbook (this cloud IP + this PC).
 
-**Sign-off:** E0–E7 with `--n-tasks 1`. Harbor / LoLBench stay skip. After each phase, paste the checkpoint output before starting the next.
+**Sign-off:** DeepSWE **E0–E7** with `--n-tasks 1` (this runbook). LoLBench is a separate track in [testing-eval-pipeline.md](testing-eval-pipeline.md) (`lolbench_one_task`, Harbor, not Pier P4). After each phase, paste the checkpoint output before starting the next.
 
 ---
 
@@ -16,7 +16,7 @@ Jobs must **not** run inside the controller’s k3d nodes. Cloud Jenkins only qu
 
 ```text
 Cloud VM (SSH as root): k3d + Jenkins :17070
-    └── queue icode_eval (label lolbench)
+    └── queue deepswe_one_task (label lolbench)
 This PC (Toby): Jenkins agent + Docker + iCode
     ├── api.deepseek.com  (deepseek-v4-pro)
     └── archive JSON back to cloud Jenkins
@@ -41,7 +41,7 @@ flowchart TD
   e1check["E1: node online in cloud Jenkins"]
   cheap["E2-E3: P0-P4 plus report schema"]
   paid["E4-E6: P5 harness P6 baseline P7-P8 JSON"]
-  e7job["E7: Jenkins icode_eval on this PC"]
+  e7job["E7: Jenkins deepswe_one_task on this PC"]
   jsonOut["Named JSON archived and schema OK"]
 
   sshRoot --> dockerOk --> cloneBuild --> setupCtrl --> e0check
@@ -60,7 +60,7 @@ flowchart TD
   p6["P6 Arm B: DeepSeek API only"]
   p7["P7 score f2p p2p"]
   p8["P8 named JSON under output/"]
-  jenkins["E7 icode_eval archives the same JSON"]
+  jenkins["E7 deepswe_one_task archives the same JSON"]
 
   p0 --> p1 --> p2 --> p3 --> p4
   p4 --> p5
@@ -192,7 +192,7 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
 JENKINS_URL=http://127.0.0.1:17070 ./scripts/env_set_up/02_check_controller.sh
 ```
 
-**Expected:** `OK Jenkins UI … HTTP 200`, `OK job lolbench_one_task present`, `OK job icode_eval present`, `OK 02_check_controller complete`.
+**Expected:** `OK Jenkins UI … HTTP 200`, `OK job lolbench_one_task present`, `OK job deepswe_one_task present`, `OK 02_check_controller complete`.
 
 From this PC: open `http://43.107.42.252:17070` (user **admin** + printed password).
 
@@ -283,7 +283,7 @@ mac-k3d eval --stage p3
 mac-k3d eval --stage p4
 
 ./pipeline/stages/check_report.sh pipeline/lib/testdata/report-min.json
-# optional: python3 eval/test_report.py
+# optional: python3 pipeline/lib/test_report.py
 ```
 
 | Stage | Expected |
@@ -319,14 +319,14 @@ mac-k3d eval --stage p8 --n-tasks 1
 
 - P5: `PROGRESS` lines; Pier/Docker/LLM work (minutes, not 4s); `harness/` artifacts. CLI usage errors and **0-trial** Pier jobs **fail** the stage. P0 installs `docker compose` if missing. P5 and P6 use the same `selected_tasks.txt`.
 - P6: `baseline/<task>/agent.patch`; `baseline/summary.json` has usage / time / model
-- P8: `output/eval-icode-deepseek-deepswe-n1-<utc>.json` with f2p, p2p, `pass_at_1_*`, `token_usage`, `duration_seconds`, `access_date_utc`, `llm_model_id` / `llm_name`
+- P8: `output/eval-icode-deepseek-deepswe-n1-<utc>.json` with `suite`, `pass_at_1`, `macro.f2p`/`p2p`/`reward`, `tokens`, `wall_seconds`/`wall_minutes`, `model`
 - `check_report.sh` prints `OK report schema`
 
 **Checkpoint — paste:** P5/P6 OK or error tail, JSON path, `OK report schema`.
 
 ---
 
-## Phase 5 — E7 Jenkins `icode_eval`
+## Phase 5 — E7 Jenkins `deepswe_one_task`
 
 **Where:** this PC (or cloud) with the **controller** URL. **No** `--local`. Build must run on **this** node.
 
@@ -336,7 +336,7 @@ cd ~/Documents/Toby/mac-k3d
 mac-k3d eval --n-tasks 1 --icode-mode source --model deepseek-v4-pro --yes
 ```
 
-Or Jenkins UI: job `icode_eval` → Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`, `ICODE_MODE=source`).
+Or Jenkins UI: job `deepswe_one_task` → Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`, `ICODE_MODE=source`).
 
 **Expected:** build on this worker; archived JSON; same schema as E6. Confirm with `check_report.sh` on the downloaded artifact if needed.
 
@@ -353,6 +353,12 @@ E8 (N>1) is optional after E7.
 
 ---
 
+## LoLBench (optional, not this DeepSWE checklist)
+
+Do not run Pier `--stage p4` / `deepswe_one_task` for LoLBench. Copy-paste L2–L7: [testing-eval-pipeline.md](testing-eval-pipeline.md) (LoLBench track). Jenkins SUCCESS with Harbor F2P 0.368 and Resolved 0.0 is a **score**, not a pipeline fail. To test git `pipeline/` changes, set job `MAC_K3D_ROOT` to this checkout (default is `~/.local/share/mac-k3d`). After changing Pier `run.sh`, also `cargo build --release` and `cp -f target/release/mac-k3d ~/.local/bin/mac-k3d` so `mac-k3d eval --yes` embeds the Harbor-style iCode CLI.
+
+---
+
 ## Progress checklist
 
 | Phase | Command / UI | Pass (y/n) | Notes |
@@ -362,7 +368,7 @@ E8 (N>1) is optional after E7.
 | 2 | `e1` + `03_check_worker.sh` + Nodes online | | |
 | 3 | P0–P4 + `check_report.sh` testdata | | |
 | 4 | P5–P8 n=1 + named JSON | | |
-| 5 | `icode_eval` on this node | | |
+| 5 | `deepswe_one_task` on this node | | |
 
 ---
 

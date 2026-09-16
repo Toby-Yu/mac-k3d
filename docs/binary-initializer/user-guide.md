@@ -9,7 +9,12 @@ Two different downloads:
 
 Prefer **v0.5.1** Latest (or this checkout’s `cargo build --release`). Published **v0.5.0** still has the old P3: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1.
 
-Harbor / LoLBench stay **skip**. The eval job is **`icode_eval`** (DeepSWE). Do not use `lolbench_one_task`. Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
+Harbor CLI stays **skip** on DeepSWE-only workers. Eval jobs are two runners, both iCode + `deepseek-v4-pro`, one `TASK` per build:
+
+- **`deepswe_one_task`** — DeepSWE via **Pier**. Same worker `icode-*-full-*` bind-mount and the same iCode CLI as LoLBench (`run -t … -C … -a code --json`). An old installed `mac-k3d` still wraps `icode run "$PROMPT"` and exits in seconds — rebuild from this checkout.
+- **`lolbench_one_task`** — LoLBench via **Harbor** (`icode_harbor_agent`; bind-mounts the same worker `icode-*-full-*` drop as DeepSWE). First LoLBench run installs `harbor` via uv if missing. Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, P5 builds or retags a local image (do not use Harbor `--force-build`).
+
+Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
 
 Default worker Jenkins URL is `http://43.107.42.252:17070`. Type a new `http://<ip>:17070` when you buy another controller.
 
@@ -24,7 +29,7 @@ Default worker Jenkins URL is `http://43.107.42.252:17070`. Type a new `http://<
 
 Developer checkout + `.env` is optional (appendix). Users run eval through Jenkins.
 
-iCode is an **agent harness**. The job measures whether the harness helps an LLM on DeepSWE (via Pier): **Arm A** = iCode + LLM (DeepSeek); **Arm B** = the same LLM **without** iCode (baseline). Compare pass@1 / resolved / tokens / time in the archived JSON.
+iCode is an **agent harness**. The job measures whether the harness helps an LLM: **Arm A** = iCode + LLM (DeepSeek); **Arm B** = the same LLM **without** iCode (baseline). DeepSWE runs that through Pier; LoLBench through Harbor. Compare pass@1 / resolved / tokens / time in the archived JSON. Scores are comparable as “did iCode + DeepSeek resolve the task,” not as a perfectly controlled cross-benchmark A/B (different runner and iCode install).
 
 ---
 
@@ -48,7 +53,7 @@ cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 # When asked for CI secrets, enter the DeepSeek key as credential deepseek-api-key
 mac-k3d setup -c ~/.config/mac-k3d/config.yaml
 
-# Confirm Jenkins and job icode_eval on this VM
+# Confirm Jenkins and jobs deepswe_one_task + lolbench_one_task on this VM
 JENKINS_URL=http://127.0.0.1:17070 ./scripts/env_set_up/02_check_controller.sh
 ```
 
@@ -145,12 +150,13 @@ Jenkins: `ICODE_MODE=source`. Leave `ICODE_RELEASE` empty. Leave **`ICODE_SOURCE
 
 ### Jenkins UI (recommended)
 
-1. Open `http://43.107.42.252:17070` → job **`icode_eval`** (not `lolbench_one_task`).
+1. Open `http://43.107.42.252:17070` → job **`deepswe_one_task`** (Pier + DeepSWE) or **`lolbench_one_task`** (Harbor + LoLBench). One `TASK` per build. Do not flip `BENCHMARK` across jobs.
 2. **Build with Parameters**:
 
 | Field | Value |
 |-------|--------|
-| HARNESS / LLM / BENCHMARK | `icode` / `deepseek` / `deepswe` |
+| HARNESS / LLM / BENCHMARK | `icode` / `deepseek` / `deepswe` or `lolbench` (fixed on that job) |
+| TASK | empty on DeepSWE = first alphabetical; LoLBench default `ruff_1` |
 | N_TASKS | `1` |
 | ICODE_MODE | `binary` |
 | ICODE_RELEASE | empty (discovers the drop path) |
@@ -163,23 +169,25 @@ Jenkins: `ICODE_MODE=source`. Leave `ICODE_RELEASE` empty. Leave **`ICODE_SOURCE
 Source-mode users: set `ICODE_MODE=source` and fill `ICODE_SOURCE` only when the tree is not in the default list (see §3 B).
 
 3. Click **Build**. Console must say `Running on <this-worker-name>`.
-4. Download **Build Artifacts** → `eval-runs/reports/eval-icode-deepseek-deepswe-n1-*.json`.
-   On the worker the same files are at `$HOME/jenkins-agent/workspace/icode_eval/eval-runs/reports/` (or `{remote_fs}/workspace/icode_eval/eval-runs/reports/` if `jenkins_agent.remote_fs` was changed).
+4. Download **Build Artifacts** → `eval-runs/reports/eval-icode-deepseek-{deepswe|lolbench}-n1-*.json`.
+   On the worker the same files are at `$HOME/jenkins-agent/workspace/deepswe_one_task/eval-runs/reports/` or `…/workspace/lolbench_one_task/eval-runs/reports/` (or `{remote_fs}/workspace/<job>/eval-runs/reports/` if `jenkins_agent.remote_fs` was changed).
 
 ### CLI from the worker (queues Jenkins; no `--local`)
 
 ```bash
-# Queue icode_eval on the controller. Uses worker.yaml when config.yaml is absent.
+# Queue deepswe_one_task on the controller. Uses worker.yaml when config.yaml is absent.
 # Does not run Pier on this shell — watch Jenkins Console Output.
 export PATH="$HOME/.local/bin:$PATH"
-mac-k3d eval --n-tasks 1 --icode-mode binary --yes
+mac-k3d eval --benchmark deepswe --n-tasks 1 --icode-mode binary --yes
+# LoLBench, one task through Harbor + iCode (not Pier):
+# mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode binary --yes
 # Same thing, explicit file:
-# mac-k3d eval -c ~/.config/mac-k3d/worker.yaml --n-tasks 1 --icode-mode binary --yes
+# mac-k3d eval -c ~/.config/mac-k3d/worker.yaml --benchmark deepswe --icode-mode binary --yes
 ```
 
 `--yes` without `--local` means **Jenkins**. An old binary may run a local eval instead; replace `~/.local/bin/mac-k3d` with v0.5.1 or newer.
 
-Expect: build **SUCCESS**, artifact present. `pass_at_1_harness` may be `0.0` on N=1 — that is a task result, not a setup failure. Empty `f2p`/`p2p` lists and harness tokens `0` are known scorer limits.
+Expect: build **SUCCESS**, artifact present. `pass_at_1` may be `0.0` on N=1 — that is a task result, not a setup failure. Missing F2P/P2P rates are `null`, not empty test-name lists.
 
 ```bash
 # Optional: schema check on the downloaded JSON (from a checkout or extracted pipeline)
@@ -197,7 +205,9 @@ cp .env.example .env
 chmod 600 .env
 # put DEEPSEEK_API_KEY and DEEPSEEK_MODEL=deepseek-v4-pro in .env
 export PATH="$HOME/.local/bin:$PATH"
-mac-k3d eval --local --n-tasks 1 --icode-mode binary
+mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode binary
+# mac-k3d eval --local --benchmark lolbench --task ruff_1 --icode-mode binary
+# LoLBench local still uses Harbor in P5; P3 still resolves the iCode drop for the bind-mount
 # or ICODE_MODE=source if you have an iCode git tree
 ```
 
@@ -209,7 +219,8 @@ mac-k3d eval --local --n-tasks 1 --icode-mode binary
 |---------|------------|
 | Waiting for executor | Worker node offline; do not `start -c worker.yaml` |
 | `pipeline/stages/run_all.sh` missing | Worker: `mac-k3d config -c worker.yaml` (extracts) **or** `mac-k3d eval --stage p0` |
-| iCode not found | Drop official `icode-*-full-*` or a file named `icode` in `~/.local/share/mac-k3d/` (see §3). Do not use job `lolbench_one_task`. |
+| iCode not found | Drop official `icode-*-full-*` or a file named `icode` in `~/.local/share/mac-k3d/` (see §3). Both DeepSWE (Pier) and LoLBench (Harbor) bind-mount that drop; GitCode clone is not used. |
+| First LoLBench image is slow | Expected: P1 may `uv tool install harbor`; P0 installs `docker buildx` if missing. Hub `smartdub26/lolbench` tags are **linux/arm64**. On x86_64, P5 runs `docker build --progress=plain` once (not Harbor `--force-build`, which hangs after the image is tagged). |
 | `DEEPSEEK_API_KEY missing` on Jenkins | Add credential `deepseek-api-key` on the **controller** |
 | Disk/RAM preflight | Free space (`docker system df`); keep `N_TASKS=1` |
 | `--yes` ran a local eval | Old CLI; install v0.5.1+ |

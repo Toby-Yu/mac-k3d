@@ -44,6 +44,18 @@ fn eval_help_mentions_model() {
 }
 
 #[test]
+fn eval_help_mentions_benchmark_and_task() {
+    let assert = Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["eval", "--help"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("benchmark"), "{stdout}");
+    assert!(stdout.contains("task"), "{stdout}");
+}
+
+#[test]
 fn no_subcommand_without_tty_exits_2() {
     Command::cargo_bin("mac-k3d")
         .unwrap()

@@ -22,7 +22,7 @@ pass "Jenkins UI ${JENKINS_URL}/login HTTP 200"
 
 job_exists lolbench_one_task || die "job lolbench_one_task not found at ${JENKINS_URL}"
 pass "job lolbench_one_task present"
-job_exists icode_eval || die "job icode_eval not found at ${JENKINS_URL}"
-pass "job icode_eval present"
+job_exists deepswe_one_task || die "job deepswe_one_task not found at ${JENKINS_URL}"
+pass "job deepswe_one_task present"
 
 pass "02_check_controller complete"

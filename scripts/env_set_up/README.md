@@ -63,7 +63,7 @@ Uses `gh release download` when `gh` is available; otherwise `curl` to the GitHu
 
 ### `02_check_controller.sh`
 
-**Purpose:** Confirm controller config exists, `mac-k3d status` shows Docker + k3d + Jenkins Running, Jenkins login returns HTTP 200, and jobs `lolbench_one_task` and `icode_eval` exist.
+**Purpose:** Confirm controller config exists, `mac-k3d status` shows Docker + k3d + Jenkins Running, Jenkins login returns HTTP 200, and jobs `lolbench_one_task` and `deepswe_one_task` exist.
 
 **Expected output (success):**
 
@@ -72,7 +72,7 @@ OK mac-k3d=…
 OK controller status healthy
 OK Jenkins UI http://localhost:17070/login HTTP 200
 OK job lolbench_one_task present
-OK job icode_eval present
+OK job deepswe_one_task present
 OK 02_check_controller complete
 ```
 

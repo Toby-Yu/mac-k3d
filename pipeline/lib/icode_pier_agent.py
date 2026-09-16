@@ -79,14 +79,22 @@ class ICodeAgent(BaseInstalledAgent):
             command=f"printf '%s\\n' {quoted} > {INSTRUCTION_FILE}",
             user="root",
         )
+        model = (
+            self.model_name
+            or self._get_env("ICODE_MODEL")
+            or self._get_env("DEEPSEEK_MODEL")
+            or "deepseek-v4-pro"
+        )
+        # Same DeepSeek wiring Harbor uses. Empty strings would block run.sh defaults.
         env = {
             "INSTRUCTION_FILE": INSTRUCTION_FILE,
             "DEEPSEEK_API_KEY": self._get_env("DEEPSEEK_API_KEY") or "",
-            "DEEPSEEK_MODEL": self.model_name
-            or self._get_env("DEEPSEEK_MODEL")
-            or "deepseek-v4-pro",
+            "DEEPSEEK_MODEL": model,
             "ICODE_BIN": self._get_env("ICODE_BIN") or "icode",
             "AGENT_OUTPUT_DIR": "/logs/agent",
+            "ICODE_API_BASE": self._get_env("ICODE_API_BASE") or "https://api.deepseek.com",
+            "ICODE_PROVIDER": self._get_env("ICODE_PROVIDER") or "DeepSeek",
+            "ICODE_MODEL": self._get_env("ICODE_MODEL") or model,
         }
         await self.exec_as_agent(
             environment,
@@ -95,10 +103,18 @@ class ICodeAgent(BaseInstalledAgent):
         )
 
     def populate_context_post_run(self, context: AgentContext) -> None:
+        from icode_usage import find_icode_usage, parse_icode_usage_file
+
         blob: dict[str, Any] = {}
+        parsed = find_icode_usage(self.logs_dir)
         for path in self.logs_dir.rglob("*"):
             if not path.is_file() or path.suffix not in {".json", ".jsonl"}:
                 continue
+            if path.name in {"icode.txt", "icode.json", "icode-usage.json", "timing.json"}:
+                got = parse_icode_usage_file(path)
+                if got:
+                    blob.setdefault("prompt_tokens", got.get("prompt"))
+                    blob.setdefault("completion_tokens", got.get("completion"))
             if path.stat().st_size > 2_000_000:
                 continue
             try:
@@ -111,8 +127,13 @@ class ICodeAgent(BaseInstalledAgent):
                 if isinstance(usage, dict):
                     blob.setdefault("prompt_tokens", usage.get("prompt"))
                     blob.setdefault("completion_tokens", usage.get("completion"))
-        prompt = _as_int(blob.get("prompt_tokens") or blob.get("prompt"))
-        completion = _as_int(blob.get("completion_tokens") or blob.get("completion"))
+        if parsed:
+            blob.setdefault("prompt_tokens", parsed.get("prompt"))
+            blob.setdefault("completion_tokens", parsed.get("completion"))
+        prompt = _as_int(blob.get("prompt_tokens") or blob.get("prompt") or blob.get("input_tokens"))
+        completion = _as_int(
+            blob.get("completion_tokens") or blob.get("completion") or blob.get("output_tokens")
+        )
         if prompt is not None:
             context.n_input_tokens = prompt
         if completion is not None:

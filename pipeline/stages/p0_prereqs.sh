@@ -13,6 +13,7 @@ docker info >/dev/null 2>&1 || die "docker info failed (no Server / permission).
 # shellcheck source=./ensure_compose.sh
 source "$(cd "$(dirname "$0")" && pwd)/ensure_compose.sh"
 ensure_docker_compose
+ensure_docker_buildx
 
 MAC_K3D_BIN="${MAC_K3D_BIN:-}"
 if [ -z "$MAC_K3D_BIN" ]; then

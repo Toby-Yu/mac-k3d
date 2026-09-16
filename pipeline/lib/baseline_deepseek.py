@@ -27,11 +27,21 @@ def list_tasks(tasks_dir: Path, n: int, names: list[str] | None = None) -> list[
 
 
 def read_instruction(task_dir: Path) -> str:
-    for name in ("instruction.md", "Instruction.md"):
+    for name in (
+        "instruction.md",
+        "Instruction.md",
+        "instruction.txt",
+        "prompt.md",
+        "problem.md",
+        "task.md",
+    ):
         p = task_dir / name
         if p.is_file():
             return p.read_text(encoding="utf-8")
-    raise FileNotFoundError(f"no instruction.md under {task_dir}")
+    nested = next(task_dir.rglob("instruction.md"), None)
+    if nested is not None and nested.is_file():
+        return nested.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"no instruction.md (or Harbor prompt file) under {task_dir}")
 
 
 def usage_from_body(data: dict) -> dict:

@@ -758,9 +758,9 @@ fn apply_worker_agent(config: &mut MacK3dConfig, _creds: Option<&WorkerAgentProm
 
 fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
     println!(
-        "\nLeftover job `lolbench_one_task` parameter defaults (not the DeepSWE eval).\n\
-         Eval is Jenkins job `icode_eval` — see docs/binary-initializer/user-guide.md.\n\
-         These defaults only apply if that leftover job is still created.\n\
+        "\nJenkins one-task eval jobs: `deepswe_one_task` and `lolbench_one_task`.\n\
+         Both use Pier + iCode + deepseek-v4-pro. Default TASK for LoLBench is ruff_1.\n\
+         See docs/binary-initializer/user-guide.md.\n\
          Secrets (DeepSeek, GitCode PAT) go to Jenkins Credentials.\n"
     );
 

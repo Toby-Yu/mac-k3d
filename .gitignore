@@ -13,8 +13,19 @@ __pycache__/
 # Local runtime state (managed by mac-k3d)
 .mac-k3d/
 eval-runs/
+eval-runs-*/
 eval-work/
 iCode/
+
+# P5 writes these in the eval workdir; they contain DEEPSEEK_API_KEY.
+**/.pier-env
+**/.harbor-env
+
+# Debug-session NDJSON (never commit)
+.cursor/debug-*.log
+
+# Copied iCode drops inside a workdir
+**/icode-bin/
 
 # Local secrets — never commit. Copy .env.example → .env (chmod 600).
 .env

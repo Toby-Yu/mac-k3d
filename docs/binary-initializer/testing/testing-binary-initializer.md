@@ -126,14 +126,14 @@ expected results:
 
 - Docker Engine already running; k3d cluster `ci-controller` running (or created).
 - Jenkins UI: **http://localhost:17070** (ignore Helm notes about `:8080`).
-- Jobs `lolbench_one_task` and `icode_eval` created/updated.
+- Jobs `lolbench_one_task` and `deepswe_one_task` created/updated.
 - `=== mac-k3d setup complete ===` with Role `controller`.
 - `status`: Docker running, `ci-controller` running, Jenkins pod Running, `http://localhost:17070`.
 - `curl` prints `200`.
 - `OK controller status healthy`
 - `OK Jenkins UI http://localhost:17070/login HTTP 200`
 - `OK job lolbench_one_task present`
-- `OK job icode_eval present`
+- `OK job deepswe_one_task present`
 - `OK 02_check_controller complete`
 
 If Docker was just installed, a clear **log out, log in, run `mac-k3d setup` again** error is **PASS** for that attempt (re-run after login).
@@ -472,9 +472,9 @@ expected results:
 - **P4:** Pier agent `icode` install script is executable.
 - **P5:** `PROGRESS` lines; one DeepSWE task through iCode (`--n-tasks 1`). Clear pier/docker errors still count as “stage ran”.
 - **P6:** DeepSeek API baseline on the same `instruction.md`.
-- **P7:** temp JSON with `harness_resolved` / `baseline_resolved` / `f2p` / `p2p`.
+- **P7:** temp JSON with `reward` / `f2p` / `p2p` rates / `pass_at_1`.
 - **P8:** `output/eval-icode-deepseek-deepswe-n1-<utc>.json` (or under `$WORKDIR/output/`).
-- Full runner: Jenkins job `icode_eval` (or `--local`) runs both arms and archives JSON.
+- Full runner: Jenkins job `deepswe_one_task` (or `--local`) runs both arms and archives JSON.
 
 P5+ costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **private** iCode clone or tarball.
 

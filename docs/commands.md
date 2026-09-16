@@ -34,13 +34,13 @@ Global `-c / --config` is honored.
 
 1. Run `prepare` (wizard if no config / TTY; existing-config menu if a file already exists).
 2. Prompt **Continue and apply now?**
-3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, eval job `icode_eval`).
+3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, eval job `deepswe_one_task`).
 4. **Worker:** `config` only (Jenkins agent). Does **not** run `start`.
 5. Print role, config path, Jenkins URL, agent unit/LaunchAgent name.
 
 If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
 
-Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure eval job `icode_eval` (and may still create leftover `lolbench_one_task` — do not use it for DeepSWE).
+Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **`deepswe_one_task`** and **`lolbench_one_task`** (same P0–P8 pipeline; pick the job or `--benchmark`).
 
 ---
 
@@ -51,8 +51,9 @@ Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on De
 ```bash
 mac-k3d eval --stage p0
 mac-k3d eval --stage p5 --n-tasks 1
-mac-k3d eval --local --n-tasks 1 --icode-mode source --model deepseek-v4-pro
-mac-k3d eval                         # interactive → local or Jenkins icode_eval
+mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode source --model deepseek-v4-pro
+mac-k3d eval --benchmark lolbench --task ruff_1 --yes
+mac-k3d eval                         # interactive → local or Jenkins *_one_task
 ```
 
 ### Flags
@@ -61,15 +62,17 @@ mac-k3d eval                         # interactive → local or Jenkins icode_ev
 |------|-------------|
 | `--stage p0..p8` | Run one stage script under `pipeline/stages/` |
 | `--local` | Full local `run_all.sh` (no Jenkins) |
-| `--n-tasks N` | Number of DeepSWE tasks (default 1) |
+| `--n-tasks N` | Number of tasks when `--task` is empty (default 1) |
+| `--benchmark deepswe\|lolbench` | Suite (default `deepswe`; Jenkins job follows this) |
+| `--task ID` | One question id (empty DeepSWE = first alphabetical; LoLBench example `ruff_1`) |
 | `--icode-mode source\|binary` | Users: `binary` (iCode release drop). Developers: `source` |
 | `--icode-release PATH\|URL` | Binary mode; empty discovers `~/.local/share/mac-k3d/icode-*-full-*` or `icode` |
 | `--icode-source PATH` | Source tree (developer); discovered if unset |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
 | `--model ID` | DeepSeek model id (default `deepseek-v4-pro`, env `DEEPSEEK_MODEL`) |
-| `--yes` | Skip prompts: Jenkins `icode_eval` unless `--local` |
+| `--yes` | Skip prompts: Jenkins `deepswe_one_task` or `lolbench_one_task` unless `--local` |
 
-v1 choices are fixed: harness=`icode`, llm=`deepseek`, benchmark=`deepswe`. Output: `eval-runs/reports/eval-icode-deepseek-deepswe-n{N}-{utc}.json`.
+v1 harness=`icode`, llm=`deepseek`. Benchmark is `deepswe` or `lolbench`. Output: `eval-runs/reports/eval-icode-deepseek-{benchmark}-n{N}-{utc}.json`.
 
 ---
 

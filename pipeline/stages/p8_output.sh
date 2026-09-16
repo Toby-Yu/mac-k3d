@@ -13,8 +13,9 @@ OUT="$OUTPUT_DIR/eval-${HARNESS}-${LLM}-${BENCHMARK}-n${N_TASKS}-${UTC}.json"
 python3 "$PIPELINE_LIB/score_results.py" \
   --harness-dir "$HARNESS_DIR" \
   --baseline-dir "$BASELINE_DIR" \
-  --tasks-dir "$DEEPSWE_DIR/tasks" \
+  --tasks-dir "$(benchmark_tasks_dir)" \
   --n-tasks "$N_TASKS" \
+  --task-file "$WORKDIR/selected_tasks.txt" \
   --out "$OUT" \
   --finalize
 

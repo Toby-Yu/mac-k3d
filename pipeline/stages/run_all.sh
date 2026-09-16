@@ -8,8 +8,13 @@ progress 0 "full local eval starting (n=$N_TASKS harness=$HARNESS llm=$LLM bench
 bash "$DIR/p0_prereqs.sh"
 bash "$DIR/p1_pier.sh"
 bash "$DIR/p2_deepswe.sh"
-bash "$DIR/p3_icode.sh"
-bash "$DIR/p4_agent.sh"
+if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
+  bash "$DIR/p3_icode.sh"
+  echo "P4 skipped: LoLBench uses Harbor, not the Pier icode adapter"
+else
+  bash "$DIR/p3_icode.sh"
+  bash "$DIR/p4_agent.sh"
+fi
 bash "$DIR/p5_harness.sh"
 bash "$DIR/p6_baseline.sh"
 bash "$DIR/p7_score.sh"

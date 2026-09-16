@@ -16,12 +16,13 @@ New Mac/Linux
   → download mac-k3d Release asset
   → setup: controller (k3d+Jenkins :17070) or worker (agent.jar)
   → mac-k3d eval (harness=icode, llm=deepseek, benchmark=deepswe, N)
-  → Jenkins job icode_eval on worker
-       clone DeepSWE, install pier, put iCode in the Pier sandbox
-       arm A: pier + iCode + DeepSeek
+  → Jenkins job deepswe_one_task (Pier) or lolbench_one_task (Harbor)
+       DeepSWE: clone DeepSWE, install pier, bind-mount worker iCode drop
+       LoLBench: clone LoLBench-Preview, install harbor; adapter clones iCode in-sandbox
+       arm A: iCode + DeepSeek (Pier or Harbor)
        arm B: DeepSeek chat API only (no iCode)
-       grade patches (f2p / p2p)
-  → eval-runs/reports/eval-icode-deepseek-deepswe-n{N}-{utc}.json
+       grade (Pier artifacts or Harbor reward.json)
+  → eval-runs/reports/eval-icode-deepseek-{deepswe|lolbench}-n{N}-{utc}.json
 ```
 
 ```mermaid
@@ -32,11 +33,12 @@ flowchart TD
   role{"role?"}
   ctrl["Controller: Docker k3d Jenkins :17070 credentials"]
   work["Worker: Docker Java agent pier"]
-  evalCli["mac-k3d eval: icode / deepseek / deepswe / N"]
-  job["Jenkins icode_eval on worker"]
-  pierA["Pier + iCode inside sandbox"]
+  evalCli["mac-k3d eval: icode / deepseek / deepswe or lolbench / TASK"]
+  job["Jenkins deepswe_one_task or lolbench_one_task"]
+  pierA["DeepSWE: Pier + iCode"]
+  harborA["LoLBench: Harbor + iCode"]
   pierB["Baseline: DeepSeek API no iCode"]
-  grade["Verifier: patches f2p p2p"]
+  grade["Verifier: patches or reward.json"]
   json["eval-runs/reports named JSON"]
 
   newHost --> bin --> setup --> role
@@ -46,8 +48,10 @@ flowchart TD
   work --> job
   evalCli --> job
   job --> pierA
+  job --> harborA
   job --> pierB
   pierA --> grade
+  harborA --> grade
   pierB --> grade
   grade --> json
 ```
@@ -92,11 +96,11 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 Trigger:
 
 ```bash
-mac-k3d eval                  # interactive → Jenkins icode_eval (or --local)
+mac-k3d eval                  # interactive → Jenkins deepswe_one_task (or --local)
 mac-k3d eval --stage p5 --n-tasks 1   # isolated stage test
 ```
 
-Jenkins job name: **`icode_eval`**. Logs print `PROGRESS n% …` so you can see completion over time. Agent label `lolbench`; builds take a `CPU_CORES` lock.
+Jenkins job names: **`deepswe_one_task`** (Pier) and **`lolbench_one_task`** (Harbor). Shared `run_all.sh`; each job pins `BENCHMARK`. One `TASK` per build. Logs print `PROGRESS n% …`. Agent label `lolbench`; builds take a `CPU_CORES` lock.
 
 ---
 
@@ -107,7 +111,7 @@ Workdir is **`eval-runs/`** (`MAC_K3D_EVAL_WORKDIR`). Jenkins sets it to `$WORKS
 | What | Path |
 |------|------|
 | Official report (P8) | `eval-runs/reports/eval-icode-deepseek-deepswe-n{N}-{utc}.json` |
-| On the worker (Jenkins) | `$HOME/jenkins-agent/workspace/icode_eval/eval-runs/reports/` |
+| On the worker (Jenkins) | `$HOME/jenkins-agent/workspace/deepswe_one_task/eval-runs/reports/` |
 | Jenkins artifact | same glob on the build |
 | P7 scratch | `eval-runs/results/score-temp.json` |
 | Last report path | `eval-runs/last_output.txt` |
@@ -116,7 +120,7 @@ Workdir is **`eval-runs/`** (`MAC_K3D_EVAL_WORKDIR`). Jenkins sets it to `$WORKS
 | DeepSWE clone | `eval-runs/deep-swe/` |
 | Copied iCode for the run | `eval-runs/icode-bin/icode` |
 
-If `jenkins_agent.remote_fs` in `worker.yaml` is not the default, reports are at `{remote_fs}/workspace/icode_eval/eval-runs/reports/`. Repo-root `output/` and `eval-work/` are leftovers (removed); do not look there. Share `~/.local/share/mac-k3d/eval-runs` is not the Jenkins report dir.
+If `jenkins_agent.remote_fs` in `worker.yaml` is not the default, reports are at `{remote_fs}/workspace/deepswe_one_task/eval-runs/reports/`. Repo-root `output/` and `eval-work/` are leftovers (removed); do not look there. Share `~/.local/share/mac-k3d/eval-runs` is not the Jenkins report dir.
 
 ---
 
@@ -146,4 +150,4 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 | [cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | Operator runbook: cloud root controller → local worker → JSON |
 | [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | Pipeline stage CLI tests |
 | [../secrets.md](../secrets.md) | Controller credentials (`deepseek-api-key`) |
-| [../lolbench-jenkins.md](../lolbench-jenkins.md) | LoLBench Harbor job design (`lolbench_one_task`; DeepSWE eval is `icode_eval`) |
+| [../lolbench-jenkins.md](../lolbench-jenkins.md) | `lolbench_one_task` is Harbor + iCode; `deepswe_one_task` is Pier + iCode |

@@ -38,7 +38,7 @@ pub enum Command {
     /// Apply configuration (kubeconfig, port-forwards, Jenkins setup)
     Config(commands::ConfigArgs),
 
-    /// Run iCode / DeepSeek / DeepSWE evaluation (local stages or Jenkins icode_eval)
+    /// Run iCode / DeepSeek eval (DeepSWE or LoLBench) locally or via Jenkins *_one_task jobs
     Eval(commands::EvalArgs),
 
     /// Stop cluster and services without removing data

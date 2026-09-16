@@ -8,11 +8,17 @@ export MAC_K3D_ROOT="$ROOT"
 export PIPELINE_LIB="$ROOT/pipeline/lib"
 export PIPELINE_STAGES="$ROOT/pipeline/stages"
 export WORKDIR="${MAC_K3D_EVAL_WORKDIR:-$ROOT/eval-runs}"
+mkdir -p "$WORKDIR"
+WORKDIR="$(cd "$WORKDIR" && pwd)"
+export WORKDIR
 export OUTPUT_DIR="${MAC_K3D_EVAL_OUTPUT:-$WORKDIR/reports}"
 export DEEPSWE_DIR="${DEEPSWE_DIR:-$WORKDIR/deep-swe}"
+export LOLBENCH_DIR="${LOLBENCH_DIR:-$WORKDIR/lolbench}"
+export LOLBENCH_GIT_URL="${LOLBENCH_GIT_URL:-https://github.com/MichaelLing83/LoLBench-Preview.git}"
 export ICODE_MODE="${ICODE_MODE:-binary}"
 export ICODE_RELEASE="${ICODE_RELEASE:-}"
 export N_TASKS="${N_TASKS:-1}"
+export TASK="${TASK:-}"
 export HARNESS="${HARNESS:-icode}"
 export LLM="${LLM:-deepseek}"
 export BENCHMARK="${BENCHMARK:-deepswe}"
@@ -44,7 +50,7 @@ missing_deepseek_key_hint() {
   if [ -n "${JENKINS_URL:-}" ] || [ -n "${BUILD_ID:-}" ] || [ -n "${WORKSPACE:-}" ]; then
     echo "DEEPSEEK_API_KEY missing. On the Jenkins controller store credential id deepseek-api-key (mac-k3d setup / config). Workers do not use a local .env."
   else
-    echo "DEEPSEEK_API_KEY missing. Developer local run: copy .env.example to .env (gitignored), chmod 600. Workers: use Jenkins job icode_eval (controller credential). Do not export the key or paste it into chat."
+    echo "DEEPSEEK_API_KEY missing. Developer local run: copy .env.example to .env (gitignored), chmod 600. Workers: use Jenkins job deepswe_one_task or lolbench_one_task (controller credential). Do not export the key or paste it into chat."
   fi
 }
 
@@ -277,22 +283,50 @@ if [ -z "${ICODE_RELEASE:-}" ]; then
 fi
 export ICODE_RELEASE
 
+# DeepSWE: eval-runs/deep-swe/tasks/<id>
+# LoLBench: eval-runs/lolbench/harbor_tasks/<id>
+benchmark_tasks_dir() {
+  case "${BENCHMARK:-deepswe}" in
+    lolbench) echo "$LOLBENCH_DIR/harbor_tasks" ;;
+    deepswe | "") echo "$DEEPSWE_DIR/tasks" ;;
+    *) die "unknown BENCHMARK=${BENCHMARK} (use deepswe or lolbench)" ;;
+  esac
+}
+
 write_selected_tasks() {
-  local list="$WORKDIR/selected_tasks.txt" n
-  [ -d "$DEEPSWE_DIR/tasks" ] || die "run P2 first (missing deep-swe/tasks)"
+  local list="$WORKDIR/selected_tasks.txt" n root tid
+  root="$(benchmark_tasks_dir)"
+  [ -d "$root" ] || die "run P2 first (missing $root)"
+  if [ -n "${TASK:-}" ]; then
+    tid="$(printf '%s' "$TASK" | tr -d '[:space:]')"
+    [ -n "$tid" ] || die "TASK is empty"
+    [ -d "$root/$tid" ] || die "TASK=$tid not found under $root"
+    printf '%s\n' "$tid" >"$list"
+    export N_TASKS=1
+    return 0
+  fi
   n="${N_TASKS:-1}"
-  find "$DEEPSWE_DIR/tasks" -mindepth 1 -maxdepth 1 -type d | sort | head -n "$n" \
+  find "$root" -mindepth 1 -maxdepth 1 -type d | sort | head -n "$n" \
     | xargs -n1 basename >"$list"
-  [ -s "$list" ] || die "no DeepSWE tasks to select under $DEEPSWE_DIR/tasks"
+  [ -s "$list" ] || die "no tasks to select under $root"
 }
 
 ensure_selected_tasks() {
   local list="$WORKDIR/selected_tasks.txt" have_n want
-  want="${N_TASKS:-1}"
+  if [ -n "${TASK:-}" ]; then
+    want=1
+  else
+    want="${N_TASKS:-1}"
+  fi
   if [ -f "$list" ]; then
     have_n="$(grep -c . "$list" || true)"
     if [ "$have_n" = "$want" ]; then
-      return 0
+      if [ -z "${TASK:-}" ]; then
+        return 0
+      fi
+      if [ "$(tr -d '[:space:]' <"$list")" = "$(printf '%s' "$TASK" | tr -d '[:space:]')" ]; then
+        return 0
+      fi
     fi
   fi
   write_selected_tasks
