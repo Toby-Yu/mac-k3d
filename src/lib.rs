@@ -2,6 +2,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod error;
+pub mod eval_catalog;
 pub mod platform;
 pub mod prepare;
 pub mod runtime;

@@ -643,6 +643,41 @@ printf 'lolbench-first:%s\\n' "$(tr '\\n' ',' <"$MAC_K3D_EVAL_WORKDIR/selected_t
             self.assertIn("lolbench:ruff_1,", proc.stdout)
             self.assertIn("lolbench-first:fastapi_1,", proc.stdout)
 
+    def test_write_selected_tasks_honors_comma_list(self):
+        common = ROOT / "pipeline" / "stages" / "_common.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            swe = root / "deep-swe" / "tasks"
+            (swe / "aaa-first").mkdir(parents=True)
+            (swe / "zzz-last").mkdir(parents=True)
+            script = f"""
+export MAC_K3D_EVAL_WORKDIR={root}
+export BENCHMARK=deepswe
+unset TASK
+export TASKS='zzz-last, aaa-first'
+source {common}
+write_selected_tasks
+printf 'tasks:%s n:%s\\n' "$(tr '\\n' ',' <"$MAC_K3D_EVAL_WORKDIR/selected_tasks.txt")" "$N_TASKS"
+unset TASKS
+export TASK='zzz-last,aaa-first'
+write_selected_tasks
+printf 'task-csv:%s n:%s\\n' "$(tr '\\n' ',' <"$MAC_K3D_EVAL_WORKDIR/selected_tasks.txt")" "$N_TASKS"
+unset TASK
+export N_TASKS=2
+write_selected_tasks
+printf 'first2:%s\\n' "$(tr '\\n' ',' <"$MAC_K3D_EVAL_WORKDIR/selected_tasks.txt")"
+"""
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("tasks:zzz-last,aaa-first, n:2", proc.stdout)
+            self.assertIn("task-csv:zzz-last,aaa-first, n:2", proc.stdout)
+            self.assertIn("first2:aaa-first,zzz-last,", proc.stdout)
+
     def test_common_canonicalizes_relative_workdir(self):
         common = ROOT / "pipeline" / "stages" / "_common.sh"
         with tempfile.TemporaryDirectory() as tmp:

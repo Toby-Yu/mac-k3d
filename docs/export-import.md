@@ -24,7 +24,7 @@ Controller and worker use the same schema. **One file at a time:**
 | `~/.config/mac-k3d/config.yaml` | controller | Cluster name, Jenkins port, `jenkins_job.*` (TASK default) |
 | `~/.config/mac-k3d/worker.yaml` | worker | `controller_url`, labels, agent name, Harbor skip/install intent |
 
-**Kept** in the portable YAML: `role`, Jenkins ports, `jenkins_job.default_task` (and other `jenkins_job.*`), labels, `controller_url`, `api_user`, dependency `source` (`install` / `skip` / `existing`).
+**Kept** in the portable YAML: `role`, Jenkins ports, `jenkins_job.*` (harness / LLM / benchmark / question defaults), labels, `controller_url`, `api_user`, dependency `source` (`install` / `skip` / `existing`).
 
 **Stripped:** `jenkins_agent.api_token`, host storage paths, tool `binary`/`app`, `lolbench.path`, `platform`, `cpu_cores`, `remote_fs`. **Never** read or copied: `credentials.pending.yaml`.
 
@@ -39,7 +39,7 @@ This PC in the cloud lab is a **worker** (only `worker.yaml`). The controller YA
 mac-k3d export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller-lab.yaml
 mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o /tmp/worker-lab.yaml
 
-# Optional: edit jenkins_job.default_task / labels / controller_url in the copy
+# Optional: mac-k3d set -c /tmp/controller-lab.yaml --benchmark deepswe --task YOUR_ID
 
 # Dest — scratch file (does not touch the live lab)
 mac-k3d import /tmp/controller-lab.yaml -c /tmp/imported-config.yaml
@@ -72,7 +72,7 @@ These are **two stores**:
 | Live worker `~/.config/mac-k3d/worker.yaml` | Agent register token (`api_token`) | **Not** written by a sanitized import. Left as-is unless you `import --force` onto that path (that **wipes** the token — do not do that on this PC) |
 | Jenkins Credentials on the **controller** | `deepseek-api-key` (LLM). Jobs bind it per build | **Not** in YAML. Survives import. `config --skip-secrets` **keeps** this store |
 
-**`--skip-secrets` does not mean “the imported YAML contains credentials.”** It means: rewrite Pipeline job XML from the YAML’s **non-secret** fields (`jenkins_job.default_task`, …) and **do not** create/update Jenkins Credentials from `credentials.pending.yaml`. The flag exists so a **second** `config` on an already-set-up controller does not prompt for the DeepSeek key again. The line `Keeping existing Jenkins credential binds (1 id(s))` means Jenkins already has the id; the build injects it at runtime.
+**`--skip-secrets` does not mean “the imported YAML contains credentials.”** It means: rewrite Pipeline job XML from the YAML’s **non-secret** fields (`jenkins_job.default_task`, `default_harness`, `default_llm`, `default_benchmark`, `default_n_tasks`, `default_tasks`, …) and **do not** create/update Jenkins Credentials from `credentials.pending.yaml`. The YAML still has **no** secrets. The flag exists so a **second** `config` on an already-set-up controller does not prompt for the DeepSeek key again. The line `Keeping existing Jenkins credential binds (1 id(s))` means Jenkins already has the id; the build injects it at runtime.
 
 **First-time computer** (no Jenkins credential, no live worker token): the import file still has no secrets. Enter them **once** into the live stores:
 
@@ -97,9 +97,19 @@ The “true situation” that live files / Jenkins hold credentials is **first-t
 
 ## Modify eval parameters, then start a task
 
-`jenkins_job.default_task` on the **controller** YAML is the Jenkins **TASK** form default. Worker YAML does not set that default.
+Use **`mac-k3d set`** on the **controller** YAML (not `sed`). Worker YAML does not set Jenkins question defaults.
 
-Empty `TASK` + `N_TASKS=1` selects the **first** DeepSWE directory after `sort` under `deep-swe/tasks`. The “second question” is the **second** sorted directory name, not “question 2” in a paper.
+Question modes are mutually exclusive:
+
+| Mode | YAML | Pipeline |
+|------|------|----------|
+| `--task ID` | `default_task` | one id |
+| `--n-tasks N` | empty TASK, `default_n_tasks` | first N directories after `sort` under the benchmark tasks dir. `N>1` is slower and costs more LLM calls |
+| `--tasks a,b` | `default_tasks` | those ids, in that order |
+
+Empty `TASK` + empty `TASKS` + `N_TASKS=1` selects the **first** DeepSWE directory after `sort`. The “second question” is the **second** sorted directory name, not “question 2” in a paper. `*_one_task` jobs may still run `N_TASKS>1` when TASK is empty.
+
+`default_benchmark` selects which job (`deepswe_one_task` vs `lolbench_one_task`) receives TASK / N_TASKS / TASKS defaults. Both jobs still get catalog HARNESS / LLM choices.
 
 ### 1. List first and second ids (this PC)
 
@@ -124,8 +134,10 @@ Use the branch binary (`/tmp/mac-k3d-export` if you scp’d it). GitHub v0.5.2 h
 export PATH="$HOME/.local/bin:$PATH"
 MAC=/tmp/mac-k3d-export   # or mac-k3d if PATH is the branch binary
 $MAC export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller-lab.yaml
-# set default_task to SECOND (the second sorted DeepSWE id, not ruff_2 unless that is a LoLBench test)
-# example: sed -i 's/default_task: .*/default_task: YOUR_SECOND_ID/' /tmp/controller-lab.yaml
+$MAC set --list
+$MAC set -c /tmp/controller-lab.yaml --harness icode --llm deepseek --benchmark deepswe --task YOUR_SECOND_ID
+# or first N:  $MAC set -c /tmp/controller-lab.yaml --benchmark deepswe --n-tasks 2
+# or a list:   $MAC set -c /tmp/controller-lab.yaml --benchmark deepswe --tasks abs-module-cache-flags,abs-stepped-slices
 $MAC import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
 $MAC config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 ```
@@ -150,7 +162,7 @@ Pass: build runs on **this** node; the report / `selected_tasks` id is `SECOND`,
 
 ### 4. Optional restore
 
-On the cloud, set `default_task` back to empty or `$FIRST`, import `--force`, `config --skip-secrets`.
+On the cloud, `set` `default_task` back to `$FIRST` (or `--n-tasks 1` with empty task), import `--force`, `config --skip-secrets`.
 
 ---
 

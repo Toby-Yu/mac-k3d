@@ -30,6 +30,9 @@ async fn main() -> mac_k3d::Result<()> {
             // Incoming file is args.source; do not require a live dest YAML.
             mac_k3d::commands::run_import(args, cli.config.as_deref())?;
         }
+        mac_k3d::cli::Command::Set(args) => {
+            mac_k3d::commands::run_set(args, cli.config.as_deref())?;
+        }
         other => {
             let mut config = MacK3dConfig::load(cli.config.as_deref())?;
             match other {
@@ -60,8 +63,10 @@ async fn main() -> mac_k3d::Result<()> {
                 mac_k3d::cli::Command::Status => {
                     mac_k3d::commands::run_status(&config).await?;
                 }
-                mac_k3d::cli::Command::Export(_) | mac_k3d::cli::Command::Import(_) => {
-                    unreachable!("export/import handled above");
+                mac_k3d::cli::Command::Export(_)
+                | mac_k3d::cli::Command::Import(_)
+                | mac_k3d::cli::Command::Set(_) => {
+                    unreachable!("export/import/set handled above");
                 }
             }
         }

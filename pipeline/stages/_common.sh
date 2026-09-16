@@ -293,10 +293,41 @@ benchmark_tasks_dir() {
   esac
 }
 
+# One question id per line from a comma-separated string (trim blanks).
+task_ids_from_csv() {
+  printf '%s' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | awk 'NF'
+}
+
+# Explicit list: TASKS, or TASK when it contains commas.
+selected_tasks_csv_source() {
+  if [ -n "${TASKS:-}" ]; then
+    printf '%s' "$TASKS"
+    return 0
+  fi
+  case "${TASK:-}" in
+    *,*) printf '%s' "$TASK" ;;
+  esac
+}
+
 write_selected_tasks() {
-  local list="$WORKDIR/selected_tasks.txt" n root tid
+  local list="$WORKDIR/selected_tasks.txt" n root tid csv
   root="$(benchmark_tasks_dir)"
   [ -d "$root" ] || die "run P2 first (missing $root)"
+  csv="$(selected_tasks_csv_source || true)"
+  if [ -n "$csv" ]; then
+    : >"$list"
+    while IFS= read -r tid; do
+      [ -n "$tid" ] || continue
+      [ -d "$root/$tid" ] || die "task id '$tid' not found under $root"
+      printf '%s\n' "$tid" >>"$list"
+    done <<EOF
+$(task_ids_from_csv "$csv")
+EOF
+    [ -s "$list" ] || die "TASKS/TASK list is empty"
+    export N_TASKS
+    N_TASKS="$(grep -c . "$list" || true)"
+    return 0
+  fi
   if [ -n "${TASK:-}" ]; then
     tid="$(printf '%s' "$TASK" | tr -d '[:space:]')"
     [ -n "$tid" ] || die "TASK is empty"
@@ -312,7 +343,19 @@ write_selected_tasks() {
 }
 
 ensure_selected_tasks() {
-  local list="$WORKDIR/selected_tasks.txt" have_n want
+  local list="$WORKDIR/selected_tasks.txt" have_n want csv
+  csv="$(selected_tasks_csv_source || true)"
+  if [ -n "$csv" ]; then
+    want="$(task_ids_from_csv "$csv" | grep -c . || true)"
+    if [ -f "$list" ]; then
+      have_n="$(grep -c . "$list" || true)"
+      if [ "$have_n" = "$want" ] && [ "$(cat "$list")" = "$(task_ids_from_csv "$csv")" ]; then
+        return 0
+      fi
+    fi
+    write_selected_tasks
+    return 0
+  fi
   if [ -n "${TASK:-}" ]; then
     want=1
   else

@@ -44,6 +44,9 @@ pub enum Command {
     /// Copy a sanitized config YAML onto this machine (write only)
     Import(commands::ImportArgs),
 
+    /// Edit harness / LLM / benchmark / questions on a YAML file (no sed)
+    Set(commands::SetArgs),
+
     /// Run iCode / DeepSeek eval (DeepSWE or LoLBench) locally or via Jenkins *_one_task jobs
     Eval(commands::EvalArgs),
 

@@ -231,7 +231,7 @@ Global `-c` selects the **source** file (same resolve as other commands). Refuse
 
 Kept: `role`, cluster/Jenkins ports, `jenkins_job.*`, Harbor `source`, labels, `controller_url`, `api_user`. Dropped: token, storage paths, tool `binary`/`app`, `lolbench.path`, `platform`, `cpu_cores`, `remote_fs`.
 
-How to change DeepSWE TASK and queue Jenkins, and why `config --skip-secrets` does not mean the YAML has keys: [export-import.md](export-import.md).
+How to change DeepSWE TASK (use `mac-k3d set`, not sed) and queue Jenkins, and why `config --skip-secrets` does not mean the YAML has keys: [export-import.md](export-import.md).
 
 ---
 
@@ -254,6 +254,43 @@ mac-k3d import /tmp/worker.yaml --force
 Positional argument is the incoming file. Global `-c` is the **dest**; if omitted, `role: worker` → `~/.config/mac-k3d/worker.yaml`, otherwise `config.yaml`. Import re-sanitizes (so a hand-copied live `worker.yaml` still loses `api_token`), sets `platform` to this OS, and prints `setup` / `config` next steps.
 
 `--skip-secrets` after a controller import refreshes job XML only; it does not mean the imported file contained credentials. See [export-import.md](export-import.md).
+
+---
+
+## `set`
+
+Edit **non-secret** `jenkins_job` fields on a YAML file (harness, LLM, benchmark, questions). Writes YAML only — does not upload Jenkins credentials or queue an eval. Allowed values come from the catalog (`src/eval_catalog.rs`); unknown ids are rejected with `allowed: …`.
+
+```bash
+mac-k3d set --list
+mac-k3d set -c /tmp/imported-config.yaml --harness icode --llm deepseek --benchmark deepswe --task abs-stepped-slices
+mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --n-tasks 2
+mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --tasks abs-module-cache-flags,abs-stepped-slices
+```
+
+TTY with no flags: select harness / LLM / benchmark, then question mode. Non-TTY requires flags.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--list` | Print allowed harness / LLM / benchmark values and exit |
+| `--harness <ID>` | Catalog harness (v1: `icode`) |
+| `--llm <ID>` | Catalog LLM family (v1: `deepseek`) |
+| `--benchmark <ID>` | `deepswe` or `lolbench` (which job receives TASK / N_TASKS / TASKS defaults) |
+| `--task <ID>` | One question id |
+| `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |
+| `--tasks a,b` | Explicit comma-separated ids |
+
+`--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.
+
+Push the YAML into Jenkins job XML on a live controller (still **no** secrets in the file):
+
+```bash
+mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
+```
+
+Do not use `sed` on `default_task`. See [export-import.md](export-import.md).
 
 ---
 

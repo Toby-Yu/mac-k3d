@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
+use crate::eval_catalog;
 
 pub const LOLBENCH_ONE_TASK: &str = "lolbench_one_task";
 
@@ -16,6 +17,11 @@ pub struct JobOpts {
     pub default_icode_git_url: String,
     pub default_icode_git_ref: String,
     pub default_icode_args: String,
+    pub default_harness: String,
+    pub default_llm: String,
+    pub default_benchmark: String,
+    pub default_n_tasks: u32,
+    pub default_tasks: Vec<String>,
     /// Credential IDs present in Jenkins (only these are bound in the Pipeline).
     pub credential_ids: Vec<String>,
 }
@@ -28,9 +34,28 @@ impl JobOpts {
             release = config.jenkins_job.default_binary_target.trim().to_string();
         }
         let git_ref = config.jenkins_job.default_icode_git_ref.trim();
+        let harness = if config.jenkins_job.default_harness.trim().is_empty() {
+            eval_catalog::HARNESSES[0].to_string()
+        } else {
+            config
+                .jenkins_job
+                .default_harness
+                .trim()
+                .to_ascii_lowercase()
+        };
+        let llm = {
+            let live = config.jenkins_job.default_llm.trim();
+            let alias = config.jenkins_job.default_model.trim();
+            let raw = if live.is_empty() { alias } else { live };
+            if raw.is_empty() {
+                eval_catalog::LLMS[0].to_string()
+            } else {
+                raw.to_ascii_lowercase()
+            }
+        };
         Self {
             default_task: if config.jenkins_job.default_task.trim().is_empty() {
-                "ruff_1".into()
+                String::new()
             } else {
                 config.jenkins_job.default_task.clone()
             },
@@ -43,6 +68,15 @@ impl JobOpts {
                 git_ref.to_string()
             },
             default_icode_args: config.jenkins_job.default_icode_args.clone(),
+            default_harness: harness,
+            default_llm: llm,
+            default_benchmark: config
+                .jenkins_job
+                .default_benchmark
+                .trim()
+                .to_ascii_lowercase(),
+            default_n_tasks: config.jenkins_job.default_n_tasks.max(1),
+            default_tasks: config.jenkins_job.default_tasks.clone(),
             credential_ids,
         }
     }
@@ -387,9 +421,8 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
 fn job_config_xml(opts: &JobOpts) -> String {
     one_task_job_xml(
         "lolbench",
-        &opts.default_task,
         "iCode vs DeepSeek baseline on one LoLBench task (Harbor + iCode + deepseek-v4-pro). DeepSWE stays on Pier. See docs/lolbench-jenkins.md and docs/binary-initializer/user-guide.md.",
-        &opts.credential_ids,
+        opts,
     )
 }
 
@@ -401,10 +434,65 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn one_task_jenkinsfile(benchmark: &str, default_task: &str, credential_ids: &[String]) -> String {
-    let (cred_open, cred_close) = with_credentials_block(credential_ids);
-    let bench = groovy_escape(benchmark);
-    let task = groovy_escape(default_task);
+fn job_applies_question_defaults(opts: &JobOpts, job_benchmark: &str) -> bool {
+    let b = opts.default_benchmark.trim();
+    if b.eq_ignore_ascii_case(job_benchmark) {
+        return true;
+    }
+    b.is_empty() && job_benchmark == "lolbench"
+}
+
+fn question_defaults_for_job(opts: &JobOpts, job_benchmark: &str) -> (String, u32, String) {
+    if job_applies_question_defaults(opts, job_benchmark) {
+        let tasks = opts.default_tasks.join(",");
+        let n = if opts.default_tasks.is_empty() {
+            opts.default_n_tasks.max(1)
+        } else {
+            opts.default_tasks.len() as u32
+        };
+        let task = if opts.default_tasks.is_empty() {
+            opts.default_task.clone()
+        } else {
+            String::new()
+        };
+        return (task, n, tasks);
+    }
+    if job_benchmark == "lolbench" {
+        ("ruff_1".into(), 1, String::new())
+    } else {
+        (String::new(), 1, String::new())
+    }
+}
+
+fn groovy_quoted_list(items: &[&str]) -> String {
+    items
+        .iter()
+        .map(|s| format!("'{s}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn xml_choice_strings(items: &[&str]) -> String {
+    items
+        .iter()
+        .map(|s| format!("              <string>{}</string>", xml_escape(s)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
+    let (cred_open, cred_close) = with_credentials_block(&opts.credential_ids);
+    let bench = groovy_escape(job_benchmark);
+    let (task, n_tasks, tasks) = question_defaults_for_job(opts, job_benchmark);
+    let task = groovy_escape(&task);
+    let tasks = groovy_escape(&tasks);
+    let harness_choices =
+        eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness);
+    let llm_choices = eval_catalog::choices_preferred_first(eval_catalog::LLMS, &opts.default_llm);
+    let harness_g = groovy_quoted_list(&harness_choices);
+    let llm_g = groovy_quoted_list(&llm_choices);
+    let harness_fb = eval_catalog::HARNESSES[0];
+    let llm_fb = eval_catalog::LLMS[0];
     format!(
         r#"pipeline {{
   agent {{ label params.AGENT_LABEL }}
@@ -414,11 +502,12 @@ fn one_task_jenkinsfile(benchmark: &str, default_task: &str, credential_ids: &[S
   }}
 
   parameters {{
-    choice(name: 'HARNESS', choices: ['icode'], description: 'v1: icode only')
-    choice(name: 'LLM', choices: ['deepseek'], description: 'v1: deepseek only')
+    choice(name: 'HARNESS', choices: [{harness_g}], description: 'Eval harness (catalog; v1: icode)')
+    choice(name: 'LLM', choices: [{llm_g}], description: 'LLM family (catalog; v1: deepseek)')
     choice(name: 'BENCHMARK', choices: ['{bench}'], description: 'This job is one benchmark')
-    string(name: 'TASK', defaultValue: '{task}', description: 'One question id (empty DeepSWE = first alphabetical). LoLBench example: ruff_1')
-    string(name: 'N_TASKS', defaultValue: '1', description: 'Kept at 1 for *_one_task jobs')
+    string(name: 'TASK', defaultValue: '{task}', description: 'One question id (empty + N_TASKS = first N sorted). LoLBench example: ruff_1')
+    string(name: 'TASKS', defaultValue: '{tasks}', description: 'Comma-separated question ids (overrides TASK and first-N)')
+    string(name: 'N_TASKS', defaultValue: '{n_tasks}', description: 'First N sorted questions when TASK and TASKS are empty. N>1 is slower/costlier.')
     choice(name: 'ICODE_MODE', choices: ['binary', 'source'], description: 'iCode delivery (users: binary drop)')
     string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: empty = ~/.local/share/mac-k3d/icode or icode-*-full-* (tar.gz / folder)')
     string(name: 'ICODE_SOURCE', defaultValue: '', description: 'source: path on worker; empty = discover (developers)')
@@ -454,11 +543,12 @@ fn one_task_jenkinsfile(benchmark: &str, default_task: &str, credential_ids: &[S
             export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
             export N_TASKS="${{N_TASKS:-1}}"
             export TASK="${{TASK:-}}"
+            export TASKS="${{TASKS:-}}"
             export ICODE_MODE="${{ICODE_MODE:-binary}}"
             export ICODE_RELEASE="${{ICODE_RELEASE:-}}"
             export ICODE_SOURCE="${{ICODE_SOURCE:-}}"
-            export HARNESS=icode
-            export LLM=deepseek
+            export HARNESS="${{HARNESS:-{harness_fb}}}"
+            export LLM="${{LLM:-{llm_fb}}}"
             export BENCHMARK="${{BENCHMARK:-{bench}}}"
             export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-deepseek-v4-pro}}"
             export LLM_NAME="${{LLM_NAME:-DeepSeek V4 Pro}}"
@@ -487,21 +577,29 @@ fn one_task_jenkinsfile(benchmark: &str, default_task: &str, credential_ids: &[S
 "#,
         bench = bench,
         task = task,
+        tasks = tasks,
+        n_tasks = n_tasks,
+        harness_g = harness_g,
+        llm_g = llm_g,
+        harness_fb = harness_fb,
+        llm_fb = llm_fb,
         cred_open = cred_open,
         cred_close = cred_close,
     )
 }
 
-fn one_task_job_xml(
-    benchmark: &str,
-    default_task: &str,
-    description: &str,
-    credential_ids: &[String],
-) -> String {
-    let script = one_task_jenkinsfile(benchmark, default_task, credential_ids);
-    let bench_xml = xml_escape(benchmark);
-    let task_xml = xml_escape(default_task);
+fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> String {
+    let script = one_task_jenkinsfile(job_benchmark, opts);
+    let (task, n_tasks, tasks) = question_defaults_for_job(opts, job_benchmark);
+    let bench_xml = xml_escape(job_benchmark);
+    let task_xml = xml_escape(&task);
+    let tasks_xml = xml_escape(&tasks);
     let desc_xml = xml_escape(description);
+    let harness_choices =
+        eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness);
+    let llm_choices = eval_catalog::choices_preferred_first(eval_catalog::LLMS, &opts.default_llm);
+    let harness_xml = xml_choice_strings(&harness_choices);
+    let llm_xml = xml_choice_strings(&llm_choices);
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
@@ -514,7 +612,7 @@ fn one_task_job_xml(
           <name>HARNESS</name>
           <choices class="java.util.Arrays$ArrayList">
             <a class="string-array">
-              <string>icode</string>
+{harness_xml}
             </a>
           </choices>
         </hudson.model.ChoiceParameterDefinition>
@@ -522,7 +620,7 @@ fn one_task_job_xml(
           <name>LLM</name>
           <choices class="java.util.Arrays$ArrayList">
             <a class="string-array">
-              <string>deepseek</string>
+{llm_xml}
             </a>
           </choices>
         </hudson.model.ChoiceParameterDefinition>
@@ -540,8 +638,13 @@ fn one_task_job_xml(
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
+          <name>TASKS</name>
+          <defaultValue>{tasks_xml}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
           <name>N_TASKS</name>
-          <defaultValue>1</defaultValue>
+          <defaultValue>{n_tasks}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
@@ -598,7 +701,7 @@ fn one_task_job_xml(
 }
 
 fn jenkinsfile(opts: &JobOpts) -> String {
-    one_task_jenkinsfile("lolbench", &opts.default_task, &opts.credential_ids)
+    one_task_jenkinsfile("lolbench", opts)
 }
 
 fn tempfile_path(prefix: &str) -> Result<PathBuf> {
@@ -689,7 +792,7 @@ pub fn ensure_deepswe_one_task(
     jenkins_url: &str,
     api_user: &str,
     api_token_or_password: &str,
-    credential_ids: &[String],
+    opts: &JobOpts,
 ) -> Result<()> {
     let base = jenkins_url.trim_end_matches('/');
     let auth = format!("{api_user}:{api_token_or_password}");
@@ -709,7 +812,7 @@ pub fn ensure_deepswe_one_task(
     .map(|c| c == 200)
     .unwrap_or(false);
 
-    let xml = deepswe_one_task_job_xml(credential_ids);
+    let xml = deepswe_one_task_job_xml(opts);
 
     if exists {
         println!("Updating Jenkins job '{DEEPSWE_ONE_TASK}'…");
@@ -808,19 +911,21 @@ pub async fn ensure_deepswe_one_task_from_cluster(
     let password = match crate::runtime::jenkins::admin_password(kubectl, config).await {
         Ok(p) if !p.is_empty() => p,
         Ok(_) | Err(_) => {
-            println!("Skipping '{DEEPSWE_ONE_TASK}' create — could not read Jenkins admin password yet.");
+            println!(
+                "Skipping '{DEEPSWE_ONE_TASK}' create — could not read Jenkins admin password yet."
+            );
             return Ok(());
         }
     };
-    ensure_deepswe_one_task(&url, "admin", &password, &credential_ids)
+    let opts = JobOpts::from_config(config, credential_ids);
+    ensure_deepswe_one_task(&url, "admin", &password, &opts)
 }
 
-fn deepswe_one_task_job_xml(credential_ids: &[String]) -> String {
+fn deepswe_one_task_job_xml(opts: &JobOpts) -> String {
     one_task_job_xml(
         "deepswe",
-        "",
         "iCode vs DeepSeek baseline on one DeepSWE task (Pier + iCode + deepseek-v4-pro). Arm A = iCode + LLM; Arm B = the same LLM without iCode. See docs/binary-initializer/user-guide.md.",
-        credential_ids,
+        opts,
     )
 }
 
@@ -837,7 +942,29 @@ mod tests {
             default_icode_git_url: "https://gitcode.com/example/icode.git".into(),
             default_icode_git_ref: "main".into(),
             default_icode_args: "--help".into(),
+            default_harness: "icode".into(),
+            default_llm: "deepseek".into(),
+            default_benchmark: "lolbench".into(),
+            default_n_tasks: 1,
+            default_tasks: Vec::new(),
             credential_ids: vec!["deepseek-api-key".into(), "gitcode-pat".into()],
+        }
+    }
+
+    fn deepswe_opts(credential_ids: Vec<String>) -> JobOpts {
+        JobOpts {
+            default_task: "abs-stepped-slices".into(),
+            default_eval_mode: "binary".into(),
+            default_icode_release: String::new(),
+            default_icode_git_url: String::new(),
+            default_icode_git_ref: "main".into(),
+            default_icode_args: String::new(),
+            default_harness: "icode".into(),
+            default_llm: "deepseek".into(),
+            default_benchmark: "deepswe".into(),
+            default_n_tasks: 1,
+            default_tasks: Vec::new(),
+            credential_ids,
         }
     }
 
@@ -849,7 +976,8 @@ mod tests {
         assert!(jf.contains("lolbench"));
         assert!(jf.contains("ruff_1"));
         assert!(jf.contains("export TASK="));
-        assert!(jf.contains("HARNESS=icode"));
+        assert!(jf.contains("export HARNESS="));
+        assert!(jf.contains("icode"));
         assert!(jf.contains("lock(label: 'CPU_CORES'"));
         assert!(jf.contains("withCredentials"));
         assert!(jf.contains("deepseek-api-key"));
@@ -912,7 +1040,7 @@ mod tests {
 
     #[test]
     fn deepswe_one_task_xml_mentions_progress_and_scripts() {
-        let xml = deepswe_one_task_job_xml(&["deepseek-api-key".into()]);
+        let xml = deepswe_one_task_job_xml(&deepswe_opts(vec!["deepseek-api-key".into()]));
         assert!(xml.contains("<![CDATA["));
         assert!(xml.contains("pipeline/stages/run_all.sh"));
         assert!(xml.contains(".local/share"));
@@ -938,7 +1066,7 @@ mod tests {
 
     #[test]
     fn deepswe_one_task_xml_omits_bind_when_credential_ids_empty() {
-        let xml = deepswe_one_task_job_xml(&[]);
+        let xml = deepswe_one_task_job_xml(&deepswe_opts(Vec::new()));
         assert!(
             !xml.contains("withCredentials"),
             "empty IDs must omit the bind"
@@ -948,7 +1076,7 @@ mod tests {
     #[test]
     fn skip_secrets_must_pass_listed_ids_to_keep_bind() {
         // --skip-secrets / start list existing IDs then call this helper; [] would strip the bind.
-        let xml = deepswe_one_task_job_xml(&["deepseek-api-key".into()]);
+        let xml = deepswe_one_task_job_xml(&deepswe_opts(vec!["deepseek-api-key".into()]));
         assert!(xml.contains("withCredentials"));
         assert!(xml.contains("deepseek-api-key"));
         assert!(xml.contains("DEEPSEEK_API_KEY"));
@@ -956,7 +1084,7 @@ mod tests {
 
     #[test]
     fn both_jobs_share_run_all_and_differ_by_benchmark() {
-        let deepswe = deepswe_one_task_job_xml(&["deepseek-api-key".into()]);
+        let deepswe = deepswe_one_task_job_xml(&deepswe_opts(vec!["deepseek-api-key".into()]));
         let lolbench = job_config_xml(&sample_opts());
         assert!(deepswe.contains("<string>deepswe</string>"));
         assert!(lolbench.contains("<string>lolbench</string>"));
@@ -966,5 +1094,41 @@ mod tests {
         assert!(deepswe.contains("Pier + iCode"));
         assert!(!deepswe.contains("harbor run"));
         assert!(!lolbench.contains("harbor run"));
+    }
+
+    #[test]
+    fn question_defaults_apply_to_matching_job_only() {
+        let mut opts = sample_opts();
+        opts.default_benchmark = "deepswe".into();
+        opts.default_task = "abs-stepped-slices".into();
+        opts.default_n_tasks = 2;
+        opts.default_tasks.clear();
+        let deepswe = deepswe_one_task_job_xml(&opts);
+        let lolbench = job_config_xml(&opts);
+        assert!(deepswe.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
+        assert!(deepswe.contains("<name>N_TASKS</name>"));
+        assert!(deepswe.contains("<defaultValue>2</defaultValue>"));
+        assert!(lolbench.contains("<defaultValue>ruff_1</defaultValue>"));
+        assert!(lolbench.contains("<name>HARNESS</name>"));
+        assert!(lolbench.contains("<string>icode</string>"));
+        assert!(lolbench.contains("<name>LLM</name>"));
+        assert!(lolbench.contains("<string>deepseek</string>"));
+    }
+
+    #[test]
+    fn tasks_list_becomes_tasks_param() {
+        let mut opts = deepswe_opts(Vec::new());
+        opts.default_task.clear();
+        opts.default_tasks = vec!["abs-module-cache-flags".into(), "abs-stepped-slices".into()];
+        let xml = deepswe_one_task_job_xml(&opts);
+        assert!(xml.contains("<name>TASKS</name>"));
+        assert!(
+            xml.contains("<defaultValue>abs-module-cache-flags,abs-stepped-slices</defaultValue>")
+        );
+        assert!(xml.contains("export TASKS="));
+        let (task, n, tasks) = question_defaults_for_job(&opts, "deepswe");
+        assert!(task.is_empty());
+        assert_eq!(n, 2);
+        assert_eq!(tasks, "abs-module-cache-flags,abs-stepped-slices");
     }
 }

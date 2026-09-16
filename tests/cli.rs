@@ -22,6 +22,7 @@ fn help_lists_setup_subcommand() {
         stdout.contains("import"),
         "help should list import:\n{stdout}"
     );
+    assert!(stdout.contains("set"), "help should list set:\n{stdout}");
 }
 
 #[test]
@@ -104,4 +105,16 @@ fn import_help_mentions_force() {
         .assert()
         .success()
         .stdout(predicates::str::contains("--force"));
+}
+
+#[test]
+fn set_help_lists_catalog_flags() {
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["set", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--harness"))
+        .stdout(predicates::str::contains("--n-tasks"))
+        .stdout(predicates::str::contains("--list"));
 }
