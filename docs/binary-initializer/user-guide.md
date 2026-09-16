@@ -7,11 +7,11 @@ Two different downloads:
 - **mac-k3d CLI** — GitHub asset `mac-k3d-linux-x86_64` (or `linux-aarch64` / `darwin-aarch64` / `darwin-x86_64`). Used in steps 1–2.
 - **iCode release** — official `icode-<os>-<arch>-full-vX.Y.Z` from the iCode project. Used in step 3 on the **worker only**. Not the same file as mac-k3d.
 
-Prefer **v0.5.1** Latest (or this checkout’s `cargo build --release`). Published **v0.5.0** still has the old P3: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1.
+Prefer **v0.5.2** Latest (or this checkout’s `cargo build --release`). **v0.5.1** DeepSWE Pier used the wrong iCode CLI and often exited in ~20s. **v0.5.0** still has the old P3: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1+.
 
 Harbor CLI stays **skip** on DeepSWE-only workers. Eval jobs are two runners, both iCode + `deepseek-v4-pro`, one `TASK` per build:
 
-- **`deepswe_one_task`** — DeepSWE via **Pier**. Same worker `icode-*-full-*` bind-mount and the same iCode CLI as LoLBench (`run -t … -C … -a code --json`). An old installed `mac-k3d` still wraps `icode run "$PROMPT"` and exits in seconds — rebuild from this checkout.
+- **`deepswe_one_task`** — DeepSWE via **Pier**. Same worker `icode-*-full-*` bind-mount and the same iCode CLI as LoLBench (`run -t … -C … -a code --json`). **v0.5.1 and older** wrap `icode run "$PROMPT"` and exit in seconds — install **v0.5.2**.
 - **`lolbench_one_task`** — LoLBench via **Harbor** (`icode_harbor_agent`; bind-mounts the same worker `icode-*-full-*` drop as DeepSWE). First LoLBench run installs `harbor` via uv if missing. Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, P5 builds or retags a local image (do not use Harbor `--force-build`).
 
 Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
@@ -45,7 +45,7 @@ mkdir -p "$HOME/.local/bin"
 
 # Download the mac-k3d CLI (change tag/arch if needed)
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.1/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.2/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 
@@ -77,7 +77,7 @@ export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$HOME/.local/bin"
 # Linux x86_64 example — pick darwin-aarch64 / linux-aarch64 as needed
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.1/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.2/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 mac-k3d --help   # must list setup and eval
@@ -185,7 +185,7 @@ mac-k3d eval --benchmark deepswe --n-tasks 1 --icode-mode binary --yes
 # mac-k3d eval -c ~/.config/mac-k3d/worker.yaml --benchmark deepswe --icode-mode binary --yes
 ```
 
-`--yes` without `--local` means **Jenkins**. An old binary may run a local eval instead; replace `~/.local/bin/mac-k3d` with v0.5.1 or newer.
+`--yes` without `--local` means **Jenkins**. An old binary may run a local eval instead; replace `~/.local/bin/mac-k3d` with v0.5.2 or newer.
 
 Expect: build **SUCCESS**, artifact present. `pass_at_1` may be `0.0` on N=1 — that is a task result, not a setup failure. Missing F2P/P2P rates are `null`, not empty test-name lists.
 
@@ -223,7 +223,7 @@ mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode binary
 | First LoLBench image is slow | Expected: P1 may `uv tool install harbor`; P0 installs `docker buildx` if missing. Hub `smartdub26/lolbench` tags are **linux/arm64**. On x86_64, P5 runs `docker build --progress=plain` once (not Harbor `--force-build`, which hangs after the image is tagged). |
 | `DEEPSEEK_API_KEY missing` on Jenkins | Add credential `deepseek-api-key` on the **controller** |
 | Disk/RAM preflight | Free space (`docker system df`); keep `N_TASKS=1` |
-| `--yes` ran a local eval | Old CLI; install v0.5.1+ |
+| `--yes` ran a local eval | Old CLI; install v0.5.2+ |
 | Job still `deepseek-chat` or Toby paths | Controller: install new binary, `config --skip-secrets` |
 
 E8 (N>1) is optional after N=1 is green. Lab operator notes: [cloud-eval-runbook.md](testing/cloud-eval-runbook.md).
