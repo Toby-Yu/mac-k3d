@@ -146,7 +146,12 @@ fn apt_install(packages: &[&str]) -> Result<()> {
         .arg("-u")
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
         .unwrap_or(1)
         != 0;
 
@@ -220,16 +225,19 @@ fn is_root() -> bool {
         .arg("-u")
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
         .unwrap_or(1)
         == 0
 }
 
 fn install_k3d_curl() -> Result<()> {
     tracing::info!("installing k3d via official install script");
-    run_shell(
-        "curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash",
-    )
+    run_shell("curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash")
 }
 
 fn install_kubectl_curl() -> Result<()> {
@@ -243,7 +251,9 @@ fn install_kubectl_curl() -> Result<()> {
 
 fn install_helm_curl() -> Result<()> {
     tracing::info!("installing helm via get-helm-3");
-    run_shell("curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash")
+    run_shell(
+        "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash",
+    )
 }
 
 fn install_uv_curl() -> Result<()> {
@@ -269,12 +279,13 @@ fn run_shell(script: &str) -> Result<()> {
 }
 
 fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program).args(args).status().map_err(|e| {
-        Error::CommandFailed {
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .map_err(|e| Error::CommandFailed {
             cmd: format!("{program} {}", args.join(" ")),
             source: e.into(),
-        }
-    })?;
+        })?;
     if !status.success() {
         return Err(Error::CommandFailed {
             cmd: format!("{program} {}", args.join(" ")),
@@ -304,9 +315,8 @@ pub fn install_agent_daemon(
         )));
     }
 
-    let body = std::fs::read_to_string(launch_script).map_err(|e| {
-        Error::Config(format!("failed to read {}: {e}", launch_script.display()))
-    })?;
+    let body = std::fs::read_to_string(launch_script)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", launch_script.display())))?;
     if body.contains("REPLACE_ME") {
         println!(
             "Launch script still has REPLACE_ME secret — not starting systemd unit.\n\
@@ -317,9 +327,8 @@ pub fn install_agent_daemon(
 
     let unit = unit_path();
     if let Some(parent) = unit.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
     }
 
     let log_out = working_dir.join("jenkins-agent.stdout.log");
@@ -347,9 +356,8 @@ WantedBy=default.target
         stdout = log_out.display(),
     );
 
-    std::fs::write(&unit, content).map_err(|e| {
-        Error::Config(format!("failed to write {}: {e}", unit.display()))
-    })?;
+    std::fs::write(&unit, content)
+        .map_err(|e| Error::Config(format!("failed to write {}: {e}", unit.display())))?;
 
     run_cmd("systemctl", &["--user", "daemon-reload"])?;
     run_cmd("systemctl", &["--user", "enable", "--now", SYSTEMD_UNIT])?;
@@ -370,9 +378,8 @@ pub fn stop_agent_daemon() -> Result<()> {
         .args(["--user", "disable", "--now", SYSTEMD_UNIT])
         .status();
     if unit.exists() {
-        std::fs::remove_file(&unit).map_err(|e| {
-            Error::Config(format!("failed to remove {}: {e}", unit.display()))
-        })?;
+        std::fs::remove_file(&unit)
+            .map_err(|e| Error::Config(format!("failed to remove {}: {e}", unit.display())))?;
         let _ = Command::new("systemctl")
             .args(["--user", "daemon-reload"])
             .status();
@@ -406,6 +413,9 @@ mod tests {
             h.contains("Log out") || h.contains("systemctl enable --now docker"),
             "{h}"
         );
-        assert!(h.contains("mac-k3d setup") || h.contains("docker info"), "{h}");
+        assert!(
+            h.contains("mac-k3d setup") || h.contains("docker info"),
+            "{h}"
+        );
     }
 }

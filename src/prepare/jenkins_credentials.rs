@@ -82,18 +82,16 @@ impl PendingCredentials {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let text = std::fs::read_to_string(&path).map_err(|e| {
-            Error::Config(format!("failed to read {}: {e}", path.display()))
-        })?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
         // Accept either `{ values: { id: secret } }` or flat `{ id: secret }`.
         if let Ok(wrapped) = serde_yaml::from_str::<PendingCredentials>(&text) {
             if !wrapped.values.is_empty() || text.contains("values:") {
                 return Ok(wrapped);
             }
         }
-        let flat: BTreeMap<String, String> = serde_yaml::from_str(&text).map_err(|e| {
-            Error::Config(format!("failed to parse {}: {e}", path.display()))
-        })?;
+        let flat: BTreeMap<String, String> = serde_yaml::from_str(&text)
+            .map_err(|e| Error::Config(format!("failed to parse {}: {e}", path.display())))?;
         Ok(Self { values: flat })
     }
 
@@ -107,9 +105,8 @@ impl PendingCredentials {
         // Flat map is easier to edit by hand.
         let text = serde_yaml::to_string(&self.values)
             .map_err(|e| Error::Config(format!("serialize pending credentials: {e}")))?;
-        std::fs::write(&path, text).map_err(|e| {
-            Error::Config(format!("failed to write {}: {e}", path.display()))
-        })?;
+        std::fs::write(&path, text)
+            .map_err(|e| Error::Config(format!("failed to write {}: {e}", path.display())))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -117,8 +114,7 @@ impl PendingCredentials {
                 .map_err(|e| Error::Config(e.to_string()))?
                 .permissions();
             perms.set_mode(0o600);
-            std::fs::set_permissions(&path, perms)
-                .map_err(|e| Error::Config(e.to_string()))?;
+            std::fs::set_permissions(&path, perms).map_err(|e| Error::Config(e.to_string()))?;
         }
         Ok(())
     }
@@ -216,9 +212,7 @@ pub fn ensure_credentials_on_controller(
     if interactive && (force_prompt || pending.values.is_empty()) {
         let missing: Vec<_> = CREDENTIAL_DEFS
             .iter()
-            .filter(|d| {
-                !existing.iter().any(|e| e == d.id) && !pending.values.contains_key(d.id)
-            })
+            .filter(|d| !existing.iter().any(|e| e == d.id) && !pending.values.contains_key(d.id))
             .collect();
         if force_prompt || !missing.is_empty() {
             println!("\nJenkins Credentials (controller — used by all agents):");

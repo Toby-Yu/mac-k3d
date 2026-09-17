@@ -18,7 +18,11 @@ pub struct SetupArgs {
 }
 
 /// Interactive first-run: wizard, then start (controller/standalone) or config (worker).
-pub async fn run(args: SetupArgs, _config: &MacK3dConfig, config_path: Option<&Path>) -> Result<()> {
+pub async fn run(
+    args: SetupArgs,
+    _config: &MacK3dConfig,
+    config_path: Option<&Path>,
+) -> Result<()> {
     ensure_supported_os()?;
 
     let config_path: PathBuf = config_path

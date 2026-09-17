@@ -31,8 +31,7 @@ impl Tools {
             k3d: if need_cluster {
                 resolve("k3d", &config.dependencies.k3d)?
             } else {
-                resolve("k3d", &config.dependencies.k3d)
-                    .unwrap_or_else(|_| PathBuf::from("k3d"))
+                resolve("k3d", &config.dependencies.k3d).unwrap_or_else(|_| PathBuf::from("k3d"))
             },
             kubectl: if need_cluster {
                 resolve("kubectl", &config.dependencies.kubectl)?

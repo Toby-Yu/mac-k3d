@@ -93,9 +93,8 @@ controller:
 {plugins}
 "#
     );
-    std::fs::write(&path, body).map_err(|e| {
-        Error::Config(format!("failed to write Jenkins Helm values: {e}"))
-    })?;
+    std::fs::write(&path, body)
+        .map_err(|e| Error::Config(format!("failed to write Jenkins Helm values: {e}")))?;
     Ok(path)
 }
 

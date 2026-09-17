@@ -29,11 +29,7 @@ pub struct StartArgs {
     pub skip_job: bool,
 }
 
-pub async fn run(
-    args: StartArgs,
-    config: &MacK3dConfig,
-    config_path: Option<&Path>,
-) -> Result<()> {
+pub async fn run(args: StartArgs, config: &MacK3dConfig, config_path: Option<&Path>) -> Result<()> {
     ensure_supported_os()?;
     reject_worker_start(config)?;
 
@@ -82,10 +78,7 @@ pub async fn run(
         }
         ClusterState::Stopped => k3d::start(&tools.k3d, &config.cluster.name).await?,
         ClusterState::Running => {
-            println!(
-                "k3d cluster '{}' is already running.",
-                config.cluster.name
-            );
+            println!("k3d cluster '{}' is already running.", config.cluster.name);
         }
     }
 

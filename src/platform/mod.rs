@@ -3,15 +3,15 @@
 //! Shared prepare/runtime code calls these facades; compile-time `cfg` selects
 //! the implementation in [`macos`] or [`linux`].
 
-#[cfg(target_os = "macos")]
-mod macos;
 #[cfg(target_os = "linux")]
 mod linux;
-
 #[cfg(target_os = "macos")]
-use macos as os;
+mod macos;
+
 #[cfg(target_os = "linux")]
 use linux as os;
+#[cfg(target_os = "macos")]
+use macos as os;
 
 use std::path::{Path, PathBuf};
 

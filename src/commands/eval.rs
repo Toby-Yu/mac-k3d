@@ -6,6 +6,7 @@ use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
+use crate::eval_catalog;
 
 #[derive(Debug, Default, Args)]
 pub struct EvalArgs {
@@ -45,7 +46,7 @@ pub struct EvalArgs {
     #[arg(long)]
     pub workdir: Option<PathBuf>,
 
-    /// DeepSeek Chat Completions model id (env DEEPSEEK_MODEL)
+    /// DeepSeek Chat Completions model id (catalog; env DEEPSEEK_MODEL)
     #[arg(long)]
     pub model: Option<String>,
 
@@ -76,7 +77,11 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
     let mut icode_mode = normalize_mode(&args.icode_mode);
     let mut icode_release = args
         .icode_release
-        .or_else(|| std::env::var("ICODE_RELEASE").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("ICODE_RELEASE")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
         .unwrap_or_else(discover_icode_release);
     let mut icode_source = args
         .icode_source
@@ -88,13 +93,25 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
         .unwrap_or_else(|| discover_icode_source(&repo).display().to_string());
     let workdir = args
         .workdir
-        .or_else(|| std::env::var("MAC_K3D_EVAL_WORKDIR").ok().map(PathBuf::from))
+        .or_else(|| {
+            std::env::var("MAC_K3D_EVAL_WORKDIR")
+                .ok()
+                .map(PathBuf::from)
+        })
         .unwrap_or_else(|| PathBuf::from("eval-runs"));
     let mut model = args
         .model
         .or_else(|| std::env::var("DEEPSEEK_MODEL").ok())
+        .or_else(|| {
+            let d = config.jenkins_job.default_deepseek_model.trim();
+            if d.is_empty() {
+                None
+            } else {
+                Some(d.to_string())
+            }
+        })
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "deepseek-v4-pro".into());
+        .unwrap_or_else(|| eval_catalog::default_model().into());
     let local = args.local;
 
     if args.stage.is_none() && !args.yes && atty::is(atty::Stream::Stdin) {
@@ -165,11 +182,17 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
                 .interact_text()
                 .map_err(|_| Error::Cancelled)?;
         }
-        model = Input::with_theme(&theme)
-            .with_prompt("DEEPSEEK_MODEL")
-            .default(model)
-            .interact_text()
-            .map_err(|_| Error::Cancelled)?;
+        let m_idx = eval_catalog::MODELS
+            .iter()
+            .position(|m| *m == model)
+            .unwrap_or(0);
+        model = eval_catalog::MODELS[Select::with_theme(&theme)
+            .with_prompt("DeepSeek model")
+            .items(eval_catalog::MODELS)
+            .default(m_idx)
+            .interact()
+            .map_err(|_| Error::Cancelled)?]
+        .to_string();
     }
 
     if args.stage.is_none() && !args.yes && !atty::is(atty::Stream::Stdin) {
@@ -177,6 +200,8 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             "not a TTY: pass --local, --stage p0..p8, or --yes (Jenkins) / --yes --local".into(),
         ));
     }
+
+    model = eval_catalog::require_model(&model)?;
 
     if let Some(stage) = args.stage.as_deref() {
         return run_stage(
@@ -415,12 +440,7 @@ fn trigger_jenkins_one_task(
         .controller_url
         .clone()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            Some(format!(
-                "http://localhost:{}",
-                config.jenkins.host_port
-            ))
-        })
+        .or_else(|| Some(format!("http://localhost:{}", config.jenkins.host_port)))
         .unwrap();
     let user = config
         .jenkins_agent
@@ -597,10 +617,7 @@ mod tests {
 
     #[test]
     fn discover_icode_release_finds_full_tarball_in_share() {
-        let dir = std::env::temp_dir().join(format!(
-            "mac-k3d-eval-full-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("mac-k3d-eval-full-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let tar = dir.join("icode-linux-x86_64-full-v0.1.41.tar.gz");
@@ -618,7 +635,9 @@ mod tests {
 
     #[test]
     fn looks_like_root_needs_pipeline_stages() {
-        assert!(!crate::prepare::eval_assets::looks_like_root(Path::new("/tmp")));
+        assert!(!crate::prepare::eval_assets::looks_like_root(Path::new(
+            "/tmp"
+        )));
     }
 
     #[test]

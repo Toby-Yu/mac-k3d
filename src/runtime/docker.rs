@@ -44,11 +44,7 @@ pub async fn open_desktop(app: &Path) -> Result<()> {
         let _ = app;
         println!("Starting {}…", platform::docker_display_name());
         // Best-effort: start the docker systemd service.
-        let _ = exec::visible(
-            Path::new("sudo"),
-            &["systemctl", "start", "docker"],
-        )
-        .await;
+        let _ = exec::visible(Path::new("sudo"), &["systemctl", "start", "docker"]).await;
         Ok(())
     }
 }
@@ -76,20 +72,12 @@ pub async fn quit() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         println!("Quitting {}…", platform::docker_display_name());
-        exec::visible(
-            Path::new("osascript"),
-            &["-e", "quit app \"Docker\""],
-        )
-        .await
+        exec::visible(Path::new("osascript"), &["-e", "quit app \"Docker\""]).await
     }
     #[cfg(target_os = "linux")]
     {
         println!("Stopping {}…", platform::docker_display_name());
-        exec::visible(
-            Path::new("sudo"),
-            &["systemctl", "stop", "docker"],
-        )
-        .await
+        exec::visible(Path::new("sudo"), &["systemctl", "stop", "docker"]).await
     }
 }
 

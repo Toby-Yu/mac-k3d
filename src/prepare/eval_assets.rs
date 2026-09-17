@@ -125,11 +125,13 @@ pub fn discover_icode_release() -> Option<PathBuf> {
 /// Extract embedded pipeline/ into `root/pipeline/` without touching `root/icode`.
 pub fn extract_pipeline(root: &Path) -> Result<()> {
     let dest = root.join("pipeline");
-    std::fs::create_dir_all(&dest).map_err(|e| {
-        Error::Config(format!("cannot create {}: {e}", dest.display()))
-    })?;
+    std::fs::create_dir_all(&dest)
+        .map_err(|e| Error::Config(format!("cannot create {}: {e}", dest.display())))?;
     PIPELINE.extract(&dest).map_err(|e| {
-        Error::Config(format!("failed to extract pipeline assets to {}: {e}", dest.display()))
+        Error::Config(format!(
+            "failed to extract pipeline assets to {}: {e}",
+            dest.display()
+        ))
     })?;
     Ok(())
 }
@@ -185,10 +187,8 @@ mod tests {
 
     #[test]
     fn extract_pipeline_does_not_touch_icode() {
-        let root = std::env::temp_dir().join(format!(
-            "mac-k3d-extract-icode-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mac-k3d-extract-icode-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let icode = root.join("icode");
@@ -213,10 +213,7 @@ mod tests {
 
     #[test]
     fn discover_official_full_release_in_share() {
-        let dir = std::env::temp_dir().join(format!(
-            "mac-k3d-full-drop-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("mac-k3d-full-drop-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let tar = dir.join("icode-linux-x86_64-full-v0.1.41.tar.gz");
@@ -239,10 +236,7 @@ mod tests {
 
     #[test]
     fn looks_like_official_full_name_without_suffix() {
-        let dir = std::env::temp_dir().join(format!(
-            "mac-k3d-full-bare-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("mac-k3d-full-bare-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let bare = dir.join("icode-linux-x86_64-full-v0.1.41");
@@ -254,10 +248,8 @@ mod tests {
 
     #[test]
     fn discover_prefers_full_release_over_named_icode() {
-        let dir = std::env::temp_dir().join(format!(
-            "mac-k3d-full-vs-icode-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("mac-k3d-full-vs-icode-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("icode"), b"#!/bin/sh\n# leftover wrapper\n").unwrap();

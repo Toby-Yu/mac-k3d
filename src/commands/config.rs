@@ -6,7 +6,7 @@ use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
 use crate::platform::ensure_supported_os;
 use crate::prepare::{jenkins_agent, jenkins_credentials, jenkins_job};
-use crate::runtime::{jenkins, kubectl, k3d, Tools};
+use crate::runtime::{jenkins, k3d, kubectl, Tools};
 
 #[derive(Debug, Default, Args)]
 pub struct ConfigArgs {
@@ -161,9 +161,12 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
             );
         }
         println!("Ensuring Jenkins job '{}'…", jenkins_job::DEEPSWE_ONE_TASK);
-        if let Err(err) =
-            jenkins_job::ensure_deepswe_one_task_from_cluster(&tools.kubectl, config, credential_ids)
-                .await
+        if let Err(err) = jenkins_job::ensure_deepswe_one_task_from_cluster(
+            &tools.kubectl,
+            config,
+            credential_ids,
+        )
+        .await
         {
             println!(
                 "Warning: could not ensure '{}' ({err}).",

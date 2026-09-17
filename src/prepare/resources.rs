@@ -48,7 +48,10 @@ fn mem_total_kb() -> Option<u64> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let out = Command::new("sysctl").args(["-n", "hw.memsize"]).output().ok()?;
+        let out = Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()?;
         let bytes: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
         Some(bytes / 1024)
     }
@@ -167,9 +170,7 @@ pub fn remove_agent_cpu_cores(
         return Ok(());
     };
 
-    println!(
-        "Removing Lockable Resources for '{agent_name}' on {jenkins_url}…"
-    );
+    println!("Removing Lockable Resources for '{agent_name}' on {jenkins_url}…");
     let script = groovy_delete_cpu_cores(agent_name, cores);
     match run_script_text(jenkins_url, user, token, &script) {
         Ok(output) => {
@@ -276,7 +277,11 @@ fn run_script_text(base_url: &str, user: &str, token: &str, script: &str) -> Res
     if !output.status.success() {
         return Err(Error::CommandFailed {
             cmd: "curl scriptText".into(),
-            source: anyhow::anyhow!("exit {:?} body={}", output.status.code(), truncate(&body, 200)),
+            source: anyhow::anyhow!(
+                "exit {:?} body={}",
+                output.status.code(),
+                truncate(&body, 200)
+            ),
         });
     }
     if body.contains("No such property")

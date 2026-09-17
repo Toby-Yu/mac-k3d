@@ -6,9 +6,8 @@ use crate::error::{Error, Result};
 /// Download Jenkins agent.jar from the controller.
 pub fn download_agent_jar(controller_url: &str, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
     }
     let url = format!(
         "{}/jnlpJars/agent.jar",
@@ -58,9 +57,8 @@ pub fn write_launch_script_with_java(
     java_bin: &str,
 ) -> Result<()> {
     if let Some(parent) = script_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
     }
     let path = crate::prepare::path_env::agent_tool_path();
     let body = format!(
@@ -82,9 +80,8 @@ exec "{java}" -jar "{jar}" \
         secret = secret_placeholder,
         name = agent_name,
     );
-    std::fs::write(script_path, body).map_err(|e| {
-        Error::Config(format!("failed to write {}: {e}", script_path.display()))
-    })?;
+    std::fs::write(script_path, body)
+        .map_err(|e| Error::Config(format!("failed to write {}: {e}", script_path.display())))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -92,8 +89,7 @@ exec "{java}" -jar "{jar}" \
             .map_err(|e| Error::Config(e.to_string()))?
             .permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(script_path, perms)
-            .map_err(|e| Error::Config(e.to_string()))?;
+        std::fs::set_permissions(script_path, perms).map_err(|e| Error::Config(e.to_string()))?;
     }
     Ok(())
 }
@@ -131,9 +127,15 @@ pub fn try_register_node(
     let crumb = fetch_crumb(base, &auth, &cookie_file);
 
     // Skip create if node already exists.
-    let exists = curl_status(base, &auth, &format!("/computer/{agent_name}/api/json"), &crumb, &cookie_file)
-        .map(|c| c == 200)
-        .unwrap_or(false);
+    let exists = curl_status(
+        base,
+        &auth,
+        &format!("/computer/{agent_name}/api/json"),
+        &crumb,
+        &cookie_file,
+    )
+    .map(|c| c == 200)
+    .unwrap_or(false);
 
     if !exists {
         let xml = agent_config_xml(agent_name, remote_fs, &labels_joined);
@@ -474,14 +476,7 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         .unwrap_or_else(|| "java".into());
 
     let script = remote_fs.join("launch-agent.sh");
-    write_launch_script_with_java(
-        &script,
-        &url,
-        &name,
-        &jar,
-        &secret_placeholder,
-        &java_bin,
-    )?;
+    write_launch_script_with_java(&script, &url, &name, &jar, &secret_placeholder, &java_bin)?;
     println!(
         "Wrote agent launch script: {} (java: {java_bin})",
         script.display()
@@ -498,9 +493,7 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         )?;
         crate::prepare::agent_service::install_and_start(&script, &remote_fs)?;
     } else {
-        println!(
-            "Skipped agent daemon start until agent.jar is available from the controller."
-        );
+        println!("Skipped agent daemon start until agent.jar is available from the controller.");
     }
 
     Ok(())

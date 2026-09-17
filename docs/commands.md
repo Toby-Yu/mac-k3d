@@ -52,6 +52,7 @@ Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on De
 mac-k3d eval --stage p0
 mac-k3d eval --stage p5 --n-tasks 1
 mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode source --model deepseek-v4-pro
+mac-k3d eval --local --benchmark deepswe --n-tasks 1 --model deepseek-flash
 mac-k3d eval --benchmark lolbench --task ruff_1 --yes
 mac-k3d eval                         # interactive → local or Jenkins *_one_task
 ```
@@ -69,10 +70,10 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 | `--icode-release PATH\|URL` | Binary mode; empty discovers `~/.local/share/mac-k3d/icode-*-full-*` or `icode` |
 | `--icode-source PATH` | Source tree (developer); discovered if unset |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
-| `--model ID` | DeepSeek model id (default `deepseek-v4-pro`, env `DEEPSEEK_MODEL`) |
+| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-v4-pro` (default) or `deepseek-flash`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted |
 | `--yes` | Skip prompts: Jenkins `deepswe_one_task` or `lolbench_one_task` unless `--local` |
 
-v1 harness=`icode`, llm=`deepseek`. Benchmark is `deepswe` or `lolbench`. Output: `eval-runs/reports/eval-icode-deepseek-{benchmark}-n{N}-{utc}.json`.
+v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-v4-pro` (default) and `deepseek-flash`. Benchmark is `deepswe` or `lolbench`. Output: `eval-runs/reports/eval-icode-deepseek-{benchmark}-n{N}-{utc}.json`.
 
 ---
 
@@ -259,24 +260,26 @@ Positional argument is the incoming file. Global `-c` is the **dest**; if omitte
 
 ## `set`
 
-Edit **non-secret** `jenkins_job` fields on a YAML file (harness, LLM, benchmark, questions). Writes YAML only — does not upload Jenkins credentials or queue an eval. Allowed values come from the catalog (`src/eval_catalog.rs`); unknown ids are rejected with `allowed: …`.
+Edit **non-secret** `jenkins_job` fields on a YAML file (harness, LLM family, DeepSeek model, benchmark, questions). Writes YAML only — does not upload Jenkins credentials or queue an eval. Allowed values come from the catalog (`src/eval_catalog.rs`); unknown ids are rejected with `allowed: …`.
 
 ```bash
 mac-k3d set --list
 mac-k3d set -c /tmp/imported-config.yaml --harness icode --llm deepseek --benchmark deepswe --task abs-stepped-slices
+mac-k3d set -c ~/.config/mac-k3d/config.yaml --model deepseek-flash
 mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --n-tasks 2
 mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --tasks abs-module-cache-flags,abs-stepped-slices
 ```
 
-TTY with no flags: select harness / LLM / benchmark, then question mode. Non-TTY requires flags.
+TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, then question mode. Non-TTY requires flags.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--list` | Print allowed harness / LLM / benchmark values and exit |
+| `--list` | Print allowed harness / LLM / model / benchmark values and exit |
 | `--harness <ID>` | Catalog harness (v1: `icode`) |
 | `--llm <ID>` | Catalog LLM family (v1: `deepseek`) |
+| `--model <ID>` | DeepSeek Chat Completions id (`deepseek-v4-pro` default, or `deepseek-flash`) |
 | `--benchmark <ID>` | `deepswe` or `lolbench` (which job receives TASK / N_TASKS / TASKS defaults) |
 | `--task <ID>` | One question id |
 | `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |

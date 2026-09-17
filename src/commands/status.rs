@@ -19,10 +19,7 @@ pub async fn run(config: &MacK3dConfig) -> Result<()> {
                 .as_deref()
                 .unwrap_or("(unset)")
         );
-        println!(
-            "Agent daemon:    {}",
-            crate::platform::agent_daemon_label()
-        );
+        println!("Agent daemon:    {}", crate::platform::agent_daemon_label());
     }
 
     let tools = match Tools::from_config(config) {
@@ -66,12 +63,8 @@ pub async fn run(config: &MacK3dConfig) -> Result<()> {
         let phase = match info.state {
             ClusterState::Running => {
                 let ctx = kubectl::context_name(&config.cluster.name);
-                kubectl::jenkins_pod_phase(
-                    &tools.kubectl,
-                    &config.jenkins.namespace,
-                    Some(&ctx),
-                )
-                .await
+                kubectl::jenkins_pod_phase(&tools.kubectl, &config.jenkins.namespace, Some(&ctx))
+                    .await
             }
             ClusterState::Missing | ClusterState::Stopped => None,
         };

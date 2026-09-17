@@ -34,9 +34,8 @@ pub fn prepend_to_process_path(dir: &Path) -> Result<()> {
         Some(existing) => {
             let mut paths = vec![PathBuf::from(&dir_str)];
             paths.extend(env::split_paths(&existing));
-            env::join_paths(paths).map_err(|e| {
-                Error::Config(format!("failed to update PATH: {e}"))
-            })?
+            env::join_paths(paths)
+                .map_err(|e| Error::Config(format!("failed to update PATH: {e}")))?
         }
         None => dir_str.into(),
     };
@@ -51,9 +50,8 @@ pub fn ensure_user_local_bin_in_process() -> Result<()> {
         return Ok(());
     };
     if !local_bin.exists() {
-        std::fs::create_dir_all(&local_bin).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", local_bin.display()))
-        })?;
+        std::fs::create_dir_all(&local_bin)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", local_bin.display())))?;
     }
     prepend_to_process_path(&local_bin)
 }
@@ -112,9 +110,8 @@ fn dir_already_in_shell_rc(dir: &Path) -> Result<bool> {
     if !rc.exists() {
         return Ok(false);
     }
-    let contents = std::fs::read_to_string(&rc).map_err(|e| {
-        Error::Config(format!("failed to read {}: {e}", rc.display()))
-    })?;
+    let contents = std::fs::read_to_string(&rc)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", rc.display())))?;
     let needle = dir.display().to_string();
     Ok(contents.contains(&needle) || contents.contains(PATH_MARKER))
 }
@@ -142,9 +139,8 @@ fn preferred_shell_rc() -> PathBuf {
 
 fn append_path_export(rc: &Path, dir: &Path) -> Result<()> {
     if let Some(parent) = rc.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
     }
 
     let line = if rc.extension().and_then(|s| s.to_str()) == Some("fish")
@@ -153,15 +149,9 @@ fn append_path_export(rc: &Path, dir: &Path) -> Result<()> {
             .and_then(|s| s.to_str())
             .is_some_and(|n| n == "config.fish")
     {
-        format!(
-            "\n{PATH_MARKER}\nfish_add_path {}\n",
-            dir.display()
-        )
+        format!("\n{PATH_MARKER}\nfish_add_path {}\n", dir.display())
     } else {
-        format!(
-            "\n{PATH_MARKER}\nexport PATH=\"{}:$PATH\"\n",
-            dir.display()
-        )
+        format!("\n{PATH_MARKER}\nexport PATH=\"{}:$PATH\"\n", dir.display())
     };
 
     use std::io::Write;
@@ -227,7 +217,11 @@ mod tests {
     #[test]
     fn agent_tool_path_includes_local_or_usr_bin() {
         let p = agent_tool_path();
-        assert!(p.contains("/usr/local/bin") || p.contains("/usr/bin") || p.contains("/opt/homebrew/bin"));
+        assert!(
+            p.contains("/usr/local/bin")
+                || p.contains("/usr/bin")
+                || p.contains("/opt/homebrew/bin")
+        );
         assert!(p.contains(".local/bin") || p.contains("/usr/bin"));
     }
 }

@@ -42,10 +42,14 @@ fn discover_docker() -> Option<DiscoveredTool> {
     let app = platform::docker_app_default().filter(|p| p.exists());
 
     let binary = which("docker").or_else(|| {
-        ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/usr/bin/docker"]
-            .map(PathBuf::from)
-            .into_iter()
-            .find(|p| p.exists())
+        [
+            "/usr/local/bin/docker",
+            "/opt/homebrew/bin/docker",
+            "/usr/bin/docker",
+        ]
+        .map(PathBuf::from)
+        .into_iter()
+        .find(|p| p.exists())
     });
 
     match (app.as_ref(), binary) {

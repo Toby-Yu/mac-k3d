@@ -20,11 +20,7 @@ pub struct CleanArgs {
     pub yes: bool,
 }
 
-pub async fn run(
-    args: CleanArgs,
-    config: &MacK3dConfig,
-    config_path: Option<&Path>,
-) -> Result<()> {
+pub async fn run(args: CleanArgs, config: &MacK3dConfig, config_path: Option<&Path>) -> Result<()> {
     ensure_supported_os()?;
 
     let resolved_config = config_path

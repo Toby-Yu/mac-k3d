@@ -210,6 +210,9 @@ pub struct JenkinsJobConfig {
     /// Eval LLM family (`mac-k3d set --llm`). Catalog: `deepseek`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_llm: String,
+    /// DeepSeek Chat Completions id (`mac-k3d set --model`). Catalog: `deepseek-v4-pro`, `deepseek-flash`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_deepseek_model: String,
     /// Which Jenkins job receives TASK / N_TASKS / TASKS defaults (`deepswe` | `lolbench`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_benchmark: String,
@@ -240,6 +243,7 @@ impl Default for JenkinsJobConfig {
             default_harness: String::new(),
             default_model: String::new(),
             default_llm: String::new(),
+            default_deepseek_model: String::new(),
             default_benchmark: String::new(),
             default_n_tasks: 1,
             default_tasks: Vec::new(),
@@ -628,6 +632,7 @@ mod tests {
         let mut cfg = MacK3dConfig::default();
         cfg.jenkins_job.default_harness = "icode".into();
         cfg.jenkins_job.default_llm = "deepseek".into();
+        cfg.jenkins_job.default_deepseek_model = "deepseek-flash".into();
         cfg.jenkins_job.default_benchmark = "deepswe".into();
         cfg.jenkins_job.default_n_tasks = 2;
         cfg.jenkins_job.default_task.clear();
@@ -636,12 +641,17 @@ mod tests {
         let yaml = serde_yaml::to_string(&cfg).unwrap();
         assert!(yaml.contains("default_harness: icode"));
         assert!(yaml.contains("default_llm: deepseek"));
+        assert!(yaml.contains("default_deepseek_model: deepseek-flash"));
         assert!(yaml.contains("default_benchmark: deepswe"));
         assert!(yaml.contains("default_n_tasks: 2"));
         assert!(yaml.contains("abs-module-cache-flags"));
         let loaded: MacK3dConfig = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(loaded.jenkins_job.default_harness, "icode");
         assert_eq!(loaded.jenkins_job.default_llm, "deepseek");
+        assert_eq!(
+            loaded.jenkins_job.default_deepseek_model,
+            "deepseek-flash"
+        );
         assert_eq!(loaded.jenkins_job.default_benchmark, "deepswe");
         assert_eq!(loaded.jenkins_job.default_n_tasks, 2);
         assert_eq!(
@@ -657,6 +667,10 @@ mod tests {
         cfg.jenkins_job.default_task = "abs-stepped-slices".into();
         let exported = cfg.for_export();
         assert_eq!(exported.jenkins_job.default_harness, "icode");
+        assert_eq!(
+            exported.jenkins_job.default_deepseek_model,
+            "deepseek-flash"
+        );
         assert_eq!(exported.jenkins_job.default_benchmark, "deepswe");
         assert_eq!(exported.jenkins_job.default_tasks.len(), 2);
     }

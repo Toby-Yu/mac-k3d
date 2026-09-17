@@ -11,9 +11,8 @@ pub fn clone_repo(git_url: &str, dest: &Path, run_now: bool) -> Result<()> {
         return Ok(());
     }
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
     }
     let status = Command::new("git")
         .args(["clone", git_url, &dest.display().to_string()])

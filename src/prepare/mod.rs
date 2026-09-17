@@ -50,10 +50,7 @@ pub fn validate(config: &MacK3dConfig) -> Result<()> {
             DependencySource::Existing => {
                 if let Some(bin) = &entry.binary {
                     if !bin.exists() {
-                        problems.push(format!(
-                            "{name} binary not found: {}",
-                            bin.display()
-                        ));
+                        problems.push(format!("{name} binary not found: {}", bin.display()));
                     }
                 } else if is_required {
                     problems.push(format!("{name} has source=existing but no binary path"));
@@ -61,10 +58,7 @@ pub fn validate(config: &MacK3dConfig) -> Result<()> {
                 if name == "docker" && crate::platform::requires_docker_app() {
                     if let Some(app) = &entry.app {
                         if !app.exists() {
-                            problems.push(format!(
-                                "Docker.app not found: {}",
-                                app.display()
-                            ));
+                            problems.push(format!("Docker.app not found: {}", app.display()));
                         }
                     }
                 }
@@ -125,11 +119,7 @@ pub fn validate(config: &MacK3dConfig) -> Result<()> {
         }
     }
 
-    let disk_path = config
-        .storage
-        .base_dir
-        .as_deref()
-        .unwrap_or(Path::new("/"));
+    let disk_path = config.storage.base_dir.as_deref().unwrap_or(Path::new("/"));
     if let Err(e) = resources::ensure_disk_min(disk_path, config.disk_min_gb()) {
         problems.push(e.to_string());
     }
@@ -155,9 +145,7 @@ fn required_dependencies(config: &MacK3dConfig) -> Vec<&'static str> {
     if config.jenkins.enabled || matches!(config.role, NodeRole::Controller) {
         deps.push("helm");
     }
-    if matches!(config.role, NodeRole::Worker)
-        || config.lolbench.source != LolbenchSource::Skip
-    {
+    if matches!(config.role, NodeRole::Worker) || config.lolbench.source != LolbenchSource::Skip {
         if config.dependencies.harbor.source != DependencySource::Skip {
             deps.push("harbor");
         }

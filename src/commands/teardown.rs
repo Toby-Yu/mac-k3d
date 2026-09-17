@@ -28,16 +28,10 @@ pub async fn run(args: TeardownArgs, config: &MacK3dConfig) -> Result<()> {
     match info.state {
         ClusterState::Running => k3d::stop(&tools.k3d, &config.cluster.name).await?,
         ClusterState::Stopped => {
-            println!(
-                "k3d cluster '{}' is already stopped.",
-                config.cluster.name
-            );
+            println!("k3d cluster '{}' is already stopped.", config.cluster.name);
         }
         ClusterState::Missing => {
-            println!(
-                "k3d cluster '{}' does not exist.",
-                config.cluster.name
-            );
+            println!("k3d cluster '{}' does not exist.", config.cluster.name);
         }
     }
 

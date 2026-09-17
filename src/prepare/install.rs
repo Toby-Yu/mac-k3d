@@ -58,18 +58,23 @@ pub fn ensure_eval_toolchain() -> Result<()> {
             tracing::warn!(error = %e, "uv tool install datacurve-pier failed; trying git URL");
             run_cmd(
                 "uv",
-                &["tool", "install", "git+https://github.com/datacurve-ai/pier"],
+                &[
+                    "tool",
+                    "install",
+                    "git+https://github.com/datacurve-ai/pier",
+                ],
             )?;
         }
         path_env::ensure_user_local_bin_in_process()?;
     }
-    let pier = discovery::which("pier").ok_or_else(|| {
-        Error::DependencyMissing("pier not on PATH after uv tool install".into())
-    })?;
+    let pier = discovery::which("pier")
+        .ok_or_else(|| Error::DependencyMissing("pier not on PATH after uv tool install".into()))?;
     let help = Command::new(&pier)
         .args(["run", "--help"])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr))
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)
+        })
         .unwrap_or_default();
     if !help.contains("--agent-import-path") {
         return Err(Error::DependencyMissing(
@@ -110,13 +115,11 @@ fn install_harbor() -> Result<DependencyEntry> {
 
     path_env::ensure_user_local_bin(true)?;
 
-    discover_harbor()
-        .map(|t| tool_to_entry(&t))
-        .ok_or_else(|| {
-            Error::DependencyMissing(
-                "harbor installed but binary not found (checked PATH and ~/.local/bin)".into(),
-            )
-        })
+    discover_harbor().map(|t| tool_to_entry(&t)).ok_or_else(|| {
+        Error::DependencyMissing(
+            "harbor installed but binary not found (checked PATH and ~/.local/bin)".into(),
+        )
+    })
 }
 
 fn discover_harbor() -> Option<DiscoveredTool> {
@@ -131,12 +134,13 @@ fn discover_harbor() -> Option<DiscoveredTool> {
 }
 
 fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program).args(args).status().map_err(|e| {
-        Error::CommandFailed {
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .map_err(|e| Error::CommandFailed {
             cmd: format!("{program} {}", args.join(" ")),
             source: e.into(),
-        }
-    })?;
+        })?;
     if !status.success() {
         return Err(Error::CommandFailed {
             cmd: format!("{program} {}", args.join(" ")),

@@ -21,6 +21,10 @@ pub struct SetArgs {
     #[arg(long)]
     pub llm: Option<String>,
 
+    /// DeepSeek Chat Completions model id (catalog)
+    #[arg(long)]
+    pub model: Option<String>,
+
     /// Benchmark (`deepswe` or `lolbench`)
     #[arg(long)]
     pub benchmark: Option<String>,
@@ -42,6 +46,7 @@ pub struct SetArgs {
 pub struct SetPatch {
     pub harness: Option<String>,
     pub llm: Option<String>,
+    pub model: Option<String>,
     pub benchmark: Option<String>,
     pub task: Option<String>,
     pub n_tasks: Option<u32>,
@@ -70,6 +75,7 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
     let mut patch = SetPatch {
         harness: args.harness,
         llm: args.llm,
+        model: args.model,
         benchmark: args.benchmark,
         task: args.task,
         n_tasks: args.n_tasks,
@@ -78,6 +84,7 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
 
     let any_flag = patch.harness.is_some()
         || patch.llm.is_some()
+        || patch.model.is_some()
         || patch.benchmark.is_some()
         || patch.task.is_some()
         || patch.n_tasks.is_some()
@@ -88,7 +95,7 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
             patch = prompt_patch(&config)?;
         } else {
             return Err(Error::Config(
-                "not a TTY: pass --harness / --llm / --benchmark / --task / --n-tasks / --tasks, or --list"
+                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks, or --list"
                     .into(),
             ));
         }
@@ -107,6 +114,9 @@ pub fn apply_set(config: &mut MacK3dConfig, patch: SetPatch) -> Result<()> {
     }
     if let Some(l) = patch.llm {
         job.default_llm = eval_catalog::require_llm(&l)?;
+    }
+    if let Some(m) = patch.model {
+        job.default_deepseek_model = eval_catalog::require_model(&m)?;
     }
     if let Some(b) = patch.benchmark {
         job.default_benchmark = eval_catalog::require_benchmark(&b)?;
@@ -166,6 +176,13 @@ fn prompt_patch(config: &MacK3dConfig) -> Result<SetPatch> {
             nonempty_or(&config.jenkins_job.default_model, "deepseek"),
         ),
     );
+    let m_idx = index_of(
+        eval_catalog::MODELS,
+        nonempty_or(
+            &config.jenkins_job.default_deepseek_model,
+            eval_catalog::default_model(),
+        ),
+    );
     let b_idx = index_of(
         eval_catalog::BENCHMARKS,
         nonempty_or(&config.jenkins_job.default_benchmark, "deepswe"),
@@ -179,9 +196,16 @@ fn prompt_patch(config: &MacK3dConfig) -> Result<SetPatch> {
         .map_err(|_| Error::Cancelled)?]
     .to_string();
     let llm = eval_catalog::LLMS[Select::with_theme(&theme)
-        .with_prompt("LLM")
+        .with_prompt("LLM family")
         .items(eval_catalog::LLMS)
         .default(l_idx)
+        .interact()
+        .map_err(|_| Error::Cancelled)?]
+    .to_string();
+    let model = eval_catalog::MODELS[Select::with_theme(&theme)
+        .with_prompt("DeepSeek model")
+        .items(eval_catalog::MODELS)
+        .default(m_idx)
         .interact()
         .map_err(|_| Error::Cancelled)?]
     .to_string();
@@ -207,6 +231,7 @@ fn prompt_patch(config: &MacK3dConfig) -> Result<SetPatch> {
     let mut patch = SetPatch {
         harness: Some(harness),
         llm: Some(llm),
+        model: Some(model),
         benchmark: Some(benchmark),
         ..SetPatch::default()
     };
@@ -264,9 +289,10 @@ fn print_set_summary(config: &MacK3dConfig, path: &Path) {
     let job = &config.jenkins_job;
     println!("Updated {} (YAML only; secrets unchanged).", path.display());
     println!(
-        "  harness={}  llm={}  benchmark={}",
+        "  harness={}  llm={}  model={}  benchmark={}",
         nonempty_or(&job.default_harness, "(unset)"),
         nonempty_or(&job.default_llm, nonempty_or(&job.default_model, "(unset)")),
+        nonempty_or(&job.default_deepseek_model, eval_catalog::default_model()),
         nonempty_or(&job.default_benchmark, "(unset)")
     );
     if !job.default_tasks.is_empty() {
@@ -377,5 +403,37 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("allowed: deepseek"), "{err}");
+    }
+
+    #[test]
+    fn set_model_flash() {
+        let mut c = cfg();
+        apply_set(
+            &mut c,
+            SetPatch {
+                model: Some("deepseek-flash".into()),
+                ..SetPatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(c.jenkins_job.default_deepseek_model, "deepseek-flash");
+    }
+
+    #[test]
+    fn reject_unknown_model() {
+        let mut c = cfg();
+        let err = apply_set(
+            &mut c,
+            SetPatch {
+                model: Some("gpt-4".into()),
+                ..SetPatch::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("allowed: deepseek-v4-pro, deepseek-flash"),
+            "{err}"
+        );
     }
 }

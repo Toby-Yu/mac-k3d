@@ -9,8 +9,8 @@ use crate::config::{
 use crate::error::{Error, Result};
 use crate::prepare::discovery::{self, DiscoveredDeps, DiscoveredTool};
 use crate::prepare::install::{self, entry_from_path};
-use crate::prepare::{jenkins_agent, jenkins_credentials, lolbench, resources};
 use crate::prepare::volumes::VolumeCandidate;
+use crate::prepare::{jenkins_agent, jenkins_credentials, lolbench, resources};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MacRole {
@@ -85,7 +85,12 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         true,
     )?;
     let cluster_tools_required = !matches!(role, MacRole::Worker);
-    let k3d = prompt_dependency("k3d", discovered.k3d.as_ref(), cluster_tools_required, false)?;
+    let k3d = prompt_dependency(
+        "k3d",
+        discovered.k3d.as_ref(),
+        cluster_tools_required,
+        false,
+    )?;
     let kubectl = prompt_dependency(
         "kubectl",
         discovered.kubectl.as_ref(),
@@ -102,7 +107,11 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         }
     };
     let harbor = if wants_lolbench {
-        prompt_harbor(discovered.harbor.as_ref(), discovered.uv.is_some(), discovered.pipx.is_some())?
+        prompt_harbor(
+            discovered.harbor.as_ref(),
+            discovered.uv.is_some(),
+            discovered.pipx.is_some(),
+        )?
     } else {
         DependencyEntry {
             source: DependencySource::Skip,
@@ -325,7 +334,9 @@ fn prompt_dependency(
         ];
         let pkg = crate::platform::package_manager_label();
         if is_docker {
-            options.push(format!("Install via {pkg} (not recommended if already installed)"));
+            options.push(format!(
+                "Install via {pkg} (not recommended if already installed)"
+            ));
         } else {
             options.push(format!("Install via {pkg}"));
         }
@@ -388,7 +399,11 @@ fn prompt_dependency(
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("{label} action"))
         .items(&options)
-        .default(if required { 0 } else { options.len().saturating_sub(1) })
+        .default(if required {
+            0
+        } else {
+            options.len().saturating_sub(1)
+        })
         .interact()
         .map_err(|_| Error::Cancelled)?;
 
@@ -423,7 +438,11 @@ fn prompt_dependency(
     }
 }
 
-fn prompt_harbor(discovered: Option<&DiscoveredTool>, has_uv: bool, has_pipx: bool) -> Result<DependencyEntry> {
+fn prompt_harbor(
+    discovered: Option<&DiscoveredTool>,
+    has_uv: bool,
+    has_pipx: bool,
+) -> Result<DependencyEntry> {
     if let Some(tool) = discovered {
         println!("\nharbor: found");
         println!("  {}", tool.describe());
@@ -591,7 +610,11 @@ fn prompt_lolbench(base_dir: &PathBuf) -> Result<LolbenchConfig> {
 
         let method = Select::with_theme(&ColorfulTheme::default())
             .with_prompt("How to obtain LoLBench now?")
-            .items(&["Run git clone now", "I'll download/unpack myself (record path only)", "Skip"])
+            .items(&[
+                "Run git clone now",
+                "I'll download/unpack myself (record path only)",
+                "Skip",
+            ])
             .default(0)
             .interact()
             .map_err(|_| Error::Cancelled)?;
@@ -672,7 +695,9 @@ fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgent
         if token.trim().is_empty() {
             None
         } else {
-            println!("Note: API token will be written to config in plaintext until encryption is added.");
+            println!(
+                "Note: API token will be written to config in plaintext until encryption is added."
+            );
             Some(token)
         }
     };
@@ -690,10 +715,7 @@ fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgent
         .default(labels_default)
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
-    let labels: Vec<String> = labels_str
-        .split_whitespace()
-        .map(str::to_string)
-        .collect();
+    let labels: Vec<String> = labels_str.split_whitespace().map(str::to_string).collect();
 
     let remote_fs_default = jenkins_agent::default_remote_fs();
     let remote_fs: String = Input::with_theme(&ColorfulTheme::default())
@@ -759,12 +781,15 @@ fn apply_worker_agent(config: &mut MacK3dConfig, _creds: Option<&WorkerAgentProm
 fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
     println!(
         "\nJenkins one-task eval jobs: `deepswe_one_task` and `lolbench_one_task`.\n\
-         Both use Pier + iCode + deepseek-v4-pro. Default TASK for LoLBench is ruff_1.\n\
+         Both use iCode + DeepSeek catalog model (default deepseek-v4-pro). Default TASK for LoLBench is ruff_1.\n\
          See docs/binary-initializer/user-guide.md.\n\
          Secrets (DeepSeek, GitCode PAT) go to Jenkins Credentials.\n"
     );
 
-    let mode_options = ["binary (GitCode -full- tarball)", "source (git clone + uv sync)"];
+    let mode_options = [
+        "binary (GitCode -full- tarball)",
+        "source (git clone + uv sync)",
+    ];
     let mode_idx = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Default EVAL_MODE")
         .items(&mode_options)
@@ -877,7 +902,10 @@ fn print_summary(config: &MacK3dConfig, role: MacRole) {
         println!("  Storage base:   {}", base.display());
     }
     println!("  Role:           {role:?}");
-    println!("  Cluster:        {} ({} agents)", config.cluster.name, config.cluster.agents);
+    println!(
+        "  Cluster:        {} ({} agents)",
+        config.cluster.name, config.cluster.agents
+    );
     println!(
         "  Jenkins:        {}",
         if config.jenkins.enabled {
@@ -893,7 +921,11 @@ fn print_summary(config: &MacK3dConfig, role: MacRole) {
     print_dep("  harbor", &config.dependencies.harbor);
     print_dep("  java", &config.dependencies.java);
     if let Some(path) = &config.lolbench.path {
-        println!("  LoLBench:      {} ({:?})", path.display(), config.lolbench.source);
+        println!(
+            "  LoLBench:      {} ({:?})",
+            path.display(),
+            config.lolbench.source
+        );
     } else {
         println!("  LoLBench:      skipped");
     }
@@ -972,9 +1004,8 @@ fn ensure_storage_dirs(config: &MacK3dConfig) -> Result<()> {
 
     for dir in dirs {
         let path = dir.display().to_string();
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            Error::Config(format!("failed to create {path}: {e}"))
-        })?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| Error::Config(format!("failed to create {path}: {e}")))?;
         tracing::info!(%path, "created storage directory");
     }
     Ok(())
@@ -1034,10 +1065,7 @@ mod tests {
         let prev_m = std::env::var_os("MAC_K3D_JENKINS_URL");
         std::env::remove_var("JENKINS_URL");
         std::env::remove_var("MAC_K3D_JENKINS_URL");
-        assert_eq!(
-            default_worker_jenkins_url(),
-            DEFAULT_CONTROLLER_JENKINS_URL
-        );
+        assert_eq!(default_worker_jenkins_url(), DEFAULT_CONTROLLER_JENKINS_URL);
         std::env::set_var("JENKINS_URL", "http://192.0.2.9:17070");
         assert_eq!(default_worker_jenkins_url(), "http://192.0.2.9:17070");
         match prev_j {

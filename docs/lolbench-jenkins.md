@@ -1,9 +1,9 @@
 # LoLBench Jenkins Job Design
 
-**What `config` writes today:** two separate runners, both iCode + `deepseek-v4-pro`:
+**What `config` writes today:** two separate runners, both iCode + DeepSeek catalog model (Jenkins **DEEPSEEK_MODEL** choice: `deepseek-v4-pro` default, or `deepseek-flash`):
 
 - **`deepswe_one_task`** — DeepSWE only. P5 = `pier run` + `icode_pier_agent` + worker `*-full-*` drop.
-- **`lolbench_one_task`** — LoLBench only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent` + `deepseek-v4-pro`. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop (same as DeepSWE). LoLBench's in-repo gitcode clone is not used. First run: `uv tool install harbor` if missing; on x86_64, P5 builds or retags the task image (Hub tags are arm64-only).
+- **`lolbench_one_task`** — LoLBench only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent` + the same `DEEPSEEK_MODEL` catalog. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop (same as DeepSWE). LoLBench's in-repo gitcode clone is not used. First run: `uv tool install harbor` if missing; on x86_64, P5 builds or retags the task image (Hub tags are arm64-only).
 
 Operator start: [binary-initializer/user-guide.md](binary-initializer/user-guide.md). Jenkinsfile still only calls `pipeline/stages/run_all.sh` (Harbor stays in P5, not in job XML).
 
@@ -70,7 +70,7 @@ The agent process is a **Jenkins inbound/SSH agent** on the worker Mac. It is no
 |-----------|------|---------|---------|
 | `TASK` | Choice | `ruff_1` | `harbor_tasks/<id>` / `scripts/run_task.sh` arg 1 |
 | `HARNESS` | Choice | `opencode` | Harbor `-a` / script arg 2 |
-| `MODEL` | String | `openrouter/deepseek/deepseek-v4-pro` | Harbor `-m` / script arg 3 |
+| `MODEL` | String | `openrouter/deepseek/deepseek-v4-pro` | **Legacy** Harbor `-m` / script arg 3 (not the live Pipeline param; live jobs use **`DEEPSEEK_MODEL`** choice) |
 | `SUITE` | Choice | `union` | `LOLBENCH_SUITE` / script arg 4 |
 | `AGENT_LABEL` | String | `lolbench` | Jenkins `agent { label }` |
 | `MAX_RETRIES` | String | `2` | Harbor `--max-retries` |
@@ -338,7 +338,7 @@ pipeline {
   parameters {
     choice(name: 'TASK', choices: ['ruff_1', 'fastapi_1', 'cpython_1'], description: 'LoLBench task id')
     choice(name: 'HARNESS', choices: ['opencode', 'codex', 'claude-code', 'oracle'], description: 'Harbor agent')
-    string(name: 'MODEL', defaultValue: 'openrouter/deepseek/deepseek-v4-pro', description: 'provider/model')
+    string(name: 'MODEL', defaultValue: 'openrouter/deepseek/deepseek-v4-pro', description: 'legacy Harbor -m provider/model (not live DEEPSEEK_MODEL)')
     choice(name: 'SUITE', choices: ['union', 'orig', 'aug'])
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'MAX_RETRIES', defaultValue: '2')
@@ -444,7 +444,7 @@ k3d does not need the LoLBench images imported.
 
 ## API / automation
 
-Trigger without the UI:
+Trigger without the UI (**legacy Harbor `-m` design; live jobs use `DEEPSEEK_MODEL` choice, not `MODEL`**):
 
 ```bash
 curl -X POST "https://jenkins.example.com/job/lolbench_one_task/buildWithParameters" \
@@ -465,7 +465,7 @@ A wrapper job can fan out over a task list by triggering `lolbench_one_task` N t
 |---------|--------|-----|
 | `SUITE` | `union` | Canonical LoLBench verdict |
 | `HARNESS` | `opencode` | LoLBench reference |
-| `MODEL` | `openrouter/deepseek/deepseek-v4-pro` | LoLBench reference |
+| `MODEL` | `openrouter/deepseek/deepseek-v4-pro` | **Legacy** Harbor `-m` LoLBench reference (live param is `DEEPSEEK_MODEL`) |
 | Parallel LoLBench on one Mac | start at 1; raise lock qty only with `--jobs-dir` isolation | RAM / Docker pressure |
 | Unresolved task | UNSTABLE | Distinguishes “not solved” from infra failure |
 

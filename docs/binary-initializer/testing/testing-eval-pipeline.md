@@ -19,7 +19,7 @@ mac-k3d eval                        # interactive → Jenkins job deepswe_one_ta
 
 Default workdir: `./eval-runs` (override with `MAC_K3D_EVAL_WORKDIR`).  
 Default iCode for users: `ICODE_MODE=binary` and `~/.local/share/mac-k3d/icode` (or `/opt/mac-k3d/icode`). Developer source trees are discovered only when `ICODE_MODE=source`.  
-Default model: `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`). API `model` in the response is stored as `llm_model_served` (routing to Flash is possible).
+Default model: `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`). Catalog also allows `deepseek-flash` (`mac-k3d eval --model deepseek-flash`, Jenkins **DEEPSEEK_MODEL** choice, or `mac-k3d set --model`). API `model` in the response is stored as `model_served`.
 
 ---
 
@@ -31,7 +31,7 @@ Jobs must **not** run inside the controller’s k3d nodes. Jenkins on the cloud 
 Cloud VM: k3d + Jenkins :17070
     └── queue deepswe_one_task (label lolbench)
 This PC: Jenkins agent + Docker + iCode
-    ├── api.deepseek.com  (deepseek-v4-pro)
+    ├── api.deepseek.com  (catalog: deepseek-v4-pro default, or deepseek-flash)
     └── archive JSON back to cloud Jenkins
 ```
 
@@ -56,7 +56,7 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 | Credential `deepseek-api-key` | Stored on the **cloud** controller |
 | iCode tree on this PC | Discovered path (often `$HOME/Documents/iCode-main`) or a `-full-` tarball |
 | `MAC_K3D_ROOT` on this PC | mac-k3d checkout (or Release share dir `~/.local/share/mac-k3d`) |
-| API model string | `deepseek-v4-pro` (override with `DEEPSEEK_MODEL` if docs change) |
+| API model string | Catalog `deepseek-v4-pro` (default) or `deepseek-flash` (`DEEPSEEK_MODEL` / `--model` / Jenkins choice) |
 | N for smoke | **1**; larger N later (E8) |
 
 Do not commit API keys. Do not commit leftover Harbor-named `launch-agent.sh` directories.
@@ -132,7 +132,7 @@ Written by [`pipeline/lib/score_results.py`](../../../pipeline/lib/score_results
 | Field | Meaning |
 |-------|---------|
 | `suite`, `harness`, `n_tasks`, `n_rollouts` | `deepswe` or `lolbench`; `icode`; N questions; **1** attempt per question |
-| `model` / `model_served` / `api_base` | Requested id (`deepseek-v4-pro`), API-served id, endpoint |
+| `model` / `model_served` / `api_base` | Requested catalog id (default `deepseek-v4-pro`), API-served id, endpoint |
 | `access_date_utc` | When the run was recorded (UTC) |
 | `wall_seconds` / `wall_minutes` | P5 harness + P6 baseline wall clock |
 | `pass_at_1` | Mean of `c_t/n_t` (resolved attempts; n=1 → 0 or 1 per task) |
@@ -221,7 +221,7 @@ mac-k3d eval --stage p5 --n-tasks 1
 mac-k3d eval --stage p6 --n-tasks 1
 ```
 
-**Expected:** `instruction.md` posted to DeepSeek `deepseek-v4-pro`; `.patch` under `baseline/`; `summary.json` / `meta.json` include usage, wall time, and served model.
+**Expected:** `instruction.md` posted to DeepSeek (catalog default `deepseek-v4-pro`); `.patch` under `baseline/`; `summary.json` / `meta.json` include usage, wall time, and served model.
 
 ## P7 — Score f2p / p2p into temp JSON
 
@@ -252,6 +252,7 @@ After P0–P8 / E6:
 
 ```bash
 mac-k3d eval --local --n-tasks 1 --model deepseek-v4-pro
+# flash: mac-k3d eval --local --n-tasks 1 --model deepseek-flash
 # or trigger Jenkins on the cloud controller (runs on this worker):
 mac-k3d eval --n-tasks 1 --icode-mode source --model deepseek-v4-pro
 ```

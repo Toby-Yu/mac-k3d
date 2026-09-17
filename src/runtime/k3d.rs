@@ -97,11 +97,7 @@ pub async fn inspect(k3d: &Path, name: &str) -> Result<ClusterInfo> {
     let mut any_running = false;
 
     for node in &cluster.nodes {
-        let running = node
-            .state
-            .as_ref()
-            .map(|s| s.running)
-            .unwrap_or(false);
+        let running = node.state.as_ref().map(|s| s.running).unwrap_or(false);
         match node.role.to_lowercase().as_str() {
             "server" => servers += 1,
             "agent" => agents += 1,

@@ -18,7 +18,7 @@ Jobs must **not** run inside the controller’s k3d nodes. Cloud Jenkins only qu
 Cloud VM (SSH as root): k3d + Jenkins :17070
     └── queue deepswe_one_task (label lolbench)
 This PC (Toby): Jenkins agent + Docker + iCode
-    ├── api.deepseek.com  (deepseek-v4-pro)
+    ├── api.deepseek.com  (catalog: deepseek-v4-pro default, or deepseek-flash)
     └── archive JSON back to cloud Jenkins
 ```
 
@@ -85,7 +85,7 @@ flowchart TD
 | Cloud checkout | `/root/src/mac-k3d` branch `binary-initializer` |
 | This PC checkout | `/home/Toby/Documents/Toby/mac-k3d` |
 | iCode on this PC | `/home/Toby/Documents/Toby/iCode-main` |
-| Model | `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`) |
+| Model | `deepseek-v4-pro` (catalog default) or `deepseek-flash` (`DEEPSEEK_MODEL` or `--model`) |
 | N | **1** until E7 is green |
 | Credential on controller | `deepseek-api-key` |
 
@@ -336,7 +336,7 @@ cd ~/Documents/Toby/mac-k3d
 mac-k3d eval --n-tasks 1 --icode-mode source --model deepseek-v4-pro --yes
 ```
 
-Or Jenkins UI: job `deepswe_one_task` → Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`, `ICODE_MODE=source`).
+Or Jenkins UI: job `deepswe_one_task` → Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`, `ICODE_MODE=source`).
 
 **Expected:** build on this worker; archived JSON; same schema as E6. Confirm with `check_report.sh` on the downloaded artifact if needed.
 

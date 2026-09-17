@@ -9,7 +9,7 @@ Two different downloads:
 
 Prefer **v0.5.2** Latest (or this checkout’s `cargo build --release`). **v0.5.1** DeepSWE Pier used the wrong iCode CLI and often exited in ~20s. **v0.5.0** still has the old P3: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1+.
 
-Harbor CLI stays **skip** on DeepSWE-only workers. Eval jobs are two runners, both iCode + `deepseek-v4-pro`, one `TASK` per build:
+Harbor CLI stays **skip** on DeepSWE-only workers. Eval jobs are two runners, both iCode + DeepSeek catalog model (default `deepseek-v4-pro`; also `deepseek-flash`), one `TASK` per build:
 
 - **`deepswe_one_task`** — DeepSWE via **Pier**. Same worker `icode-*-full-*` bind-mount and the same iCode CLI as LoLBench (`run -t … -C … -a code --json`). **v0.5.1 and older** wrap `icode run "$PROMPT"` and exit in seconds — install **v0.5.2**.
 - **`lolbench_one_task`** — LoLBench via **Harbor** (`icode_harbor_agent`; bind-mounts the same worker `icode-*-full-*` drop as DeepSWE). First LoLBench run installs `harbor` via uv if missing. Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, P5 builds or retags a local image (do not use Harbor `--force-build`).
@@ -179,7 +179,7 @@ Jenkins: `ICODE_MODE=source`. Leave `ICODE_RELEASE` empty. Leave **`ICODE_SOURCE
 | AGENT_LABEL | `lolbench` |
 | CPU_LOCK_QTY | `4` |
 | MAC_K3D_ROOT | empty |
-| DEEPSEEK_MODEL | `deepseek-v4-pro` |
+| DEEPSEEK_MODEL | `deepseek-v4-pro` (catalog default; or `deepseek-flash`) |
 
 Source-mode users: set `ICODE_MODE=source` and fill `ICODE_SOURCE` only when the tree is not in the default list (see §3 B).
 
@@ -219,6 +219,7 @@ cd /path/to/mac-k3d
 cp .env.example .env
 chmod 600 .env
 # put DEEPSEEK_API_KEY and DEEPSEEK_MODEL=deepseek-v4-pro in .env
+# catalog also allows DEEPSEEK_MODEL=deepseek-flash
 export PATH="$HOME/.local/bin:$PATH"
 mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode binary
 # mac-k3d eval --local --benchmark lolbench --task ruff_1 --icode-mode binary

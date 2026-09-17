@@ -140,7 +140,42 @@ fn set_help_lists_catalog_flags() {
         .success()
         .stdout(predicates::str::contains("--harness"))
         .stdout(predicates::str::contains("--n-tasks"))
-        .stdout(predicates::str::contains("--list"));
+        .stdout(predicates::str::contains("--list"))
+        .stdout(predicates::str::contains("--model"));
+}
+
+#[test]
+fn set_list_prints_catalog_models() {
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["set", "--list"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("deepseek-v4-pro"))
+        .stdout(predicates::str::contains("deepseek-flash"));
+}
+
+#[test]
+fn set_model_writes_yaml() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.yaml");
+    fs::write(&path, "role: controller\n").unwrap();
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args([
+            "set",
+            "-c",
+            path.to_str().unwrap(),
+            "--model",
+            "deepseek-flash",
+        ])
+        .assert()
+        .success();
+    let yaml = fs::read_to_string(&path).unwrap();
+    assert!(
+        yaml.contains("default_deepseek_model: deepseek-flash"),
+        "{yaml}"
+    );
 }
 
 #[test]

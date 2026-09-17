@@ -19,6 +19,7 @@ pub struct JobOpts {
     pub default_icode_args: String,
     pub default_harness: String,
     pub default_llm: String,
+    pub default_deepseek_model: String,
     pub default_benchmark: String,
     pub default_n_tasks: u32,
     pub default_tasks: Vec<String>,
@@ -53,6 +54,15 @@ impl JobOpts {
                 raw.to_ascii_lowercase()
             }
         };
+        let deepseek_model = {
+            let raw = config.jenkins_job.default_deepseek_model.trim();
+            if raw.is_empty() {
+                eval_catalog::default_model().to_string()
+            } else {
+                eval_catalog::require_model(raw)
+                    .unwrap_or_else(|_| eval_catalog::default_model().to_string())
+            }
+        };
         Self {
             default_task: if config.jenkins_job.default_task.trim().is_empty() {
                 String::new()
@@ -70,6 +80,7 @@ impl JobOpts {
             default_icode_args: config.jenkins_job.default_icode_args.clone(),
             default_harness: harness,
             default_llm: llm,
+            default_deepseek_model: deepseek_model,
             default_benchmark: config
                 .jenkins_job
                 .default_benchmark
@@ -421,7 +432,7 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
 fn job_config_xml(opts: &JobOpts) -> String {
     one_task_job_xml(
         "lolbench",
-        "iCode vs DeepSeek baseline on one LoLBench task (Harbor + iCode + deepseek-v4-pro). DeepSWE stays on Pier. See docs/lolbench-jenkins.md and docs/binary-initializer/user-guide.md.",
+        "iCode vs DeepSeek baseline on one LoLBench task (Harbor + iCode + DeepSeek catalog model). DeepSWE stays on Pier. See docs/lolbench-jenkins.md and docs/binary-initializer/user-guide.md.",
         opts,
     )
 }
@@ -489,10 +500,14 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     let harness_choices =
         eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness);
     let llm_choices = eval_catalog::choices_preferred_first(eval_catalog::LLMS, &opts.default_llm);
+    let model_choices =
+        eval_catalog::choices_preferred_first(eval_catalog::MODELS, &opts.default_deepseek_model);
     let harness_g = groovy_quoted_list(&harness_choices);
     let llm_g = groovy_quoted_list(&llm_choices);
+    let model_g = groovy_quoted_list(&model_choices);
     let harness_fb = eval_catalog::HARNESSES[0];
     let llm_fb = eval_catalog::LLMS[0];
+    let model_fb = eval_catalog::default_model();
     format!(
         r#"pipeline {{
   agent {{ label params.AGENT_LABEL }}
@@ -514,7 +529,7 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4')
     string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Dir with pipeline/stages/run_all.sh (optional)')
-    string(name: 'DEEPSEEK_MODEL', defaultValue: 'deepseek-v4-pro', description: 'DeepSeek Chat Completions model id')
+    choice(name: 'DEEPSEEK_MODEL', choices: [{model_g}], description: 'DeepSeek Chat Completions model id (catalog)')
   }}
 
   stages {{
@@ -550,7 +565,7 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             export HARNESS="${{HARNESS:-{harness_fb}}}"
             export LLM="${{LLM:-{llm_fb}}}"
             export BENCHMARK="${{BENCHMARK:-{bench}}}"
-            export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-deepseek-v4-pro}}"
+            export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-{model_fb}}}"
             export LLM_NAME="${{LLM_NAME:-DeepSeek V4 Pro}}"
             if [ -z "${{DEEPSEEK_API_KEY:-}}" ]; then
               echo "DEEPSEEK_API_KEY missing. Store credential deepseek-api-key on the Jenkins controller." >&2
@@ -581,8 +596,10 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
         n_tasks = n_tasks,
         harness_g = harness_g,
         llm_g = llm_g,
+        model_g = model_g,
         harness_fb = harness_fb,
         llm_fb = llm_fb,
+        model_fb = model_fb,
         cred_open = cred_open,
         cred_close = cred_close,
     )
@@ -598,8 +615,11 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
     let harness_choices =
         eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness);
     let llm_choices = eval_catalog::choices_preferred_first(eval_catalog::LLMS, &opts.default_llm);
+    let model_choices =
+        eval_catalog::choices_preferred_first(eval_catalog::MODELS, &opts.default_deepseek_model);
     let harness_xml = xml_choice_strings(&harness_choices);
     let llm_xml = xml_choice_strings(&llm_choices);
+    let model_xml = xml_choice_strings(&model_choices);
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
@@ -681,11 +701,14 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
           <defaultValue></defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
           <name>DEEPSEEK_MODEL</name>
-          <defaultValue>deepseek-v4-pro</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+{model_xml}
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
       </parameterDefinitions>
     </hudson.model.ParametersDefinitionProperty>
   </properties>
@@ -924,7 +947,7 @@ pub async fn ensure_deepswe_one_task_from_cluster(
 fn deepswe_one_task_job_xml(opts: &JobOpts) -> String {
     one_task_job_xml(
         "deepswe",
-        "iCode vs DeepSeek baseline on one DeepSWE task (Pier + iCode + deepseek-v4-pro). Arm A = iCode + LLM; Arm B = the same LLM without iCode. See docs/binary-initializer/user-guide.md.",
+        "iCode vs DeepSeek baseline on one DeepSWE task (Pier + iCode + DeepSeek catalog model). Arm A = iCode + LLM; Arm B = the same LLM without iCode. See docs/binary-initializer/user-guide.md.",
         opts,
     )
 }
@@ -944,6 +967,7 @@ mod tests {
             default_icode_args: "--help".into(),
             default_harness: "icode".into(),
             default_llm: "deepseek".into(),
+            default_deepseek_model: eval_catalog::default_model().into(),
             default_benchmark: "lolbench".into(),
             default_n_tasks: 1,
             default_tasks: Vec::new(),
@@ -961,6 +985,7 @@ mod tests {
             default_icode_args: String::new(),
             default_harness: "icode".into(),
             default_llm: "deepseek".into(),
+            default_deepseek_model: eval_catalog::default_model().into(),
             default_benchmark: "deepswe".into(),
             default_n_tasks: 1,
             default_tasks: Vec::new(),
@@ -1130,5 +1155,31 @@ mod tests {
         assert!(task.is_empty());
         assert_eq!(n, 2);
         assert_eq!(tasks, "abs-module-cache-flags,abs-stepped-slices");
+    }
+
+    #[test]
+    fn deepseek_model_is_catalog_choice_with_both_ids() {
+        let xml = deepswe_one_task_job_xml(&deepswe_opts(Vec::new()));
+        assert!(xml.contains("<name>DEEPSEEK_MODEL</name>"));
+        assert!(xml.contains("<string>deepseek-v4-pro</string>"));
+        assert!(xml.contains("<string>deepseek-flash</string>"));
+        assert!(xml.contains("ChoiceParameterDefinition"));
+        assert!(!xml.contains("<defaultValue>deepseek-v4-pro</defaultValue>"));
+
+        let mut opts = sample_opts();
+        opts.default_deepseek_model = "deepseek-flash".into();
+        let jf = jenkinsfile(&opts);
+        assert!(
+            jf.contains("choice(name: 'DEEPSEEK_MODEL', choices: ['deepseek-flash', 'deepseek-v4-pro']"),
+            "{jf}"
+        );
+        assert!(jf.contains("export DEEPSEEK_MODEL=\"${DEEPSEEK_MODEL:-deepseek-v4-pro}\""));
+    }
+
+    #[test]
+    fn job_opts_empty_deepseek_model_uses_catalog_default() {
+        let cfg = crate::config::MacK3dConfig::default();
+        let opts = JobOpts::from_config(&cfg, Vec::new());
+        assert_eq!(opts.default_deepseek_model, eval_catalog::default_model());
     }
 }

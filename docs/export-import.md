@@ -23,12 +23,12 @@ Controller and worker use the same schema. **Export this host’s live file** �
 
 | Live file | Where in this lab | Typical role | What you copy |
 |-----------|-------------------|--------------|----------------|
-| `~/.config/mac-k3d/config.yaml` | **Cloud** | controller | Cluster name, Jenkins port, `jenkins_job.*` (TASK / harness / LLM defaults) |
+| `~/.config/mac-k3d/config.yaml` | **Cloud** | controller | Cluster name, Jenkins port, `jenkins_job.*` (TASK / harness / LLM / model defaults) |
 | `~/.config/mac-k3d/worker.yaml` | **This PC** | worker | `controller_url`, labels, agent name, Harbor skip/install intent |
 
 This PC has only `worker.yaml`. The cloud has `config.yaml`. Job defaults (`default_task`) are on the **controller** file. `set` on worker YAML does not change Jenkins TASK.
 
-**Kept** in the portable YAML: `role`, Jenkins ports, `jenkins_job.*` (harness / LLM / benchmark / question defaults), labels, `controller_url`, `api_user`, dependency `source` (`install` / `skip` / `existing`).
+**Kept** in the portable YAML: `role`, Jenkins ports, `jenkins_job.*` (harness / LLM / DeepSeek model / benchmark / question defaults), labels, `controller_url`, `api_user`, dependency `source` (`install` / `skip` / `existing`).
 
 **Stripped:** `jenkins_agent.api_token`, host storage paths, tool `binary`/`app`, `lolbench.path`, `platform`, `cpu_cores`, `remote_fs`. **Never** read or copied: `credentials.pending.yaml`.
 
@@ -100,7 +100,7 @@ These are **two stores**:
 | Live worker `~/.config/mac-k3d/worker.yaml` | Agent register token (`api_token`) | **Not** written by a sanitized import. Left as-is unless you `import --force` onto that path (that **wipes** the token — do not do that on this PC) |
 | Jenkins Credentials on the **controller** | `deepseek-api-key` (LLM). Jobs bind it per build | **Not** in YAML. Survives import. `config --skip-secrets` **keeps** this store |
 
-**`--skip-secrets` does not mean “the imported YAML contains credentials.”** It means: rewrite Pipeline job XML from the YAML’s **non-secret** fields (`jenkins_job.default_task`, `default_harness`, `default_llm`, `default_benchmark`, `default_n_tasks`, `default_tasks`, …) and **do not** create/update Jenkins Credentials from `credentials.pending.yaml`. The YAML still has **no** secrets. The flag exists so a **second** `config` on an already-set-up controller does not prompt for the DeepSeek key again. The line `Keeping existing Jenkins credential binds (1 id(s))` means Jenkins already has the id; the build injects it at runtime.
+**`--skip-secrets` does not mean “the imported YAML contains credentials.”** It means: rewrite Pipeline job XML from the YAML’s **non-secret** fields (`jenkins_job.default_task`, `default_harness`, `default_llm`, `default_deepseek_model`, `default_benchmark`, `default_n_tasks`, `default_tasks`, …) and **do not** create/update Jenkins Credentials from `credentials.pending.yaml`. The YAML still has **no** secrets. The flag exists so a **second** `config` on an already-set-up controller does not prompt for the DeepSeek key again. The line `Keeping existing Jenkins credential binds (1 id(s))` means Jenkins already has the id; the build injects it at runtime.
 
 **First-time computer** (no Jenkins credential, no live worker token): the import file still has no secrets. Enter them **once** into the live stores:
 
@@ -137,7 +137,7 @@ Question modes are mutually exclusive:
 
 Empty `TASK` + empty `TASKS` + `N_TASKS=1` selects the **first** DeepSWE directory after `sort`. The “second question” is the **second** sorted directory name, not “question 2” in a paper. `*_one_task` jobs may still run `N_TASKS>1` when TASK is empty.
 
-`default_benchmark` selects which job (`deepswe_one_task` vs `lolbench_one_task`) receives TASK / N_TASKS / TASKS defaults. Both jobs still get catalog HARNESS / LLM choices.
+`default_benchmark` selects which job (`deepswe_one_task` vs `lolbench_one_task`) receives TASK / N_TASKS / TASKS defaults. Both jobs still get catalog HARNESS / LLM / `DEEPSEEK_MODEL` choices (`deepseek-v4-pro` default, or `deepseek-flash`).
 
 ### 1. List first and second ids (this PC)
 
@@ -164,15 +164,58 @@ MAC=/tmp/mac-k3d-export   # or mac-k3d if PATH is the branch binary
 $MAC export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller-lab.yaml
 $MAC set --list
 $MAC set -c /tmp/controller-lab.yaml --harness icode --llm deepseek --benchmark deepswe --task YOUR_SECOND_ID
+# optional model:  $MAC set -c /tmp/controller-lab.yaml --model deepseek-flash
 # or first N:  $MAC set -c /tmp/controller-lab.yaml --benchmark deepswe --n-tasks 2
 # or a list:   $MAC set -c /tmp/controller-lab.yaml --benchmark deepswe --tasks abs-module-cache-flags,abs-stepped-slices
 $MAC import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
 $MAC config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 ```
 
-`--skip-secrets` refreshes `deepswe_one_task` / `lolbench_one_task` XML. It does **not** re-enter the API key. Confirm in Jenkins: **deepswe_one_task** → Build with Parameters → **TASK** default is `SECOND`.
+`--skip-secrets` refreshes `deepswe_one_task` / `lolbench_one_task` XML. It does **not** re-enter the API key. Confirm in Jenkins: **deepswe_one_task** → Build with Parameters → **TASK** default is `SECOND`. **DEEPSEEK_MODEL** is a choice (`deepseek-v4-pro` first unless `set --model` changed it).
 
 Do **not** `import --force` onto this PC’s live `worker.yaml` (that strips `api_token`).
+
+### Combined test: model flash + `deepswe_one_task`
+
+Keep the current `default_task`. Only change the Chat Completions id. Catalog: `deepseek-v4-pro` (usual default) or **`deepseek-flash`**. Same Jenkins credential `deepseek-api-key`. N=1 is paid.
+
+Do **not** send `deepseek-v4.1-flash`. That is the product name, not the API id. Chat Completions returns HTTP 400: supported names are `deepseek-flash` and `deepseek-v4-pro`. P6 failed the first flash lab for that reason; P5 can still print `NonZeroAgentExitCodeError` (score, not the 400).
+
+Cloud binary must be this branch (`/tmp/mac-k3d-export` after `scp` from `target/release/mac-k3d`). GitHub v0.5.2 has no `set --model` and still stores `DEEPSEEK_MODEL` as a string.
+
+```bash
+# on cloud
+MAC=/tmp/mac-k3d-export
+$MAC set --list
+$MAC export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller-lab.yaml
+$MAC set -c /tmp/controller-lab.yaml --model deepseek-flash
+grep default_deepseek_model /tmp/controller-lab.yaml
+$MAC import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
+$MAC config -c ~/.config/mac-k3d/config.yaml --skip-secrets
+```
+
+**Prove the import** in Jenkins UI: `deepswe_one_task` → Build with Parameters → **DEEPSEEK_MODEL** is a choice, **first item `deepseek-flash`**. Leave it and **TASK** as the imported defaults → Build. Do **not** flip the model in the UI if you are checking the default.
+
+CLI `eval --yes` **posts** `DEEPSEEK_MODEL` (same pitfall as empty `--task`). Use it only as a backup, and pass `--task` plus `--model deepseek-flash`:
+
+```bash
+export PATH="$HOME/Documents/Toby/mac-k3d/target/release:$PATH"
+mac-k3d eval -c ~/.config/mac-k3d/worker.yaml \
+  --benchmark deepswe --task "$EXISTING_TASK" --icode-mode binary --n-tasks 1 \
+  --model deepseek-flash --yes
+```
+
+Pass: build on **this** node; archived JSON `model` is `deepseek-flash` (`model_served` may differ if the API routes). `pass_at_1` may be 0.0.
+
+Restore the catalog default on the cloud:
+
+```bash
+$MAC set -c /tmp/controller-lab.yaml --model deepseek-v4-pro
+$MAC import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
+$MAC config -c ~/.config/mac-k3d/config.yaml --skip-secrets
+```
+
+UI first choice should be `deepseek-v4-pro` again.
 
 ### 3. Queue eval from this computer
 

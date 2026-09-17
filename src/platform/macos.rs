@@ -220,9 +220,8 @@ pub fn install_agent_daemon(
         )));
     }
 
-    let body = std::fs::read_to_string(launch_script).map_err(|e| {
-        Error::Config(format!("failed to read {}: {e}", launch_script.display()))
-    })?;
+    let body = std::fs::read_to_string(launch_script)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", launch_script.display())))?;
     if body.contains("REPLACE_ME") {
         println!(
             "Launch script still has REPLACE_ME secret — not starting LaunchAgent.\n\
@@ -233,9 +232,8 @@ pub fn install_agent_daemon(
 
     let plist = plist_path();
     if let Some(parent) = plist.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
     }
 
     let log_out = working_dir.join("jenkins-agent.stdout.log");
@@ -278,9 +276,8 @@ pub fn install_agent_daemon(
         stderr = xml_escape(&log_err.display().to_string()),
     );
 
-    std::fs::write(&plist, xml).map_err(|e| {
-        Error::Config(format!("failed to write {}: {e}", plist.display()))
-    })?;
+    std::fs::write(&plist, xml)
+        .map_err(|e| Error::Config(format!("failed to write {}: {e}", plist.display())))?;
 
     let _ = bootout();
     bootstrap(&plist)?;
@@ -297,9 +294,8 @@ pub fn stop_agent_daemon() -> Result<()> {
     let plist = plist_path();
     let _ = bootout();
     if plist.exists() {
-        std::fs::remove_file(&plist).map_err(|e| {
-            Error::Config(format!("failed to remove {}: {e}", plist.display()))
-        })?;
+        std::fs::remove_file(&plist)
+            .map_err(|e| Error::Config(format!("failed to remove {}: {e}", plist.display())))?;
         println!("Removed LaunchAgent {}", plist.display());
     } else {
         println!("Jenkins agent LaunchAgent not installed; nothing to stop.");
@@ -375,12 +371,13 @@ fn bootout() -> Result<()> {
 }
 
 fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program).args(args).status().map_err(|e| {
-        Error::CommandFailed {
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .map_err(|e| Error::CommandFailed {
             cmd: format!("{program} {}", args.join(" ")),
             source: e.into(),
-        }
-    })?;
+        })?;
     if !status.success() {
         return Err(Error::CommandFailed {
             cmd: format!("{program} {}", args.join(" ")),

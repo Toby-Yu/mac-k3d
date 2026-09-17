@@ -2,7 +2,7 @@
 
 ## Local eval keys (this machine only)
 
-**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. This is the correct way to store the key for `mac-k3d eval --stage p5` / `p6` on this PC.
+**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. `DEEPSEEK_MODEL` must be a catalog id: `deepseek-v4-pro` (default) or `deepseek-flash`. This is the correct way to store the key for `mac-k3d eval --stage p5` / `p6` on this PC.
 
 ```bash
 cp .env.example .env
@@ -120,9 +120,9 @@ Possible later enhancements (not required for the model above):
 
 **Non-secret job defaults** (saved in `config.yaml` → `jenkins_job`):
 
-- Default `HARNESS` (e.g. `oracle`, `icode`)
+- Default `HARNESS` (`icode`)
 - Default `TASK`
-- Default `MODEL`
+- Default `DEEPSEEK_MODEL` catalog id (`deepseek-v4-pro` or `deepseek-flash`)
 
 **Secrets** (never in `config.yaml`):
 

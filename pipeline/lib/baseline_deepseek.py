@@ -78,9 +78,20 @@ def chat_deepseek(prompt: str, api_key: str, model: str) -> dict:
         method="POST",
     )
     started = time.perf_counter()
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        header_map = {k.lower(): v for k, v in resp.headers.items()}
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            header_map = {k.lower(): v for k, v in resp.headers.items()}
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")[:800]
+        except Exception:
+            err_body = ""
+        print(f"  API HTTP {e.code}: {err_body}", file=sys.stderr)
+        raise urllib.error.HTTPError(
+            e.url, e.code, f"{e.reason}: {err_body}", e.headers, None
+        )
     elapsed = round(time.perf_counter() - started, 3)
     content = data["choices"][0]["message"]["content"]
     version = (
