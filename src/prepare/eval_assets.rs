@@ -183,6 +183,36 @@ mod tests {
             "pipeline/stages/run_all.sh must be embedded"
         );
         assert!(PIPELINE.get_file("lib/icode_pier_agent.py").is_some());
+        assert!(
+            PIPELINE.get_file("lib/openai_compat.py").is_some(),
+            "pipeline/lib/openai_compat.py must be embedded"
+        );
+    }
+
+    #[test]
+    fn openai_compat_parses_list_json_without_network() {
+        let lib = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("pipeline/lib");
+        let output = std::process::Command::new("python3")
+            .current_dir(&lib)
+            .args([
+                "-c",
+                "from openai_compat import parse_model_ids, model_in_ids, missing_model_message\n\
+ids = parse_model_ids({'object':'list','data':[{'id':'deepseek-flash'},{'id':'deepseek-v4-pro'}]})\n\
+assert ids == ['deepseek-flash', 'deepseek-v4-pro']\n\
+assert model_in_ids('deepseek-flash', ids)\n\
+assert not model_in_ids('deepseek-v4.1-flash', ids)\n\
+msg = missing_model_message('deepseek-v4.1-flash', ids)\n\
+assert \"is not returned by GET /models\" in msg\n\
+print('ok')\n",
+            ])
+            .output()
+            .expect("python3");
+        assert!(
+            output.status.success(),
+            "stderr={} stdout={}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     #[test]

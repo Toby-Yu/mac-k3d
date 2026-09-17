@@ -266,11 +266,12 @@ Edit **non-secret** `jenkins_job` fields on a YAML file (harness, LLM family, De
 mac-k3d set --list
 mac-k3d set -c /tmp/imported-config.yaml --harness icode --llm deepseek --benchmark deepswe --task abs-stepped-slices
 mac-k3d set -c ~/.config/mac-k3d/config.yaml --model deepseek-flash
+mac-k3d set --check-models
 mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --n-tasks 2
 mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --tasks abs-module-cache-flags,abs-stepped-slices
 ```
 
-TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, then question mode. Non-TTY requires flags.
+TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, then question mode. Non-TTY requires flags (or `--check-models` / `--list`).
 
 ### Flags
 
@@ -280,12 +281,23 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--harness <ID>` | Catalog harness (v1: `icode`) |
 | `--llm <ID>` | Catalog LLM family (v1: `deepseek`) |
 | `--model <ID>` | DeepSeek Chat Completions id (`deepseek-v4-pro` default, or `deepseek-flash`) |
+| `--check-models` | Optional live `GET /models` against `.env` key; fail if YAML/`--model` id is not a provider id |
 | `--benchmark <ID>` | `deepswe` or `lolbench` (which job receives TASK / N_TASKS / TASKS defaults) |
 | `--task <ID>` | One question id |
 | `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |
 | `--tasks a,b` | Explicit comma-separated ids |
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.
+
+`--check-models` is optional and does **not** rewrite Chat Completions. It `GET`s `{ICODE_API_BASE or https://api.deepseek.com}/models` (OpenAI list JSON, `data[].id`) using `DEEPSEEK_API_KEY` from the environment or `.env`. Fail if the YAML / `--model` id is missing from that list. Cloud `set` on YAML often has **no** key — run this on a **worker / local** machine with `.env`, not as a hard requirement of controller `set`. P0 does the same check when the key is present (before paid P5/P6).
+
+```bash
+# this PC / worker (has .env)
+mac-k3d set -c ~/.config/mac-k3d/worker.yaml --check-models
+mac-k3d set -c /tmp/controller-lab.yaml --model deepseek-flash --check-models
+```
+
+To add a model later: copy an id from `GET /models` (or DeepSeek “Models & Pricing”), append that **exact** string to `MODELS` in `src/eval_catalog.rs`, rebuild, then `set --model <id>` and controller `config --skip-secrets`. Never use marketing / product names (`deepseek-v4.1-flash` is not an API id).
 
 Push the YAML into Jenkins job XML on a live controller (still **no** secrets in the file):
 

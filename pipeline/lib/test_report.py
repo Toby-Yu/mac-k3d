@@ -16,11 +16,30 @@ LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
 from check_report import validate  # noqa: E402
+from openai_compat import missing_model_message, model_in_ids, parse_model_ids  # noqa: E402
 from pier_result import hollow_job_reason  # noqa: E402
 from score_results import harbor_reward_resolved, pass_at_1, verifier_rates  # noqa: E402
 
 
 FIXTURE = LIB / "testdata" / "report-min.json"
+
+
+class OpenAICompatTests(unittest.TestCase):
+    def test_parse_model_ids(self):
+        ids = parse_model_ids(
+            {"object": "list", "data": [{"id": "deepseek-flash"}, {"id": "deepseek-v4-pro"}]}
+        )
+        self.assertEqual(ids, ["deepseek-flash", "deepseek-v4-pro"])
+        self.assertEqual(parse_model_ids({}), [])
+        self.assertEqual(parse_model_ids({"data": "nope"}), [])
+
+    def test_product_name_is_not_an_id(self):
+        ids = ["deepseek-flash", "deepseek-v4-pro"]
+        self.assertTrue(model_in_ids("deepseek-flash", ids))
+        self.assertFalse(model_in_ids("deepseek-v4.1-flash", ids))
+        msg = missing_model_message("deepseek-v4.1-flash", ids)
+        self.assertIn("is not returned by GET /models", msg)
+        self.assertIn("deepseek-flash", msg)
 
 
 class PassAt1Tests(unittest.TestCase):
@@ -515,6 +534,12 @@ printf '%s' "$DEEPSEEK_API_KEY"
         compile(src, "icode_harbor_agent.py", "exec")
         self.assertIn("/opt/icode-host", src)
         self.assertNotIn("gitcode.com", src)
+
+    def test_p0_checks_openai_models_when_key_set(self):
+        p0 = (ROOT / "pipeline" / "stages" / "p0_prereqs.sh").read_text(encoding="utf-8")
+        self.assertIn("openai_compat.py", p0)
+        self.assertIn("--check-model", p0)
+        self.assertIn("GET /models", p0)
 
     def test_p0_installs_buildx_for_harbor_sidecar(self):
         p0 = (ROOT / "pipeline" / "stages" / "p0_prereqs.sh").read_text(encoding="utf-8")

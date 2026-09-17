@@ -181,6 +181,16 @@ Keep the current `default_task`. Only change the Chat Completions id. Catalog: `
 
 Do **not** send `deepseek-v4.1-flash`. That is the product name, not the API id. Chat Completions returns HTTP 400: supported names are `deepseek-flash` and `deepseek-v4-pro`. P6 failed the first flash lab for that reason; P5 can still print `NonZeroAgentExitCodeError` (score, not the 400).
 
+On a worker / local machine that has `.env`, confirm the id before a paid run:
+
+```bash
+# this PC (has DEEPSEEK_API_KEY in .env)
+mac-k3d set --check-models
+# or: python3 pipeline/lib/openai_compat.py --check-model deepseek-flash
+```
+
+Cloud `set` on YAML often has **no** key, so do not make live `GET /models` a hard step of controller `set`. P0 on this worker already checks when the Jenkins credential is injected.
+
 Cloud binary must be this branch (`/tmp/mac-k3d-export` after `scp` from `target/release/mac-k3d`). GitHub v0.5.2 has no `set --model` and still stores `DEEPSEEK_MODEL` as a string.
 
 ```bash
@@ -237,6 +247,25 @@ On the cloud, `set` `default_task` back to `$FIRST` (or `--n-tasks 1` with empty
 
 ---
 
+## Add a DeepSeek model (API id, not product name)
+
+LLM family stays `deepseek`. Jenkins still offers only the static catalog in `src/eval_catalog.rs` (`MODELS`), not every id the provider ever returns. Chat Completions is already OpenAI-shaped (`POST /chat/completions`); you do not switch SDKs.
+
+1. Copy an **id** from `GET https://api.deepseek.com/models` (`data[].id`) or from DeepSeek “Models & Pricing”. Example: product “V4.1 Flash” is `deepseek-flash`.
+2. Append that exact string to `MODELS`.
+3. Rebuild. On a machine with `.env`, `mac-k3d set --check-models` (and worker P0) must see it in `GET /models`.
+4. `mac-k3d set --model <id>` then controller `config --skip-secrets`.
+
+Never use marketing names. P6 already prints the API error body if a bad id reaches Chat Completions.
+
+```bash
+curl -sS https://api.deepseek.com/models -H "Authorization: Bearer $DEEPSEEK_API_KEY"
+mac-k3d set --list
+mac-k3d set -c /tmp/controller-lab.yaml --model THE_ID --check-models
+```
+
+---
+
 ## File-only test (already done on this lab)
 
 Worker (this PC): export `worker.yaml` → no `api_token` in the copy → import to `/tmp/imported-worker.yaml` → `controller_url` kept.
@@ -257,4 +286,6 @@ Controller (cloud): export `config.yaml` → `default_task: ruff_1` → edit to 
 | CLI eval ran the first DeepSWE id | You omitted `--task`; empty TASK overrides the job default for that build. |
 | `Jenkins API token missing` | Live `worker.yaml` has no token (or you imported `--force` onto it). Paste token, then `config -c worker.yaml`. |
 | `DEEPSEEK_API_KEY missing` on Jenkins | First-time controller: `config` **without** `--skip-secrets`. This lab: credential should already exist. |
+| `DEEPSEEK_API_KEY missing` on `--check-models` | Cloud YAML `set` has no key. Run `--check-models` on this worker / local machine with `.env`. |
+| `model '…' is not returned by GET /models` | Catalog / YAML used a product name. Copy `data[].id` from `GET /models` (see **Add a DeepSeek model**). |
 | `export: command not found` / no subcommand | PATH is GitHub v0.5.2. Use `target/release/mac-k3d` or `/tmp/mac-k3d-export`. |

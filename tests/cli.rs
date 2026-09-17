@@ -141,7 +141,8 @@ fn set_help_lists_catalog_flags() {
         .stdout(predicates::str::contains("--harness"))
         .stdout(predicates::str::contains("--n-tasks"))
         .stdout(predicates::str::contains("--list"))
-        .stdout(predicates::str::contains("--model"));
+        .stdout(predicates::str::contains("--model"))
+        .stdout(predicates::str::contains("--check-models"));
 }
 
 #[test]
@@ -152,7 +153,53 @@ fn set_list_prints_catalog_models() {
         .assert()
         .success()
         .stdout(predicates::str::contains("deepseek-v4-pro"))
-        .stdout(predicates::str::contains("deepseek-flash"));
+        .stdout(predicates::str::contains("deepseek-flash"))
+        .stdout(predicates::str::contains("GET"))
+        .stdout(predicates::str::contains("--check-models"));
+}
+
+#[test]
+fn set_check_models_requires_key() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.yaml");
+    fs::write(&path, "role: controller\n").unwrap();
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .current_dir(dir.path())
+        .env_remove("DEEPSEEK_API_KEY")
+        .env_remove("MAC_K3D_DEEPSEEK_API_KEY")
+        .env(
+            "MAC_K3D_ENV_FILE",
+            dir.path().join("missing.env").to_str().unwrap(),
+        )
+        .env("XDG_CONFIG_HOME", dir.path().join("xdg").to_str().unwrap())
+        .env("HOME", dir.path().to_str().unwrap())
+        .args(["set", "-c", path.to_str().unwrap(), "--check-models"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("DEEPSEEK_API_KEY missing"));
+}
+
+#[test]
+fn set_check_models_rejects_unknown_catalog_model_before_api() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.yaml");
+    fs::write(&path, "role: controller\n").unwrap();
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .current_dir(dir.path())
+        .env_remove("DEEPSEEK_API_KEY")
+        .args([
+            "set",
+            "-c",
+            path.to_str().unwrap(),
+            "--model",
+            "gpt-4",
+            "--check-models",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("allowed: deepseek-v4-pro"));
 }
 
 #[test]

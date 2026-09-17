@@ -157,7 +157,7 @@ mac-k3d eval --stage p0
 # or: pipeline/stages/p0_prereqs.sh
 ```
 
-**Expected:** `docker info` shows Server; `mac-k3d --help` lists `eval`; optional note if Jenkins worker is offline (OK for `--local`).
+**Expected:** `docker info` shows Server; `mac-k3d --help` lists `eval`; optional note if Jenkins worker is offline (OK for `--local`). When `DEEPSEEK_API_KEY` is set (local `.env` or Jenkins credential), P0 also `GET /models` and fails if `DEEPSEEK_MODEL` is not a `data[].id` (cheap; not a paid completion).
 
 ## P1 — Pier on PATH
 

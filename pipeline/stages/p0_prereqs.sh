@@ -34,7 +34,11 @@ if ! "$MAC_K3D_BIN" eval --help 2>/dev/null | grep -q -- '--model'; then
   echo "NOTE: this mac-k3d binary has no --model; eval stages use this checkout + DEEPSEEK_MODEL / .env"
 fi
 if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
-  echo "NOTE: no DEEPSEEK_API_KEY yet. For local P5/P6 copy .env.example to .env (chmod 600). Jenkins E7 uses deepseek-api-key."
+  echo "NOTE: no DEEPSEEK_API_KEY yet. For local P5/P6 copy .env.example to .env (chmod 600). Jenkins E7 uses deepseek-api-key. GET /models check skipped."
+else
+  [ -f "$PIPELINE_LIB/openai_compat.py" ] || die "missing pipeline/lib/openai_compat.py"
+  python3 "$PIPELINE_LIB/openai_compat.py" --check-model "${DEEPSEEK_MODEL}" \
+    || die "DEEPSEEK_MODEL '${DEEPSEEK_MODEL}' is not returned by GET /models"
 fi
 
 if have systemctl; then

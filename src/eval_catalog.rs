@@ -10,6 +10,7 @@ pub const HARNESSES: &[&str] = &["icode"];
 pub const LLMS: &[&str] = &["deepseek"];
 pub const BENCHMARKS: &[&str] = &["deepswe", "lolbench"];
 /// DeepSeek Chat Completions ids (`DEEPSEEK_MODEL` / `--model`). First is the default.
+/// Append only `data[].id` values from `GET https://api.deepseek.com/models`.
 /// Product name "V4.1 Flash" is API id `deepseek-flash` (not `deepseek-v4.1-flash`).
 pub const MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-flash"];
 
@@ -77,6 +78,9 @@ pub fn print_catalog() {
     println!("model:      {}  (default first)", join_allowed(MODELS));
     println!("benchmark:  {}", join_allowed(BENCHMARKS));
     println!("questions:  --task ID  |  --n-tasks N  |  --tasks id,id,…  (mutually exclusive)");
+    println!(
+        "provider:   GET {{ICODE_API_BASE or https://api.deepseek.com}}/models  (set --check-models)"
+    );
 }
 
 #[cfg(test)]
@@ -100,10 +104,7 @@ mod tests {
 
     #[test]
     fn require_model_accepts_flash() {
-        assert_eq!(
-            require_model("deepseek-flash").unwrap(),
-            "deepseek-flash"
-        );
+        assert_eq!(require_model("deepseek-flash").unwrap(), "deepseek-flash");
         assert_eq!(default_model(), "deepseek-v4-pro");
     }
 

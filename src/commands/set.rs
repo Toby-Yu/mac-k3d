@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use clap::Args;
 use dialoguer::{theme::ColorfulTheme, Input, Select};
@@ -6,12 +7,17 @@ use dialoguer::{theme::ColorfulTheme, Input, Select};
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
 use crate::eval_catalog;
+use crate::prepare::eval_assets;
 
 #[derive(Debug, Args)]
 pub struct SetArgs {
     /// Print allowed harness / LLM / benchmark values and exit
     #[arg(long)]
     pub list: bool,
+
+    /// GET /models: fail if YAML / `--model` id is missing from the provider list
+    #[arg(long)]
+    pub check_models: bool,
 
     /// Harness id (catalog)
     #[arg(long)]
@@ -82,7 +88,7 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
         tasks: args.tasks,
     };
 
-    let any_flag = patch.harness.is_some()
+    let mut any_flag = patch.harness.is_some()
         || patch.llm.is_some()
         || patch.model.is_some()
         || patch.benchmark.is_some()
@@ -90,20 +96,170 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
         || patch.n_tasks.is_some()
         || patch.tasks.is_some();
 
-    if !any_flag {
+    if !any_flag && !args.check_models {
         if atty::is(atty::Stream::Stdin) {
             patch = prompt_patch(&config)?;
+            any_flag = true;
         } else {
             return Err(Error::Config(
-                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks, or --list"
+                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks, --check-models, or --list"
                     .into(),
             ));
         }
     }
 
-    apply_set(&mut config, patch)?;
-    config.save(Some(&path))?;
-    print_set_summary(&config, &path);
+    if any_flag {
+        apply_set(&mut config, patch)?;
+    }
+    if args.check_models {
+        check_model_on_provider(&config)?;
+    }
+    if any_flag {
+        config.save(Some(&path))?;
+        print_set_summary(&config, &path);
+    }
+    Ok(())
+}
+
+fn yaml_model(config: &MacK3dConfig) -> String {
+    nonempty_or(
+        &config.jenkins_job.default_deepseek_model,
+        eval_catalog::default_model(),
+    )
+    .to_string()
+}
+
+fn dotenv_line_value(line: &str, want_keys: &[&str]) -> Option<(String, String)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    if !want_keys.iter().any(|k| *k == key) {
+        return None;
+    }
+    let mut value = value.trim().to_string();
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        value = value[1..value.len() - 1].to_string();
+    }
+    if value.is_empty() {
+        return None;
+    }
+    Some((key.to_string(), value))
+}
+
+fn read_dotenv_key(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut primary = None;
+    let mut alias = None;
+    for line in text.lines() {
+        match dotenv_line_value(line, &["DEEPSEEK_API_KEY", "MAC_K3D_DEEPSEEK_API_KEY"]) {
+            Some((k, v)) if k == "DEEPSEEK_API_KEY" => primary = Some(v),
+            Some((k, v)) if k == "MAC_K3D_DEEPSEEK_API_KEY" => alias = Some(v),
+            _ => {}
+        }
+    }
+    primary.or(alias)
+}
+
+fn load_deepseek_api_key() -> Option<String> {
+    for var in ["DEEPSEEK_API_KEY", "MAC_K3D_DEEPSEEK_API_KEY"] {
+        if let Ok(v) = std::env::var(var) {
+            let t = v.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    let mut candidates = Vec::new();
+    if let Ok(p) = std::env::var("MAC_K3D_ENV_FILE") {
+        let t = p.trim();
+        if !t.is_empty() {
+            candidates.push(PathBuf::from(t));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(".env"));
+    }
+    let config_home = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".config")
+        });
+    candidates.push(config_home.join("mac-k3d/.env"));
+    for f in candidates {
+        if let Some(v) = read_dotenv_key(&f) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn openai_compat_script() -> Result<PathBuf> {
+    if let Ok(root) = std::env::var("MAC_K3D_ROOT") {
+        let p = PathBuf::from(root.trim()).join("pipeline/lib/openai_compat.py");
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let p = cwd.join("pipeline/lib/openai_compat.py");
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+    let share = eval_assets::ensure_share_pipeline()?;
+    let p = share.join("pipeline/lib/openai_compat.py");
+    if p.is_file() {
+        return Ok(p);
+    }
+    Err(Error::Config(format!(
+        "missing pipeline/lib/openai_compat.py (looked under MAC_K3D_ROOT, cwd, {})",
+        share.display()
+    )))
+}
+
+/// GET `{ICODE_API_BASE or https://api.deepseek.com}/models` and require YAML / catalog id.
+fn check_model_on_provider(config: &MacK3dConfig) -> Result<()> {
+    let model = yaml_model(config);
+    let key = load_deepseek_api_key().ok_or_else(|| {
+        Error::Config(
+            "DEEPSEEK_API_KEY missing. Run --check-models on a worker/local machine with .env (cloud set often has no key)".into(),
+        )
+    })?;
+    let script = openai_compat_script()?;
+    let output = Command::new("python3")
+        .arg(&script)
+        .arg("--check-model")
+        .arg(&model)
+        .env("DEEPSEEK_API_KEY", &key)
+        .output()
+        .map_err(|e| Error::Config(format!("python3 required for --check-models: {e}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        let detail = detail
+            .strip_prefix("ERROR: ")
+            .unwrap_or(detail.as_str())
+            .to_string();
+        return Err(Error::Config(detail));
+    }
+    let line = stdout.trim();
+    if !line.is_empty() {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -435,5 +591,19 @@ mod tests {
             err.contains("allowed: deepseek-v4-pro, deepseek-flash"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn dotenv_parses_quoted_key() {
+        let got = dotenv_line_value(r#"DEEPSEEK_API_KEY="sk-test""#, &["DEEPSEEK_API_KEY"]);
+        assert_eq!(got, Some(("DEEPSEEK_API_KEY".into(), "sk-test".into())));
+        assert!(dotenv_line_value("OTHER=x", &["DEEPSEEK_API_KEY"]).is_none());
+        assert!(dotenv_line_value("# DEEPSEEK_API_KEY=x", &["DEEPSEEK_API_KEY"]).is_none());
+    }
+
+    #[test]
+    fn yaml_model_falls_back_to_catalog_default() {
+        let c = cfg();
+        assert_eq!(yaml_model(&c), eval_catalog::default_model());
     }
 }
