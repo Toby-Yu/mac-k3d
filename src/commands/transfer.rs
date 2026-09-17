@@ -123,7 +123,7 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::JenkinsJobConfig;
+    use crate::config::{DependencySource, JenkinsJobConfig, LolbenchSource};
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("mac-k3d-xfer-{tag}-{}", std::process::id()));
@@ -132,15 +132,55 @@ mod tests {
         dir
     }
 
+    /// Worker template as in docs/export-import.md (URL, labels, name, Harbor skip, token).
     fn worker_with_token() -> MacK3dConfig {
         let mut cfg = MacK3dConfig::default();
         cfg.role = NodeRole::Worker;
+        cfg.platform = Some("linux".into());
+        cfg.storage.base_dir = Some(PathBuf::from("/home/src/mac-k3d"));
+        cfg.dependencies.harbor.source = DependencySource::Skip;
+        cfg.lolbench.source = LolbenchSource::Skip;
+        cfg.lolbench.path = Some(PathBuf::from("/home/src/lolbench"));
+        cfg.jenkins_agent.controller_url = Some("http://43.107.42.252:17070".into());
+        cfg.jenkins_agent.name = Some("linux-eval-1".into());
+        cfg.jenkins_agent.labels = vec!["linux".into(), "docker".into()];
+        cfg.jenkins_agent.remote_fs = Some(PathBuf::from("/home/src/jenkins-agent"));
+        cfg.jenkins_agent.agent_jar = Some(PathBuf::from("/tmp/agent.jar"));
+        cfg.jenkins_agent.cpu_cores = 8;
+        cfg.jenkins_agent.api_user = Some("admin".into());
         cfg.jenkins_agent.api_token = Some("test-jenkins-token".into());
         cfg.jenkins_job = JenkinsJobConfig {
             default_task: "ruff_1".into(),
             ..JenkinsJobConfig::default()
         };
+        cfg.resources.cpu_cores_label = "CPU_CORES".into();
         cfg
+    }
+
+    fn assert_worker_template_kept(cfg: &MacK3dConfig) {
+        assert_eq!(cfg.role, NodeRole::Worker);
+        assert_eq!(
+            cfg.jenkins_agent.controller_url.as_deref(),
+            Some("http://43.107.42.252:17070")
+        );
+        assert_eq!(cfg.jenkins_agent.name.as_deref(), Some("linux-eval-1"));
+        assert_eq!(
+            cfg.jenkins_agent.labels,
+            vec!["linux".to_string(), "docker".to_string()]
+        );
+        assert_eq!(cfg.jenkins_agent.api_user.as_deref(), Some("admin"));
+        assert_eq!(cfg.dependencies.harbor.source, DependencySource::Skip);
+        assert_eq!(cfg.lolbench.source, LolbenchSource::Skip);
+        assert_eq!(cfg.resources.cpu_cores_label, "CPU_CORES");
+    }
+
+    fn assert_worker_secrets_and_hosts_stripped(cfg: &MacK3dConfig) {
+        assert!(cfg.jenkins_agent.api_token.is_none());
+        assert_eq!(cfg.jenkins_agent.cpu_cores, 0);
+        assert!(cfg.jenkins_agent.remote_fs.is_none());
+        assert!(cfg.jenkins_agent.agent_jar.is_none());
+        assert!(cfg.storage.base_dir.is_none());
+        assert!(cfg.lolbench.path.is_none());
     }
 
     #[test]
@@ -170,14 +210,64 @@ mod tests {
         let dest = dir.join("worker.yaml");
         std::fs::write(&dest, "role: worker\napi_token: leftover\n").unwrap();
         let written = write_imported_config(worker_with_token(), &dest, true).unwrap();
-        assert!(written.jenkins_agent.api_token.is_none());
+        assert_worker_template_kept(&written);
+        assert_worker_secrets_and_hosts_stripped(&written);
         assert_eq!(written.jenkins_job.default_task, "ruff_1");
         assert_eq!(
             written.platform.as_deref(),
             Some(crate::platform::host_os().as_str())
         );
         let text = std::fs::read_to_string(&dest).unwrap();
-        assert!(!text.contains("test-jenkins-token"));
+        assert!(!text.contains("test-jenkins-token"), "{text}");
+        assert!(!text.contains("leftover"), "{text}");
+        assert!(
+            !text.contains("api_token"),
+            "dest YAML must not keep api_token after --force:\n{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_then_scratch_import_keeps_worker_template() {
+        let dir = temp_dir("worker-doc");
+        let src = dir.join("worker.yaml");
+        let portable = dir.join("portable.yaml");
+        let scratch = dir.join("imported-worker.yaml");
+        worker_with_token().save(Some(&src)).unwrap();
+
+        run_export(
+            ExportArgs {
+                output: portable.clone(),
+            },
+            Some(&src),
+        )
+        .unwrap();
+        let portable_text = std::fs::read_to_string(&portable).unwrap();
+        assert!(
+            !portable_text.contains("test-jenkins-token"),
+            "{portable_text}"
+        );
+        assert!(!portable_text.contains("api_token"), "{portable_text}");
+        assert!(portable_text.contains("http://43.107.42.252:17070"));
+        assert!(portable_text.contains("linux-eval-1"));
+
+        run_import(
+            ImportArgs {
+                source: portable,
+                force: false,
+            },
+            Some(&scratch),
+        )
+        .unwrap();
+        let loaded = MacK3dConfig::load_file(&scratch).unwrap();
+        assert_worker_template_kept(&loaded);
+        assert_worker_secrets_and_hosts_stripped(&loaded);
+        assert_eq!(
+            loaded.platform.as_deref(),
+            Some(crate::platform::host_os().as_str())
+        );
+        let scratch_text = std::fs::read_to_string(&scratch).unwrap();
+        assert!(!scratch_text.contains("api_token"), "{scratch_text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -198,7 +288,8 @@ mod tests {
         assert!(!text.contains("test-jenkins-token"));
         let imported = MacK3dConfig::load_file(&out).unwrap();
         assert_eq!(imported.jenkins_job.default_task, "ruff_1");
-        assert!(imported.jenkins_agent.api_token.is_none());
+        assert_worker_template_kept(&imported);
+        assert_worker_secrets_and_hosts_stripped(&imported);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

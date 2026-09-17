@@ -1,6 +1,8 @@
 # Export and import lab YAML
 
-Copy a **controller** or **worker** config onto another machine (or a scratch file), change eval parameters such as the DeepSWE question id, then queue Jenkins. Import is **write only**: it does not start Docker, k3d, or Jenkins.
+Copy **one** live config (controller **or** worker) onto another machine or a scratch file. Import is **write only**: it does not start Docker, k3d, or Jenkins. You do **not** export two files unless you want both jobs (change Jenkins question defaults **and** clone a worker).
+
+This lab is split: controller YAML on the **cloud**, worker YAML on **this PC**. Export on the machine that owns the live file, then scp the YAML if the dest is another host.
 
 Need the `export` / `import` subcommands: build this branch (`feat/config-export-import`) or a later Release. GitHub **v0.5.2** does not have them.
 
@@ -17,39 +19,65 @@ Operator bootstrap (roles, iCode drop, first eval): [binary-initializer/user-gui
 
 ## Function
 
-Controller and worker use the same schema. **One file at a time:**
+Controller and worker use the same schema. **Export this host’s live file** — not a two-file bundle.
 
-| Live file | Typical role | What you copy |
-|-----------|--------------|----------------|
-| `~/.config/mac-k3d/config.yaml` | controller | Cluster name, Jenkins port, `jenkins_job.*` (TASK default) |
-| `~/.config/mac-k3d/worker.yaml` | worker | `controller_url`, labels, agent name, Harbor skip/install intent |
+| Live file | Where in this lab | Typical role | What you copy |
+|-----------|-------------------|--------------|----------------|
+| `~/.config/mac-k3d/config.yaml` | **Cloud** | controller | Cluster name, Jenkins port, `jenkins_job.*` (TASK / harness / LLM defaults) |
+| `~/.config/mac-k3d/worker.yaml` | **This PC** | worker | `controller_url`, labels, agent name, Harbor skip/install intent |
+
+This PC has only `worker.yaml`. The cloud has `config.yaml`. Job defaults (`default_task`) are on the **controller** file. `set` on worker YAML does not change Jenkins TASK.
 
 **Kept** in the portable YAML: `role`, Jenkins ports, `jenkins_job.*` (harness / LLM / benchmark / question defaults), labels, `controller_url`, `api_user`, dependency `source` (`install` / `skip` / `existing`).
 
 **Stripped:** `jenkins_agent.api_token`, host storage paths, tool `binary`/`app`, `lolbench.path`, `platform`, `cpu_cores`, `remote_fs`. **Never** read or copied: `credentials.pending.yaml`.
 
-This PC in the cloud lab is a **worker** (only `worker.yaml`). The controller YAML lives on the cloud VM (`/root/.config/mac-k3d/config.yaml`). Job defaults (`default_task`) are on the **controller** file.
+Lockable Resources (`CPU_CORES`) live in **Jenkins on the controller**. Worker YAML only stores the label name (`resources.cpu_cores_label`) and this machine’s core count. Export sets `cpu_cores` to 0; prepare/config on the dest measures cores again and creates `{agent}-core-N` locks via the Jenkins API.
+
+---
+
+## One file, one purpose (controller vs worker)
+
+Each `export` / `import` handles **one YAML**. Import the file that matches what you are doing on **this** machine. Omitting `-c` on import: `role: worker` → `~/.config/mac-k3d/worker.yaml`, otherwise `config.yaml`. Do not import a controller file onto a worker path (or the reverse).
+
+| Situation | Export where | Import where | Then |
+|-----------|--------------|--------------|------|
+| Change which question / harness Jenkins runs | Cloud: `config.yaml` | Cloud live `config.yaml` (`--force` if it already exists) | `mac-k3d set` on that YAML, then `config --skip-secrets`. Worker YAML is unused. |
+| Add another eval PC to the same Jenkins | Existing worker: `worker.yaml` | **New** PC `~/.config/mac-k3d/worker.yaml` | Paste `api_user` / `api_token` into the **live** dest; `config -c worker.yaml`. Do **not** `--force` onto a working worker (that wipes the token). |
+| File-only check (no Jenkins) | Either host | Scratch `-c /tmp/imported-….yaml` | Confirm no `api_token`. Do not `config` against `/tmp`. |
+
+Optional: export **both** only if you want a lab pack (controller settings **and** a worker template). They stay two files; import them separately, on the matching machines.
+
+```bash
+# cloud (controller / eval job defaults) — this PC cannot export this file
+mac-k3d export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller-lab.yaml
+
+# this PC (worker / agent join template) — the cloud cannot export this file
+mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o /tmp/worker-lab.yaml
+```
+
+Copy the YAML with scp if dest is the other host. GitHub **v0.5.2** has no `export` / `import` / `set`; use this branch binary (`target/release/mac-k3d` or `/tmp/mac-k3d-export`).
 
 ---
 
 ## How to use
 
 ```bash
-# Source host — dest must not be the live source path
+# Source host — dest must not be the live source path. Run only the line for the file on *this* machine.
 mac-k3d export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller-lab.yaml
 mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o /tmp/worker-lab.yaml
 
-# Optional: mac-k3d set -c /tmp/controller-lab.yaml --benchmark deepswe --task YOUR_ID
+# Optional (controller YAML only): mac-k3d set -c /tmp/controller-lab.yaml --benchmark deepswe --task YOUR_ID
 
 # Dest — scratch file (does not touch the live lab)
 mac-k3d import /tmp/controller-lab.yaml -c /tmp/imported-config.yaml
 mac-k3d import /tmp/worker-lab.yaml -c /tmp/imported-worker.yaml
 
-# Dest — live file that already exists needs --force
+# Dest — live file that already exists needs --force (controller job defaults)
 # mac-k3d import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
 ```
 
-Cheap file check (no Jenkins, no LLM):
+Cheap file check (no Jenkins, no LLM). Automated keep/strip for **worker.yaml** is `cargo test` (`export_then_scratch_import_keeps_worker_template`, `export_import_worker_yaml_scratch_dest`). The script below is the live-file smoke: export this host’s YAML to a **scratch** dest only (never `--force` onto `~/.config/mac-k3d/*`).
 
 ```bash
 MAC_K3D_BIN="$HOME/Documents/Toby/mac-k3d/target/release/mac-k3d" \
@@ -178,7 +206,8 @@ Controller (cloud): export `config.yaml` → `default_task: ruff_1` → edit to 
 
 | Symptom | What to do |
 |---------|------------|
-| `config not found: …/config.yaml` | This PC is a worker. Export `-c ~/.config/mac-k3d/worker.yaml`, or export on the **cloud** controller. |
+| `config not found: …/config.yaml` | This PC is a worker. Export `-c ~/.config/mac-k3d/worker.yaml`, or export **on the cloud** (`config.yaml` is not on this PC). |
+| Imported worker file onto `config.yaml` (or the reverse) | Dest `-c` must match `role`. Controller YAML → controller `config.yaml`; worker YAML → worker `worker.yaml`. |
 | `already exists; pass --force` | Scratch dest leftover, or you targeted a live file on purpose. |
 | `export -o would overwrite the source` | Pick another `-o` path. |
 | Job TASK still the old id | Import was only `/tmp`; or you skipped `config --skip-secrets` on the live controller. |
