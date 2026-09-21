@@ -782,7 +782,7 @@ fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
     println!(
         "\nJenkins one-task eval jobs: `deepswe_one_task` and `lolbench_one_task`.\n\
          Both use iCode + DeepSeek catalog model (default deepseek-v4-pro). Default TASK for LoLBench is ruff_1.\n\
-         See docs/binary-initializer/user-guide.md.\n\
+         See docs/user-guide.md.\n\
          Secrets (DeepSeek, GitCode PAT) go to Jenkins Credentials.\n"
     );
 

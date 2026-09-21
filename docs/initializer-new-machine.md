@@ -1,6 +1,8 @@
 # Initialize a new Linux or Mac computer
 
-This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Binary-initializer (`setup`, Release asset): [binary-initializer/testing/binary-initializer-new-machine.md](binary-initializer/testing/binary-initializer-new-machine.md).
+Not the product eval path. iCode git/release (Jenkins upload or clone): [user-guide.md](user-guide.md) and [icode-harness-inputs.md](icode-harness-inputs.md).
+
+This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Current `setup` / Release asset: [new-machine.md](new-machine.md).
 
 **Users:** follow the command lists below to set up a blank machine.
 

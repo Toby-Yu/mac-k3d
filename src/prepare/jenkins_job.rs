@@ -447,7 +447,7 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
 fn job_config_xml(opts: &JobOpts) -> String {
     one_task_job_xml(
         "lolbench",
-        "iCode vs DeepSeek baseline on one LoLBench task (Harbor + iCode + DeepSeek catalog model). DeepSWE stays on Pier. See docs/lolbench-jenkins.md and docs/binary-initializer/user-guide.md.",
+        "iCode vs DeepSeek baseline on one LoLBench task (Harbor + iCode + DeepSeek catalog model). DeepSWE stays on Pier. See docs/lolbench-jenkins.md and docs/user-guide.md.",
         opts,
     )
 }
@@ -1044,7 +1044,7 @@ pub async fn ensure_deepswe_one_task_from_cluster(
 fn deepswe_one_task_job_xml(opts: &JobOpts) -> String {
     one_task_job_xml(
         "deepswe",
-        "iCode vs DeepSeek baseline on one DeepSWE task (Pier + iCode + DeepSeek catalog model). Arm A = iCode + LLM; Arm B = the same LLM without iCode. See docs/binary-initializer/user-guide.md.",
+        "iCode vs DeepSeek baseline on one DeepSWE task (Pier + iCode + DeepSeek catalog model). Arm A = iCode + LLM; Arm B = the same LLM without iCode. See docs/user-guide.md.",
         opts,
     )
 }

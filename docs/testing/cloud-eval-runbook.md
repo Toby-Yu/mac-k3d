@@ -1,8 +1,10 @@
 # Cloud controller + local worker eval runbook
 
+Lab runbook (this team), not the user start-here. **Users:** [user-guide.md](../user-guide.md).
+
 Operator path for **this lab**: Alibaba Cloud VM hosts Jenkins; this PC runs the jobs and writes the JSON.
 
-Pass/fail table and stage detail stay in [testing-eval-pipeline.md](testing-eval-pipeline.md). Product story: [workflow.md](../workflow.md). User bootstrap: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
+Pass/fail table and stage detail stay in [testing-eval-pipeline.md](testing-eval-pipeline.md). Product story: [workflow.md](../workflow.md). User bootstrap: [new-machine.md](../new-machine.md).
 
 **Users:** copy-paste commands in [user-guide.md](../user-guide.md). This file is the **lab** runbook (this cloud IP + this PC).
 
@@ -34,7 +36,7 @@ Never `mac-k3d start -c worker.yaml`. Worker YAML must use `http://<CLOUD_IP>:17
 flowchart TD
   sshRoot["SSH root on cloud VM"]
   dockerOk["docker info shows Server"]
-  cloneBuild["Clone binary-initializer and install mac-k3d"]
+  cloneBuild["Clone mac-k3d and install CLI"]
   setupCtrl["mac-k3d setup: CI controller Jenkins 17070"]
   e0check["E0: 02_check_controller.sh plus browser 17070"]
   workerSetup["This PC: setup worker.yaml"]
@@ -54,12 +56,12 @@ flowchart TD
   p0["P0 Docker and CLI"]
   p1["P1 Pier"]
   p2["P2 clone DeepSWE GitHub"]
-  p3["P3 iCode folder on this PC"]
+  p3["P3 iCode release upload or git clone"]
   p4["P4 Pier agent icode"]
   p5["P5 Arm A: Pier plus iCode plus DeepSeek"]
   p6["P6 Arm B: DeepSeek API only"]
   p7["P7 score f2p p2p"]
-  p8["P8 named JSON under output/"]
+  p8["P8 named JSON under eval-runs/reports/"]
   jenkins["E7 deepswe_one_task archives the same JSON"]
 
   p0 --> p1 --> p2 --> p3 --> p4
@@ -82,7 +84,7 @@ flowchart TD
 | SSH (controller) | `ssh root@43.107.42.252` |
 | Jenkins UI | `http://43.107.42.252:17070` |
 | Jenkins port | **17070** (open this in the Alibaba security group to this PC) |
-| Cloud checkout | `/root/src/mac-k3d` branch `binary-initializer` |
+| Cloud checkout | `/root/src/mac-k3d` branch `feat/icode-tag-commit-release` (or `main` after merge) |
 | This PC checkout | `/home/Toby/Documents/Toby/mac-k3d` |
 | iCode on this PC | `/home/Toby/Documents/Toby/iCode-main` |
 | Model | `deepseek-v4-pro` (catalog default) or `deepseek-flash` (`DEEPSEEK_MODEL` or `--model`) |
@@ -111,8 +113,9 @@ docker info | head -20
 ```bash
 mkdir -p ~/.local/bin ~/src
 cd ~/src
-git clone --branch binary-initializer --single-branch https://github.com/Toby-Yu/mac-k3d.git
+git clone --branch feat/icode-tag-commit-release --single-branch https://github.com/Toby-Yu/mac-k3d.git
 cd mac-k3d
+# After this branch is merged, use: git clone https://github.com/Toby-Yu/mac-k3d.git
 git status -sb
 git log -1 --oneline
 ```
@@ -319,7 +322,7 @@ mac-k3d eval --stage p8 --n-tasks 1
 
 - P5: `PROGRESS` lines; Pier/Docker/LLM work (minutes, not 4s); `harness/` artifacts. CLI usage errors and **0-trial** Pier jobs **fail** the stage. P0 installs `docker compose` if missing. P5 and P6 use the same `selected_tasks.txt`.
 - P6: `baseline/<task>/agent.patch`; `baseline/summary.json` has usage / time / model
-- P8: `output/eval-icode-deepseek-deepswe-n1-<utc>.json` with `suite`, `pass_at_1`, `macro.f2p`/`p2p`/`reward`, `tokens`, `wall_seconds`/`wall_minutes`, `model`
+- P8: `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` with `suite`, `pass_at_1`, `macro.f2p`/`p2p`/`reward`, `tokens`, `wall_seconds`/`wall_minutes`, `model`
 - `check_report.sh` prints `OK report schema`
 
 **Checkpoint — paste:** P5/P6 OK or error tail, JSON path, `OK report schema`.
@@ -330,13 +333,9 @@ mac-k3d eval --stage p8 --n-tasks 1
 
 **Where:** this PC (or cloud) with the **controller** URL. **No** `--local`. Build must run on **this** node.
 
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-cd ~/Documents/Toby/mac-k3d
-mac-k3d eval --n-tasks 1 --icode-mode release --model deepseek-v4-pro --yes
-```
+Product path: Jenkins UI, job `deepswe_one_task` → **Build with Parameters** (`ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`). `mac-k3d eval --icode-mode release --yes` cannot attach a file.
 
-Or Jenkins UI: job `deepswe_one_task` → Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`, `ICODE_MODE=release`).
+Git (optional): same UI with `ICODE_MODE=git`, or `mac-k3d eval --n-tasks 1 --icode-mode git --icode-git-url … --icode-git-ref … --icode-git-ref-kind branch --model deepseek-v4-pro --yes` (no `--local`).
 
 **Expected:** build on this worker; archived JSON; same schema as E6. Confirm with `check_report.sh` on the downloaded artifact if needed.
 
@@ -385,6 +384,6 @@ Do not run Pier `--stage p4` / `deepswe_one_task` for LoLBench. Copy-paste L2–
 | `DEEPSEEK_API_KEY missing` | E4–E6: copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller. |
 | `No such option: --agent-dir` | Old P5 flags. This tree uses `--agent-import-path icode_pier_agent:ICodeAgent`. Pull/rebuild scripts; do not pass `--agent-dir` on Pier 0.3.1. |
 | Job still `deepseek-chat` | On cloud root: `mac-k3d config --skip-secrets` after pulling this tree. |
-| P3 iCode missing | Put a `*-full-*` drop in `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release`, or use `ICODE_MODE=git` with URL/ref. |
+| P3 iCode missing | Jenkins: upload `ICODE_RELEASE_FILE` (`ICODE_MODE=release`) or fill git URL/ref/kind. Local `--stage`: `*-full-*` in `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release`, or `ICODE_MODE=git`. |
 | pier not found | `uv tool install datacurve-pier` |
 | Docker OOM / disk | DeepSWE images are large; free disk; keep N=1. |

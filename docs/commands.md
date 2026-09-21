@@ -46,7 +46,7 @@ Keep `prepare` / `start` / `config` for power users. Controller `config`/`start`
 
 ## `eval`
 
-Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on DeepSWE (Process 2). See [binary-initializer/user-guide.md](binary-initializer/user-guide.md), [binary-initializer/icode-harness-inputs.md](binary-initializer/icode-harness-inputs.md), and [binary-initializer/testing/testing-eval-pipeline.md](binary-initializer/testing/testing-eval-pipeline.md).
+Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on DeepSWE (Process 2). See [user-guide.md](user-guide.md), [icode-harness-inputs.md](icode-harness-inputs.md), and [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md).
 
 ```bash
 mac-k3d eval --stage p0
@@ -71,7 +71,7 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 | `--n-tasks N` | Number of tasks when `--task` is empty (default 1) |
 | `--benchmark deepswe\|lolbench` | Suite (default `deepswe`; Jenkins job follows this) |
 | `--task ID` | One question id (empty DeepSWE = first alphabetical; LoLBench example `ruff_1`) |
-| `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref). See [icode-harness-inputs.md](binary-initializer/icode-harness-inputs.md) |
+| `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref). See [icode-harness-inputs.md](icode-harness-inputs.md) |
 | `--icode-release PATH\|URL` | `release` mode for `--local` / `--stage`; empty = persist file then `~/.local/share/mac-k3d/icode-*-full-*` or `icode`. Jenkins release uses UI upload `ICODE_RELEASE_FILE` (`--yes` does not attach a file) |
 | `--icode-git-url URL` | `git` mode: `https://` on github.com or gitcode.com (no tokens in the URL) |
 | `--icode-git-ref REF` | `git` mode: branch name, tag, or commit SHA (PR commit to score before merge). Default `main` |
@@ -215,7 +215,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline jobs `deepswe_one_task` / `lolbench_one_task` with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md) and [icode-harness-inputs.md](binary-initializer/icode-harness-inputs.md).
+4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline jobs `deepswe_one_task` / `lolbench_one_task` with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md) and [icode-harness-inputs.md](icode-harness-inputs.md).
 5. **Worker:** extract `~/.local/share/mac-k3d/pipeline` (does not overwrite `icode`); using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.

@@ -18,7 +18,7 @@ Leftovers it cannot hide:
 - **sudo** / brew for package install
 - **Worker:** paste a Jenkins API token from the UI
 
-If auto-install fails, install Docker yourself and re-run setup ([docs/binary-initializer/testing/binary-initializer-new-machine.md](docs/binary-initializer/testing/binary-initializer-new-machine.md)).
+If auto-install fails, install Docker yourself and re-run setup ([docs/new-machine.md](docs/new-machine.md)).
 
 ## Install (users)
 
@@ -38,7 +38,7 @@ mkdir -p ~/.local/bin
 cp mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
 ```
 
-Open **Terminal** (do not rely on double-click). **Start here (controller + worker + eval):** [docs/binary-initializer/user-guide.md](docs/binary-initializer/user-guide.md). Extra walkthrough: [docs/binary-initializer/testing/binary-initializer-new-machine.md](docs/binary-initializer/testing/binary-initializer-new-machine.md).
+Open **Terminal** (do not rely on double-click). **Start here (controller + worker + eval):** [docs/user-guide.md](docs/user-guide.md). Extra walkthrough: [docs/new-machine.md](docs/new-machine.md).
 
 v0.3.0 cargo/`prepare` path: [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
 
@@ -75,7 +75,7 @@ mac-k3d clean --yes
 ```bash
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 # Role: CI worker — Docker, Java, Jenkins agent (Harbor optional)
-# Jenkins URL default: http://43.107.42.252:17070 (Enter). Same-PC: type http://localhost:17070
+# Jenkins URL: press Enter for the wizard default, or type http://localhost:17070 for a controller on this PC
 mac-k3d prepare --non-interactive -c ~/.config/mac-k3d/worker.yaml
 ```
 
@@ -87,20 +87,15 @@ See [docs/configuration.md](docs/configuration.md) for the full schema.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
+**Users:** [docs/user-guide.md](docs/user-guide.md) (controller + worker + eval). Extra bootstrap: [docs/new-machine.md](docs/new-machine.md). Index: [docs/README.md](docs/README.md).
+
 - [Commands](docs/commands.md)
 - [Configuration](docs/configuration.md)
-- [Deployment](docs/deployment.md)
-- [Setup guide](docs/setup.md)
-- [Binary-initializer workflow](docs/binary-initializer/workflow.md)
-- [Binary-initializer (new machine)](docs/binary-initializer/testing/binary-initializer-new-machine.md)
-- [Binary-initializer testing](docs/binary-initializer/testing/testing-binary-initializer.md)
-- [Eval pipeline testing (P0–P8)](docs/binary-initializer/testing/testing-eval-pipeline.md)
-- [Initialize a new Linux or Mac (v0.3.0)](docs/initializer-new-machine.md)
-- [Prepare wizard](docs/prepare-wizard.md)
-- [Initializer testing checklist (v0.3.0)](docs/testing-initializer.md)
-- [Jenkins job `lolbench_one_task`](docs/lolbench-jenkins.md)
-- [Secrets (Jenkins credentials on controller)](docs/secrets.md)
+- [iCode inputs](docs/icode-harness-inputs.md)
+- [Secrets](docs/secrets.md)
+- [Lab runbooks](docs/testing/README.md) (this team; not start-here)
+
+v0.3.0 cargo/`prepare` path (historical): [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
 
 ## License
 

@@ -8,7 +8,7 @@ candidates=()
 if [ -n "${MAC_K3D_EVAL_WORKDIR:-}" ]; then
   candidates+=("$MAC_K3D_EVAL_WORKDIR")
 fi
-candidates+=("$ROOT/eval-runs-deepswe" "$ROOT/eval-runs")
+candidates+=("$ROOT/eval-runs")
 
 found=""
 for base in "${candidates[@]}"; do

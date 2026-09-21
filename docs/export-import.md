@@ -13,7 +13,7 @@ mac-k3d export --help
 mac-k3d import --help
 ```
 
-Operator bootstrap (roles, iCode drop, first eval): [binary-initializer/user-guide.md](binary-initializer/user-guide.md). CLI flags: [commands.md](commands.md). Secrets stores: [secrets.md](secrets.md).
+Operator bootstrap (roles, iCode drop, first eval): [user-guide.md](user-guide.md). CLI flags: [commands.md](commands.md). Secrets stores: [secrets.md](secrets.md).
 
 ---
 
@@ -301,7 +301,7 @@ flowchart TD
 
 ## List DeepSWE task ids (this PC)
 
-After a prior P2, the tree is often `eval-runs-deepswe/deep-swe/tasks` or `eval-runs/deep-swe/tasks`:
+After a prior P2, tasks live under Jenkins `~/jenkins-agent/workspace/deepswe_one_task/eval-runs/deep-swe/tasks`, or checkout `eval-runs/deep-swe/tasks` after a local P2. `list_deepswe_tasks.sh` looks at `$MAC_K3D_EVAL_WORKDIR` then `eval-runs/`:
 
 ```bash
 cd ~/Documents/Toby/mac-k3d

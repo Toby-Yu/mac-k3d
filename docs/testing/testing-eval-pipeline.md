@@ -1,12 +1,14 @@
 # Testing the iCode eval pipeline (P0–P8 / E0–E8)
 
+Lab runbook (this team), not the user start-here. **Users:** [user-guide.md](../user-guide.md). This lab’s IPs: [cloud-eval-runbook.md](cloud-eval-runbook.md).
+
 Per-stage CLI checks for Process 2 (DeepSWE + Pier + iCode vs DeepSeek V4 Pro baseline).  
 Machine bootstrap first: [testing-binary-initializer.md](testing-binary-initializer.md) and [workflow.md](../workflow.md).  
 **This lab (cloud root + this PC):** copy-paste phases and flowcharts in [cloud-eval-runbook.md](cloud-eval-runbook.md). **Users:** [user-guide.md](../user-guide.md).
 
 **Sign-off:** DeepSWE **E0–E7** with `--n-tasks 1` (default Pier path). LoLBench is a **separate** job (`lolbench_one_task`); use the LoLBench track below, do not reuse Pier P4/P5 commands. E8 is optional N>1. Keep P0–P4 cheap (no LLM).
 
-Scripts live under [`pipeline/stages/`](../../../pipeline/stages/). Helpers under [`pipeline/lib/`](../../../pipeline/lib/). The CLI wraps them:
+Scripts live under [`pipeline/stages/`](../../pipeline/stages/). Helpers under [`pipeline/lib/`](../../pipeline/lib/). The CLI wraps them:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -76,7 +78,7 @@ Copy-paste commands. Use `--n-tasks 1` until E4–E6 are green.
 | **E4** P5 n=1 harness (paid) | `mac-k3d eval --stage p5 --n-tasks 1` with gitignored `.env` (or Jenkins bind `deepseek-api-key`) | `PROGRESS` P5; minutes of Pier/Docker/LLM; `harness/` artifacts. CLI usage errors fail the stage | | |
 | **E5** P6 baseline | `DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage p6 --n-tasks 1` | `baseline/<task>/agent.patch`; `baseline/summary.json` includes usage/time/model | | |
 | **E6** P7/P8 report fields | `mac-k3d eval --stage p7` then `--stage p8 --n-tasks 1`; then `./pipeline/stages/check_report.sh` | `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` with `suite`, `pass_at_1`, `macro.f2p`/`p2p`/`reward`, `tokens`, `wall_seconds`/`wall_minutes`, `model` | | |
-| **E7** Jenkins `deepswe_one_task` | From this PC: `mac-k3d eval --n-tasks 1 --icode-mode binary --yes` **without** `--local`, or UI Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`, `ICODE_MODE=binary`) | Build on **this** node; archived JSON; same schema | | |
+| **E7** Jenkins `deepswe_one_task` | UI **Build with Parameters**: `ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`. Git: same UI with `ICODE_MODE=git` (or `mac-k3d eval --icode-mode git … --yes` without `--local`). Release `--yes` cannot attach a file | Build on **this** node; archived JSON; same schema | | |
 | **E8** optional N>1 | Same as E6/E7 with `--n-tasks` > 1 | Same schema; `n_tasks` matches N | | After E6 green |
 
 ### E2 commands
@@ -93,6 +95,13 @@ mac-k3d eval --stage p4
 
 Schema unit test (no network): `python3 pipeline/lib/test_report.py`
 
+P3 fixtures (no Jenkins):
+
+```bash
+bash pipeline/stages/test_icode_input.sh
+bash pipeline/stages/test_p3_icode.sh
+```
+
 ### Git-mode P3 (same path a user runs)
 
 Do **not** use `MAC_K3D_ICODE_FETCH_DIR`. Rebuild the CLI first so the PAT prompt exists.
@@ -106,7 +115,7 @@ mac-k3d eval --stage p3 --icode-mode git \
   --icode-git-ref-kind branch
 ```
 
-Expected: `Saved GITCODE_TOKEN to .env (mode 600)` on first run (or `Using GITCODE_TOKEN from env or .env`); clone finishes (or fails within 90s with a PAT hint); `eval-runs/icode_bin_path.txt`, `icode_host_root.txt`, and `icode_git.json` exist; console prints `OK iCode git kind=branch ref=main sha=…`.
+Expected: `Saved GITCODE_TOKEN to .env (mode 600)` on first run (or `Using GITCODE_TOKEN from env or .env`); clone finishes (or fails within 90s with a PAT hint); `eval-runs/icode_bin_path.txt`, `icode_host_root.txt`, and `icode_git.json` exist; console prints `OK iCode git kind=branch ref=main sha=…`. A leftover clone may print `removing leftover …/icode-src via docker` then continue — that is expected, not a failure.
 
 Jenkins (after local P3 works): on the **controller**, `mac-k3d config --update-secrets` and enter the GitCode PAT into `gitcode-pat`. Then UI **Build with Parameters**: `ICODE_MODE=git`, the same URL/ref, `ICODE_GIT_REF_KIND=branch` (or `tag` / `commit` for a PR SHA), no PAT in those fields. Worker job param `MAC_K3D_ROOT` empty for a user-like run (or this checkout to test unreleased pipeline).
 
@@ -125,7 +134,7 @@ Jenkins runs `~/.local/share/mac-k3d/pipeline` unless you set job param **`MAC_K
 | **L4** P5 n=1 Harbor (paid) | `mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode binary --stage p5` | `PROGRESS` P5; `harbor_runs/…/reward.json`; local image or docker build. Missing `reward.json` fails; reward `0.0` is a score | | |
 | **L5** P6 | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p6` | `baseline/ruff_1/agent.patch`; summary usage/time/model | | |
 | **L6** P7/P8 | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p7` then `--stage p8`; `./pipeline/stages/check_report.sh` | Same schema as DeepSWE (`suite=lolbench`); `f2p` / `p2p` rates from Harbor; `reward` from reward.json; `wall_minutes` | | |
-| **L7** Jenkins `lolbench_one_task` | UI Build with Parameters (`TASK=ruff_1`, `ICODE_MODE=binary`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`) or `mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode binary --yes` **without** `--local` | Build on **this** node (not a k3d agent); P4 skipped; archived JSON; SUCCESS ≠ resolved | | |
+| **L7** Jenkins `lolbench_one_task` | UI **Build with Parameters**: `TASK=ruff_1`, `ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`. Git: same UI or `mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git … --yes` without `--local`. Release `--yes` cannot attach a file | Build on **this** node (not a k3d agent); P4 skipped; archived JSON; SUCCESS ≠ resolved | | |
 
 L2 commands:
 
@@ -144,7 +153,7 @@ Do **not** run `--stage p4` for LoLBench.
 
 ## JSON report fields
 
-Written by [`pipeline/lib/score_results.py`](../../../pipeline/lib/score_results.py) at P7/P8. Same schema for `deepswe_one_task` and `lolbench_one_task` (`suite` differs). Validate with [`pipeline/stages/check_report.sh`](../../../pipeline/stages/check_report.sh).
+Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py) at P7/P8. Same schema for `deepswe_one_task` and `lolbench_one_task` (`suite` differs). Validate with [`pipeline/stages/check_report.sh`](../../pipeline/stages/check_report.sh).
 
 | Field | Meaning |
 |-------|---------|
@@ -285,7 +294,7 @@ mac-k3d eval --n-tasks 1 --icode-mode release --model deepseek-v4-pro
 |---------|------------|
 | pier not found | `uv tool install datacurve-pier` or `uv tool install git+https://github.com/datacurve-ai/pier` |
 | DeepSWE clone fails | Network / git; retry P2 |
-| DEEPSEEK_API_KEY missing | Copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller ([secrets.md](../../secrets.md)) |
+| DEEPSEEK_API_KEY missing | Copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller ([secrets.md](../secrets.md)) |
 | No such option: --agent-dir | Pier 0.3.1 has no `--agent-dir`. Use this tree’s `--agent-import-path icode_pier_agent:ICodeAgent` |
 | Docker OOM / disk | DeepSWE images are large; free disk; lower N |
 | Worker offline | Finish E1; for local-only tests use `--local` |

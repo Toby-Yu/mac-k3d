@@ -852,6 +852,18 @@ class SecretGuardTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("OK no tracked secret files", proc.stdout)
 
+    def test_check_docs_script_passes_on_tracked_tree(self):
+        script = ROOT / "scripts" / "check_docs.sh"
+        proc = subprocess.run(
+            ["bash", str(script)],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("OK docs layout", proc.stdout)
+
     def test_gitignore_covers_runtime_env_and_eval_workdirs(self):
         gi = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("**/.pier-env", gi)

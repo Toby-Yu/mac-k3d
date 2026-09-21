@@ -1,6 +1,6 @@
 # User guide: cloud controller, worker, and eval
 
-Copy-paste these blocks. Every command has a `#` comment.
+Copy-paste these blocks. Every command has a `#` comment. This page uses placeholders (`CONTROLLER_IP`). This lab’s real IP and SSH: [testing/cloud-eval-runbook.md](testing/cloud-eval-runbook.md).
 
 Two different downloads:
 
@@ -16,13 +16,13 @@ Harbor CLI stays **skip** on DeepSWE-only workers. Eval jobs are two runners, bo
 
 Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
 
-Default worker Jenkins URL is `http://43.107.42.252:17070`. Type a new `http://<ip>:17070` when you buy another controller.
+The worker wizard has a default Jenkins URL (press Enter to keep it). Type `http://<CONTROLLER_IP>:17070` for your controller. Same-PC controller: `http://localhost:17070`.
 
 ---
 
 ## What you need
 
-- Cloud Linux VM (this lab: `43.107.42.252`) with **root**, ~8 GB RAM, **60 GB** free, security group **17070** open to the worker.
+- Cloud Linux VM (`CONTROLLER_IP`) with **root**, ~8 GB RAM, **60 GB** free, security group **17070** open to the worker.
 - New Mac or Linux worker with **sudo** (Linux may be a single root account), ~8 GB RAM, **40 GB** free, Docker allowed.
 - **mac-k3d CLI** GitHub asset matching the machine (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, `mac-k3d-darwin-x86_64`).
 - **iCode release** `icode-<os>-<arch>-full-vX.Y.Z` (or a standalone executable named `icode`) to **upload in Jenkins** when you start a release-mode job. For local `--stage` / `--local` only, copy it onto the worker after setup.
@@ -37,7 +37,7 @@ iCode is an **agent harness**. The job measures whether the harness helps an LLM
 
 ```bash
 # SSH to the cloud VM as root (use your IP if it is not this lab)
-ssh root@43.107.42.252
+ssh root@CONTROLLER_IP
 
 # Put the mac-k3d CLI on PATH (not the iCode release)
 export PATH="$HOME/.local/bin:$PATH"
@@ -65,7 +65,7 @@ export PATH="$HOME/.local/bin:$PATH"
 mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 ```
 
-Open `http://43.107.42.252:17070` (or your IP). User **admin**. Password from `mac-k3d config --show-jenkins` on the controller. Create an **API token** (admin → Configure → API Token). Copy the **secret**, not the token name.
+Open `http://CONTROLLER_IP:17070` (or `http://127.0.0.1:17070` on that VM). User **admin**. Password from `mac-k3d config --show-jenkins` on the controller. Create an **API token** (admin → Configure → API Token). Copy the **secret**, not the token name.
 
 ---
 
@@ -82,7 +82,7 @@ chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 mac-k3d --help   # must list setup and eval
 
-# Worker wizard. Enter keeps http://43.107.42.252:17070
+# Worker wizard. Enter keeps the printed default, or type http://CONTROLLER_IP:17070
 # Type http://<new-ip>:17070 if you created another controller
 # API user: admin   API token: the secret from step 1
 # Harbor / LoLBench: No
@@ -94,7 +94,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
-To copy a working controller or worker YAML onto another machine (same pipeline, different host or `jenkins_job` defaults), export on the source host and import on the dest. Secrets are stripped; import only writes the file. Full flow, DeepSWE first→second question, and why `config --skip-secrets` does not put keys in the YAML: [export-import.md](../export-import.md).
+To copy a working controller or worker YAML onto another machine (same pipeline, different host or `jenkins_job` defaults), export on the source host and import on the dest. Secrets are stripped; import only writes the file. Full flow, DeepSWE first→second question, and why `config --skip-secrets` does not put keys in the YAML: [export-import.md](export-import.md).
 
 ```bash
 # Source host: sanitized copy (no api_token, no credentials.pending.yaml)
@@ -114,7 +114,7 @@ Linux without sudo will fail Docker install. As **root**, Docker is ready withou
 ```bash
 # Optional: confirm this PC can reach cloud Jenkins and the agent unit is up
 export PATH="$HOME/.local/bin:$PATH"
-JENKINS_URL=http://43.107.42.252:17070 \
+JENKINS_URL=http://CONTROLLER_IP:17070 \
   bash -lc 'echo "check Jenkins login"; curl -sS -o /dev/null -w "%{http_code}\n" "$JENKINS_URL/login"'
 ```
 
@@ -157,7 +157,7 @@ Rebuild/extract pipeline on the worker (`mac-k3d eval --stage p0` or `config`) s
 
 ### Jenkins UI (recommended)
 
-1. Open `http://43.107.42.252:17070` → job **`deepswe_one_task`** (Pier + DeepSWE) or **`lolbench_one_task`** (Harbor + LoLBench). One `TASK` per build. Do not flip `BENCHMARK` across jobs.
+1. Open `http://CONTROLLER_IP:17070` → job **`deepswe_one_task`** (Pier + DeepSWE) or **`lolbench_one_task`** (Harbor + LoLBench). One `TASK` per build. Do not flip `BENCHMARK` across jobs.
 2. **Build with Parameters**:
 
 | Field | Value |

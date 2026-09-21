@@ -1,6 +1,6 @@
 # Branch process: `feat/icode-tag-commit-release`
 
-This folder is **branch process and re-test notes**, not the user start-here. User docs stay under [docs/](../) ([user-guide](../binary-initializer/user-guide.md), [icode-harness-inputs](../binary-initializer/icode-harness-inputs.md)). Lab track for the other branch stays [binary-initializer/testing/](../binary-initializer/testing/).
+This folder is **branch process and re-test notes**, not the user start-here. User docs stay under [docs/](../) ([user-guide](../user-guide.md), [icode-harness-inputs](../icode-harness-inputs.md)). Lab E0–E8 table: [testing/testing-eval-pipeline.md](../testing/testing-eval-pipeline.md).
 
 ## What changed on this branch
 

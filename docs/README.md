@@ -1,26 +1,61 @@
-# mac-k3d Design Documents
+# mac-k3d documentation
+
+**Users start here:** [user-guide.md](user-guide.md).
+
+Do not add a new top-level folder for each feature branch. Update these product pages, or if the page is **only** for that branch, add `docs/<branch>/README.md` + `testing.md`. A pre-commit hook (`scripts/check_docs.sh`) enforces this.
+
+## Users (current product)
 
 | Document | Description |
 |----------|-------------|
-| [architecture.md](architecture.md) | System overview, components, data flow |
-| [commands.md](commands.md) | CLI commands, flags, and behavior |
-| [configuration.md](configuration.md) | Config file schema and state layout |
-| [deployment.md](deployment.md) | Single-Mac and multi-Mac topology, including physical LAN cabling |
-| [setup.md](setup.md) | Step-by-step setup for single- and multi-Mac environments |
-| [binary-initializer/user-guide.md](binary-initializer/user-guide.md) | **Start here:** cloud controller, new Mac/Linux worker, iCode drop, eval commands |
-| [binary-initializer/icode-harness-inputs.md](binary-initializer/icode-harness-inputs.md) | Two iCode inputs: Jenkins upload / local `*-full-*` binary, or git clone (branch/tag/commit) |
-| [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) | **Branch process** (`feat/icode-tag-commit-release`): git kinds, drop local source, Jenkins upload; not start-here |
-| [export-import.md](export-import.md) | Worker vs controller YAML: when to export, `--force` rules, `set --model`, then `config --skip-secrets`; secrets stay in Jenkins |
-| [binary-initializer/workflow.md](binary-initializer/workflow.md) | End-to-end: new machine → controller/worker → iCode eval → JSON |
-| [binary-initializer/testing/binary-initializer-new-machine.md](binary-initializer/testing/binary-initializer-new-machine.md) | User guide: download Release binary, run setup; Docker installed by the binary |
-| [binary-initializer/testing/testing-binary-initializer.md](binary-initializer/testing/testing-binary-initializer.md) | Sign-off Task 0–5 + Task 7 on Linux; Task 6 macOS later |
-| [binary-initializer/testing/cloud-eval-runbook.md](binary-initializer/testing/cloud-eval-runbook.md) | Operator runbook: cloud root controller → this PC worker → E0–E7 JSON |
-| [binary-initializer/testing/testing-eval-pipeline.md](binary-initializer/testing/testing-eval-pipeline.md) | Cloud+worker eval: E0–E8 tracking, P0–P8 stages, report schema |
-| [initializer-new-machine.md](initializer-new-machine.md) | v0.3.0 user guide: `cargo install` + `prepare` on a blank Linux or Mac |
-| [prepare-wizard.md](prepare-wizard.md) | Interactive `prepare` questionnaire design |
-| [testing-initializer.md](testing-initializer.md) | v0.3.0 initializer tests (Mac + Linux), steps 0–7 |
-| [lolbench-jenkins.md](lolbench-jenkins.md) | `lolbench_one_task` (Harbor + iCode) + `deepswe_one_task` (Pier + iCode) |
-| [secrets.md](secrets.md) | CI secrets: configure once on Jenkins controller, use on all agents |
+| [user-guide.md](user-guide.md) | Cloud controller, worker, iCode drop, Jenkins eval |
+| [new-machine.md](new-machine.md) | Download the Release binary; `setup` installs Docker |
+| [icode-harness-inputs.md](icode-harness-inputs.md) | Jenkins upload vs git clone (`branch` / `tag` / `commit`) |
+| [workflow.md](workflow.md) | End-to-end: new machine → controller/worker → JSON |
+| [export-import.md](export-import.md) | Worker vs controller YAML; `--force` vs `--skip-secrets` |
+| [secrets.md](secrets.md) | Jenkins credentials on the controller; local `.env` for `--local` |
+| [lolbench-jenkins.md](lolbench-jenkins.md) | `lolbench_one_task` (Harbor) and `deepswe_one_task` (Pier) |
+
+## Lab runbooks (this team, not the user start-here)
+
+Copy-paste checklists with this lab’s IPs live under [testing/](testing/).
+
+| Document | Description |
+|----------|-------------|
+| [testing/README.md](testing/README.md) | What belongs in `testing/` |
+| [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | E0–E8 / P0–P8 |
+| [testing/cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | This cloud VM + this PC |
+| [testing/testing-binary-initializer.md](testing/testing-binary-initializer.md) | Bootstrap sign-off |
+| [testing/clean-machine-binary-test.md](testing/clean-machine-binary-test.md) | Wipe or new PC → eval-ready |
+
+## Developers
+
+| Document | Description |
+|----------|-------------|
+| [commands.md](commands.md) | CLI flags |
+| [configuration.md](configuration.md) | YAML schema |
+| [architecture.md](architecture.md) | Components |
+| [deployment.md](deployment.md) | Multi-Mac topology |
+| [setup.md](setup.md) | Wizard / k3d scenarios (includes local cluster without Jenkins) |
+| [prepare-wizard.md](prepare-wizard.md) | `prepare` questionnaire |
+
+## Historical (v0.3.0 `cargo install` / `prepare`)
+
+Not the product path. Keep for old machines only.
+
+| Document | Description |
+|----------|-------------|
+| [initializer-new-machine.md](initializer-new-machine.md) | Blank machine via `cargo install` |
+| [testing-initializer.md](testing-initializer.md) | Steps 0–7 |
+
+## Branch process (not start-here)
+
+Each folder is **only** `README.md` (what that git branch shipped) and `testing.md` (how to re-test it). Product behavior belongs in **Users** / **Developers** above.
+
+| Document | Description |
+|----------|-------------|
+| [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) | Git kinds, Jenkins upload, leftover wipe |
+| [binary-initializer/README.md](binary-initializer/README.md) | Release `setup` + Docker install |
 
 ## Goals
 
@@ -37,7 +72,3 @@
 - Replacing Helm/k3d/kubectl — we orchestrate them, not reimplement them
 - In-cluster application deployment beyond Jenkins
 - Auto-install package managers on non-Debian Linux (use existing binaries / paths)
-
-## Status
-
-Implemented CLI with prepare wizard and lifecycle commands. Linux support uses `src/platform/{macos,linux}.rs` adapters.

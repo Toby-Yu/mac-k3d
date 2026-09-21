@@ -1,21 +1,23 @@
 # Binary-initializer testing (Mac + Linux)
 
-This is the **binary-initializer** path (`setup`, Release asset). Full workflow: [workflow.md](../workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare` steps 0–7) is [../../testing-initializer.md](../../testing-initializer.md).
+Lab runbook (this team), not the user start-here. **Users:** [user-guide.md](../user-guide.md).
+
+This is the **binary-initializer** path (`setup`, Release asset). Full workflow: [workflow.md](../workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare` steps 0–7) is [testing-initializer.md](../testing-initializer.md).
 
 Use this document to **verify** a prebuilt `mac-k3d` on macOS and Linux.
 
-**Linux bootstrap sign-off is Task 0–5, Task 7, and Task 8.** Task 6 is macOS (later). Eval pipeline (Task 9 / P1–P8): [testing-eval-pipeline.md](testing-eval-pipeline.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../../scripts/env_set_up/run_all.sh).
+**Linux bootstrap sign-off is Task 0–5, Task 7, and Task 8.** Task 6 is macOS (later). Eval pipeline (Task 9 / P1–P8): [testing-eval-pipeline.md](testing-eval-pipeline.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../scripts/env_set_up/run_all.sh).
 
 If live YAML already exists, `setup` shows **Config already exists** (Validate). To test as a **new user**, wipe first (Task 8a), then follow Task 8b / [clean-machine-binary-test.md](clean-machine-binary-test.md).
 
-Related design: [../../prepare-wizard.md](../../prepare-wizard.md), [../../setup.md](../../setup.md), [../../commands.md](../../commands.md).
+Related design: [prepare-wizard.md](../prepare-wizard.md), [setup.md](../setup.md), [commands.md](../commands.md).
 
 ### Which document
 
 | Document | Purpose |
 |----------|---------|
 | **This file** ([testing-binary-initializer.md](testing-binary-initializer.md)) | **Developer sign-off.** Copy-paste Tasks 0–9, pass/fail, wipe-to-first-run, `scripts/env_set_up`. |
-| [binary-initializer-new-machine.md](binary-initializer-new-machine.md) | **End-user product guide.** How a person on a blank Linux/Mac downloads a Release binary, picks controller vs worker vs both, honest leftovers (docker logout, API token, Docker Desktop). Not a numbered lab checklist; `02`/`03`/`run_all` are not the main path. |
+| [new-machine.md](../new-machine.md) | **End-user product guide.** How a person on a blank Linux/Mac downloads a Release binary, picks controller vs worker vs both, honest leftovers (docker logout, API token, Docker Desktop). Not a numbered lab checklist; `02`/`03`/`run_all` are not the main path. |
 | [clean-machine-binary-test.md](clean-machine-binary-test.md) | **Lab walkthrough for testers.** Same product as the user guide, ordered as wipe-or-new-PC → `01_download_binary.sh` → controller wizard → worker wizard → `run_all.sh`. Wizard prompt table lives there. |
 
 ---
@@ -473,7 +475,7 @@ expected results:
 - **P5:** `PROGRESS` lines; one DeepSWE task through iCode (`--n-tasks 1`). Clear pier/docker errors still count as “stage ran”.
 - **P6:** DeepSeek API baseline on the same `instruction.md`.
 - **P7:** temp JSON with `reward` / `f2p` / `p2p` rates / `pass_at_1`.
-- **P8:** `output/eval-icode-deepseek-deepswe-n1-<utc>.json` (or under `$WORKDIR/output/`).
+- **P8:** `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` (Jenkins: workspace `eval-runs/reports/`).
 - Full runner: Jenkins job `deepswe_one_task` (or `--local`) runs both arms and archives JSON.
 
 P5+ costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **private** iCode clone or tarball.
@@ -509,5 +511,5 @@ P5+ costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **p
 | `failed to bind host port … 8080` | Prefer a build that auto-remaps on `setup`/`start`. Last resort: set free `cluster.ports` hosts; keep Jenkins on `17070` unless remapped |
 | Release missing `darwin-x86_64` | Tag was cut **before** the `macos-latest` cross-compile workflow. Push this branch, cut a **new** `v*` tag (or upload the CI artifact onto the old release). See **Task 7**. |
 
-User commands: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).  
+User commands: [new-machine.md](../new-machine.md).  
 Eval pipeline stages: [testing-eval-pipeline.md](testing-eval-pipeline.md).

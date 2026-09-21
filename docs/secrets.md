@@ -13,7 +13,7 @@ chmod 600 .env
 
 - Git never tracks `.env` (see `.gitignore`). Confirm with `git check-ignore -v .env`.
 - P5 runtime files `eval-runs*/.pier-env` and `.harbor-env` are gitignored (they copy the key for Pier/Harbor).
-- `./scripts/check_no_secrets.sh` must pass before commit. Install the hook once per clone:
+- `./scripts/check_no_secrets.sh` and `./scripts/check_docs.sh` must pass before commit. Install the hook once per clone:
 
 ```bash
 ln -sf ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit

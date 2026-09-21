@@ -1,11 +1,13 @@
 # Clean machine → binary → controller/worker → eval-ready
 
+Lab runbook (this team), not the user start-here. **Users:** [user-guide.md](../user-guide.md).
+
 Step-by-step for a **new Linux or Mac** (or a wiped lab PC) using the GitHub Release binary. Default Jenkins UI port is **17070**.
 
 To wipe an existing lab and keep `.bak` YAML: [testing-binary-initializer.md](testing-binary-initializer.md) **Task 8a**. Developer pass/fail: same file.
 
-Automated checks after bootstrap: [`scripts/env_set_up/README.md`](../../../scripts/env_set_up/README.md).  
-Full product story: [workflow.md](../workflow.md). Wizard details: [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
+Automated checks after bootstrap: [`scripts/env_set_up/README.md`](../../scripts/env_set_up/README.md).  
+Full product story: [workflow.md](../workflow.md). Wizard details: [new-machine.md](../new-machine.md).
 
 Prefer pre-release **v0.4.0-rc.4** (or newer 0.4.x) over GitHub **Latest** if Latest is still v0.3.0.
 
@@ -140,10 +142,10 @@ Then pipeline stages:
 
 ```bash
 mac-k3d eval --stage p0
-# continue: docs/binary-initializer/testing/testing-eval-pipeline.md (P1–P8)
+# continue: docs/testing/testing-eval-pipeline.md (P1–P8)
 ```
 
-Ensure Jenkins credential **`deepseek-api-key`** exists before LLM stages (see [../../secrets.md](../../secrets.md)).
+Ensure Jenkins credential **`deepseek-api-key`** exists before LLM stages (see [secrets.md](../secrets.md)).
 
 ---
 
@@ -174,4 +176,4 @@ SKIP_DOWNLOAD=1 RUN_EVAL_SMOKE=1 ./scripts/env_set_up/run_all.sh
 | Agent not active | Token in `worker.yaml`, then `mac-k3d config -c worker.yaml` |
 | Host port 8080 bind error | Should be rare: `setup`/`start` auto-remap busy cluster ports. If it still fails, free the process or set free `cluster.ports` hosts; keep Jenkins on **17070** unless that port is busy too |
 
-Sign-off tables: [testing-binary-initializer.md](testing-binary-initializer.md). Wipe/retest: tear down with `teardown`/`clean` as in [binary-initializer-new-machine.md](binary-initializer-new-machine.md).
+Sign-off tables: [testing-binary-initializer.md](testing-binary-initializer.md). Wipe/retest: tear down with `teardown`/`clean` as in [new-machine.md](../new-machine.md).

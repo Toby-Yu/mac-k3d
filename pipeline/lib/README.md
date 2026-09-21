@@ -15,4 +15,4 @@ Used by `mac-k3d eval` and Jenkins jobs `deepswe_one_task` (Pier) and `lolbench_
 
 Runtime artifacts go to **`eval-runs/`** (gitignored), reports under `eval-runs/reports/`.
 
-Users drop the iCode binary at `~/.local/share/mac-k3d/icode` (not in this folder), or clone via `ICODE_MODE=git`. See [docs/binary-initializer/icode-harness-inputs.md](../../docs/binary-initializer/icode-harness-inputs.md).
+Users provide iCode via Jenkins upload (`ICODE_RELEASE_FILE`), local persist/discover (`*-full-*` or `icode` under `~/.local/share/mac-k3d/`), or `ICODE_MODE=git`. See [docs/icode-harness-inputs.md](../../docs/icode-harness-inputs.md).

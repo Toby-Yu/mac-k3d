@@ -2,7 +2,7 @@
 
 Full path from a **new Mac or Linux** machine through Jenkins roles to an **iCode vs DeepSeek** DeepSWE evaluation and named JSON output.
 
-This is the **binary-initializer** story. The older **v0.3.0** cargo/`prepare` path stays in [../initializer-new-machine.md](../initializer-new-machine.md).
+This is the **binary-initializer** story. The older **v0.3.0** cargo/`prepare` path stays in [initializer-new-machine.md](initializer-new-machine.md).
 
 ## Why two processes
 
@@ -60,8 +60,8 @@ flowchart TD
 
 ## Process 1 — prepare the machine
 
-**User steps:** [binary-initializer-new-machine.md](testing/binary-initializer-new-machine.md) · clean-machine walkthrough: [clean-machine-binary-test.md](testing/clean-machine-binary-test.md)  
-**Pass/fail:** [testing-binary-initializer.md](testing/testing-binary-initializer.md) (Task 0–5 + Task 7 on Linux; Task 6 macOS later) · automated checks: [`scripts/env_set_up/`](../../scripts/env_set_up/README.md)
+**User steps:** [new-machine.md](new-machine.md) · clean-machine walkthrough: [clean-machine-binary-test.md](testing/clean-machine-binary-test.md)  
+**Pass/fail:** [testing-binary-initializer.md](testing/testing-binary-initializer.md) (Task 0–5 + Task 7 on Linux; Task 6 macOS later) · automated checks: [`scripts/env_set_up/`](../scripts/env_set_up/README.md)
 
 | Step | What | Why |
 |------|------|-----|
@@ -126,7 +126,7 @@ If `jenkins_agent.remote_fs` in `worker.yaml` is not the default, reports are at
 
 ## Release assets (all machines)
 
-One tag publishes **four** assets (see [`.github/workflows/release-binaries.yml`](../../.github/workflows/release-binaries.yml)):
+One tag publishes **four** assets (see [`.github/workflows/release-binaries.yml`](../.github/workflows/release-binaries.yml)):
 
 | Asset | Runner | How it is built |
 |-------|--------|-----------------|
@@ -143,11 +143,11 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 
 | Doc | Role |
 |-----|------|
-| [binary-initializer-new-machine.md](testing/binary-initializer-new-machine.md) | User bootstrap commands |
+| [new-machine.md](new-machine.md) | User bootstrap commands |
 | [clean-machine-binary-test.md](testing/clean-machine-binary-test.md) | Clean PC → binary → controller/worker → eval-ready |
-| [`scripts/env_set_up/`](../../scripts/env_set_up/README.md) | Automated controller/worker/eval-ready checks |
+| [`scripts/env_set_up/`](../scripts/env_set_up/README.md) | Automated controller/worker/eval-ready checks |
 | [testing-binary-initializer.md](testing/testing-binary-initializer.md) | Bootstrap sign-off |
 | [cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | Operator runbook: cloud root controller → local worker → JSON |
 | [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | Pipeline stage CLI tests |
-| [../secrets.md](../secrets.md) | Controller credentials (`deepseek-api-key`) |
-| [../lolbench-jenkins.md](../lolbench-jenkins.md) | `lolbench_one_task` is Harbor + iCode; `deepswe_one_task` is Pier + iCode |
+| [secrets.md](secrets.md) | Controller credentials (`deepseek-api-key`) |
+| [lolbench-jenkins.md](lolbench-jenkins.md) | `lolbench_one_task` is Harbor + iCode; `deepswe_one_task` is Pier + iCode |

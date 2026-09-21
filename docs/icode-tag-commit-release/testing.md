@@ -1,6 +1,6 @@
 # Re-test log (`feat/icode-tag-commit-release`)
 
-Not a second user guide. User steps: [user-guide](../binary-initializer/user-guide.md). Lab E0–E8 track (other branch): [testing-eval-pipeline](../binary-initializer/testing/testing-eval-pipeline.md).
+Not a second user guide. User steps: [user-guide](../user-guide.md). Lab E0–E8 table: [testing-eval-pipeline](../testing/testing-eval-pipeline.md).
 
 ## Fixtures (no Jenkins)
 
