@@ -2,7 +2,7 @@
 
 Full path from a **new Mac or Linux** machine through Jenkins roles to an **iCode vs DeepSeek** DeepSWE evaluation and named JSON output.
 
-This is the **binary-initializer** story. The older **v0.3.0** cargo/`prepare` path stays in [initializer-new-machine.md](initializer-new-machine.md).
+This is the **binary-initializer** story. Older `cargo install` / `prepare` steps are listed under **Historical** in [README.md](README.md), not this page.
 
 ## Why two processes
 

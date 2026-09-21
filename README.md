@@ -40,8 +40,6 @@ cp mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
 
 Open **Terminal** (do not rely on double-click). **Start here (controller + worker + eval):** [docs/user-guide.md](docs/user-guide.md). Extra walkthrough: [docs/new-machine.md](docs/new-machine.md).
 
-v0.3.0 cargo/`prepare` path: [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
-
 ## Install (developers)
 
 ```bash
@@ -94,8 +92,7 @@ See [docs/configuration.md](docs/configuration.md) for the full schema.
 - [iCode inputs](docs/icode-harness-inputs.md)
 - [Secrets](docs/secrets.md)
 - [Lab runbooks](docs/testing/README.md) (this team; not start-here)
-
-v0.3.0 cargo/`prepare` path (historical): [docs/initializer-new-machine.md](docs/initializer-new-machine.md).
+- [Releases / Historical](docs/README.md#releases-what-each-version-shipped) (what each version implemented; v0.3 cargo path is not start-here)
 
 ## License
 

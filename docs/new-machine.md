@@ -1,6 +1,6 @@
 # Initialize a new Linux or Mac (binary-initializer)
 
-This is the **binary-initializer** path (`setup`, GitHub Release asset). Full story (bootstrap → iCode eval): [workflow.md](workflow.md). The **v0.3.0 / initializer** path (`cargo install`, `prepare`) is [initializer-new-machine.md](initializer-new-machine.md).
+This is the **binary-initializer** path (`setup`, GitHub Release asset). Full story (bootstrap → iCode eval): [workflow.md](workflow.md). Older `cargo install` / `prepare` steps are listed under **Historical** in [README.md](README.md), not this page.
 
 **Users:** download a Release binary from this repo and run it. The binary installs Docker (and the rest) when you choose **Install**. After Jenkins is up, run `mac-k3d eval` for DeepSWE / iCode / DeepSeek ([testing-eval-pipeline.md](testing/testing-eval-pipeline.md)).
 

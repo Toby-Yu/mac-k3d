@@ -1,12 +1,12 @@
-# Initialize a new Linux or Mac computer
+# Historical v0.3.0: initialize a new Linux or Mac (`cargo install`)
 
-Not the product eval path. iCode git/release (Jenkins upload or clone): [user-guide.md](user-guide.md) and [icode-harness-inputs.md](icode-harness-inputs.md).
+Not the product path. Current install: [user-guide.md](user-guide.md) and [new-machine.md](new-machine.md). iCode git/release: [icode-harness-inputs.md](icode-harness-inputs.md).
 
-This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Current `setup` / Release asset: [new-machine.md](new-machine.md).
+This page is **v0.3.0 only** (`cargo install`, `prepare`, user installs Docker first). Keep for machines still on that bootstrap. New machines use the GitHub Release binary.
 
-**Users:** follow the command lists below to set up a blank machine.
+**Old machines only:** command lists below. Do not follow this page for a current Release install.
 
-**Developers:** pass/fail checks live in [testing-initializer.md](testing-initializer.md). This page does not describe how to verify the initializer.
+**v0.3 pass/fail:** [testing-initializer.md](testing-initializer.md). This page does not describe how to verify the initializer.
 
 One CLI (`mac-k3d`) on Linux and macOS.
 

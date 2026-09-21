@@ -1,12 +1,10 @@
-# Initializer testing (Mac + Linux)
+# Historical v0.3.0: initializer testing (Mac + Linux)
 
-Not the product eval path. iCode git/release (Jenkins upload or clone): [user-guide.md](user-guide.md) and [icode-harness-inputs.md](icode-harness-inputs.md).
+Not the product path. Current bootstrap sign-off: [testing/testing-binary-initializer.md](testing/testing-binary-initializer.md). iCode git/release: [user-guide.md](user-guide.md) and [icode-harness-inputs.md](icode-harness-inputs.md).
 
-This is the **v0.3.0 / initializer** path (`cargo install`, `prepare`). Current `setup` / Release asset: [testing/testing-binary-initializer.md](testing/testing-binary-initializer.md).
+This page is **v0.3.0 only** (`cargo install`, `prepare`). Step numbers **0–7** stay stable for machines still on that path.
 
-Use this document to **verify** the one CLI initializer (`mac-k3d prepare`) on macOS and Linux (step numbers **0–7** stay stable).
-
-If you are a **new user** bringing up a blank computer (not running the test checklist), use [initializer-new-machine.md](initializer-new-machine.md) instead.
+If you still need the v0.3 cargo bootstrap (not a current Release install), the matching user copy is [initializer-new-machine.md](initializer-new-machine.md).
 
 Related design: [prepare-wizard.md](prepare-wizard.md), [setup.md](setup.md), [commands.md](commands.md).
 

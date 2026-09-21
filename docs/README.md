@@ -2,7 +2,7 @@
 
 **Users start here:** [user-guide.md](user-guide.md).
 
-Do not add a new top-level folder for each feature branch. Update these product pages, or if the page is **only** for that branch, add `docs/<branch>/README.md` + `testing.md`. A pre-commit hook (`scripts/check_docs.sh`) enforces this.
+Do not add a new top-level folder for each feature branch. Update these product pages, or if the page is **only** for that branch, add `docs/<branch>/README.md` + `testing.md`. A pre-commit hook (`scripts/check_docs.sh`) enforces layout, start-here (no v0.3 links from the repo README or user-guide), and the **Releases** inventory below.
 
 ## Users (current product)
 
@@ -39,14 +39,24 @@ Copy-paste checklists with this lab’s IPs live under [testing/](testing/).
 | [setup.md](setup.md) | Wizard / k3d scenarios (includes local cluster without Jenkins) |
 | [prepare-wizard.md](prepare-wizard.md) | `prepare` questionnaire |
 
+## Releases (what each version shipped)
+
+Current install is the GitHub Release binary on **Users** above. This table is the inventory; it is not a second start-here. Repo README and [user-guide.md](user-guide.md) must not link the v0.3 pages.
+
+| Version | What it implemented | Where to read |
+|---------|---------------------|---------------|
+| v0.5.2 (this tree) | Jenkins iCode **git** (`branch` / `tag` / `commit`) or **release** file upload; leftover clone wipe | [user-guide.md](user-guide.md), [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) |
+| binary-initializer (v0.4+) | Download `mac-k3d-{os}-{arch}`; `setup` installs Docker; controller vs worker | [new-machine.md](new-machine.md), [binary-initializer/README.md](binary-initializer/README.md) |
+| v0.3.0 | `cargo install` + `prepare`; user installs Docker first | **Historical** below (not the product path) |
+
 ## Historical (v0.3.0 `cargo install` / `prepare`)
 
-Not the product path. Keep for old machines only.
+Not the product path. Keep for old machines only. Do not link these from the repo README or [user-guide.md](user-guide.md).
 
 | Document | Description |
 |----------|-------------|
-| [initializer-new-machine.md](initializer-new-machine.md) | Blank machine via `cargo install` |
-| [testing-initializer.md](testing-initializer.md) | Steps 0–7 |
+| [initializer-new-machine.md](initializer-new-machine.md) | v0.3.0 blank machine via `cargo install` |
+| [testing-initializer.md](testing-initializer.md) | v0.3.0 steps 0–7 |
 
 ## Branch process (not start-here)
 
