@@ -231,10 +231,10 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `default_task` | `ruff_1` | Exported as `TASK` / `ICODE_TASK` |
-| `default_eval_mode` | `binary` | `binary` (GitCode `-full-` tarball) or `source` (git + uv in the job) |
-| `default_icode_release` | *(empty)* | Default `ICODE_RELEASE` (full tarball URL/path or stub `icode`; test target v0.1.41) |
-| `default_icode_git_url` | *(empty)* | Default `ICODE_GIT_URL` for source mode |
-| `default_icode_git_ref` | `main` | Default git ref for source mode |
+| `default_eval_mode` | `binary` | Jenkins `ICODE_MODE` default: `release` (`binary` alias) or `git` (see [icode-harness-inputs.md](binary-initializer/icode-harness-inputs.md)) |
+| `default_icode_release` | *(empty)* | Local persist / CLI default for a `*-full-*` path or stub `icode` (not a Jenkins UI string; Jenkins release uses `ICODE_RELEASE_FILE` upload) |
+| `default_icode_git_url` | *(empty)* | Default `ICODE_GIT_URL` for git mode |
+| `default_icode_git_ref` | `main` | Default git ref for git mode |
 | `default_icode_args` | *(empty)* | Argv after `./icode` |
 | `default_harness` | *(empty → `icode`)* | Catalog harness (`mac-k3d set --harness`) |
 | `default_llm` | *(empty → `deepseek`)* | Catalog LLM family (`mac-k3d set --llm`) |

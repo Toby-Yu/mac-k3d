@@ -232,11 +232,11 @@ mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 On a machine that can reach Jenkins (usually the controller):
 
 ```bash
-mac-k3d eval --n-tasks 1 --icode-mode source
+mac-k3d eval --n-tasks 1 --icode-mode release
 # or stage-by-stage: see testing-eval-pipeline.md
 ```
 
-Worker must have Docker (already from setup). For source mode, clone/copy iCode to `$HOME/Documents/iCode-main` (or another discovered path) or pass `ICODE_SOURCE`. Local paid stages use a gitignored `.env`; Jenkins E7 uses credential `deepseek-api-key`.
+Worker must have Docker (already from setup). Place a `*-full-*` drop under `~/.local/share/mac-k3d/` or use `ICODE_MODE=git`. Local paid stages use a gitignored `.env`; Jenkins E7 uses credential `deepseek-api-key`.
 
 ---
 

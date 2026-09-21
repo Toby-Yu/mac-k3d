@@ -190,6 +190,68 @@ class ScoreResultsTests(unittest.TestCase):
             self.assertEqual(doc["tasks"][0]["baseline"]["tok_in"], 5)
             self.assertEqual(doc["tasks"][0]["dur_min"], 0.033)
 
+    def test_icode_git_copied_into_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = root / "tasks" / "example-task"
+            tasks.mkdir(parents=True)
+            harness = root / "harness"
+            harness.mkdir()
+            (harness / "meta.json").write_text(
+                json.dumps({"duration_seconds": 2, "token_usage": {"prompt": 1, "completion": 1, "total": 2}}),
+                encoding="utf-8",
+            )
+            baseline = root / "baseline"
+            baseline.mkdir()
+            (baseline / "meta.json").write_text("{}", encoding="utf-8")
+            work = root / "work"
+            work.mkdir()
+            (work / "icode_git.json").write_text(
+                json.dumps(
+                    {
+                        "url": "https://github.com/org/icode.git",
+                        "kind": "commit",
+                        "ref": "abcdef1",
+                        "sha": "abcdef1234567890abcdef1234567890abcdef12",
+                        "subject": "fix harness for PR",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out = root / "out.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(LIB / "score_results.py"),
+                    "--harness-dir",
+                    str(harness),
+                    "--baseline-dir",
+                    str(baseline),
+                    "--tasks-dir",
+                    str(root / "tasks"),
+                    "--n-tasks",
+                    "1",
+                    "--out",
+                    str(out),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "DEEPSEEK_MODEL": "deepseek-v4-pro",
+                    "BENCHMARK": "deepswe",
+                    "WORKDIR": str(work),
+                },
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            doc = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(validate(doc), [])
+            self.assertEqual(doc["icode_git"]["kind"], "commit")
+            self.assertEqual(doc["icode_git"]["ref"], "abcdef1")
+            self.assertTrue(doc["icode_git"]["sha"].startswith("abcdef12"))
+            self.assertEqual(doc["icode_git"]["subject"], "fix harness for PR")
+
     def test_pier_scores_newest_trial_not_older_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -441,7 +503,11 @@ class LocalEnvAndPierAdapterTests(unittest.TestCase):
     def test_env_example_has_no_secret(self):
         text = (ROOT / ".env.example").read_text(encoding="utf-8")
         self.assertIn("DEEPSEEK_API_KEY=", text)
+        self.assertIn("GITCODE_TOKEN=", text)
+        self.assertIn("GITHUB_TOKEN=", text)
         self.assertNotRegex(text, r"DEEPSEEK_API_KEY=sk-")
+        self.assertNotRegex(text, r"GITCODE_TOKEN=\S")
+        self.assertNotRegex(text, r"GITHUB_TOKEN=\S")
 
     def test_gitignore_covers_dotenv(self):
         proc = subprocess.run(
@@ -496,6 +562,31 @@ printf '%s' "$DEEPSEEK_API_KEY"
             )
             self.assertEqual(keep.returncode, 0, keep.stdout + keep.stderr)
             self.assertTrue(keep.stdout.endswith("already-set"), keep.stdout)
+
+            envf.write_text(
+                "DEEPSEEK_API_KEY=test-from-file\n"
+                "GITCODE_TOKEN=gc-from-file\n"
+                "MAC_K3D_GITHUB_PAT=gh-alias\n",
+                encoding="utf-8",
+            )
+            envf.chmod(0o600)
+            script_git = f"""
+unset DEEPSEEK_API_KEY GITCODE_TOKEN GITHUB_TOKEN MAC_K3D_GITHUB_PAT MAC_K3D_GITCODE_PAT
+export MAC_K3D_ENV_FILE={envf}
+export MAC_K3D_EVAL_WORKDIR={tmp}/eval-runs3
+source {common}
+printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
+"""
+            gitp = subprocess.run(
+                ["bash", "-c", script_git],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(gitp.returncode, 0, gitp.stdout + gitp.stderr)
+            self.assertTrue(gitp.stdout.endswith("gc:gc-from-file gh:gh-alias"), gitp.stdout)
+            self.assertNotIn("gc-from-file", gitp.stderr)
+            self.assertNotIn("gh-alias", gitp.stderr)
 
     def test_p5_uses_import_path_not_bare_agent_icode(self):
         text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
@@ -735,6 +826,17 @@ class P3IcodeBinaryTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("OK test_p3_icode.sh", proc.stdout)
+
+    def test_icode_input_url_ref_validation(self):
+        script = ROOT / "pipeline" / "stages" / "test_icode_input.sh"
+        proc = subprocess.run(
+            ["bash", str(script)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("OK test_icode_input.sh", proc.stdout)
 
 
 class SecretGuardTests(unittest.TestCase):

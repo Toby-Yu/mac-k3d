@@ -70,7 +70,7 @@ flowchart TD
   p7 --> p8 --> jenkins
 ```
 
-**iCode “source” in E0–E7** means the folder already on this PC (`ICODE_SOURCE=/home/Toby/Documents/Toby/iCode-main`). It is **not** a GitCode clone. The controller wizard `EVAL_MODE=binary` default is unused by this checklist.
+**iCode for E0–E7** is either a downloaded `*-full-*` drop (`ICODE_MODE=release`) or a GitHub/GitCode clone (`ICODE_MODE=git`). The worker does not keep a developer checkout. The controller wizard `EVAL_MODE=binary` default is unused by this checklist.
 
 ---
 
@@ -333,14 +333,14 @@ mac-k3d eval --stage p8 --n-tasks 1
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 cd ~/Documents/Toby/mac-k3d
-mac-k3d eval --n-tasks 1 --icode-mode source --model deepseek-v4-pro --yes
+mac-k3d eval --n-tasks 1 --icode-mode release --model deepseek-v4-pro --yes
 ```
 
-Or Jenkins UI: job `deepswe_one_task` → Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`, `ICODE_MODE=source`).
+Or Jenkins UI: job `deepswe_one_task` → Build with Parameters (`DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`, `ICODE_MODE=release`).
 
 **Expected:** build on this worker; archived JSON; same schema as E6. Confirm with `check_report.sh` on the downloaded artifact if needed.
 
-If the job still uses `deepseek-chat` or a hardcoded Toby `ICODE_SOURCE`, on the **cloud root** session after `git pull`:
+If the job still uses `deepseek-chat`, on the **cloud root** session after `git pull`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -385,6 +385,6 @@ Do not run Pier `--stage p4` / `deepswe_one_task` for LoLBench. Copy-paste L2–
 | `DEEPSEEK_API_KEY missing` | E4–E6: copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller. |
 | `No such option: --agent-dir` | Old P5 flags. This tree uses `--agent-import-path icode_pier_agent:ICodeAgent`. Pull/rebuild scripts; do not pass `--agent-dir` on Pier 0.3.1. |
 | Job still `deepseek-chat` | On cloud root: `mac-k3d config --skip-secrets` after pulling this tree. |
-| P3 `ICODE_SOURCE missing` | Put iCode at `$HOME/Documents/iCode-main` (or set `ICODE_SOURCE`). This lab often uses `/home/Toby/Documents/Toby/iCode-main` (auto-discovered if present). |
+| P3 iCode missing | Put a `*-full-*` drop in `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release`, or use `ICODE_MODE=git` with URL/ref. |
 | pier not found | `uv tool install datacurve-pier` |
 | Docker OOM / disk | DeepSWE images are large; free disk; keep N=1. |

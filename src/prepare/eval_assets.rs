@@ -187,6 +187,10 @@ mod tests {
             PIPELINE.get_file("lib/openai_compat.py").is_some(),
             "pipeline/lib/openai_compat.py must be embedded"
         );
+        assert!(
+            PIPELINE.get_file("lib/icode_input.sh").is_some(),
+            "pipeline/lib/icode_input.sh must be embedded"
+        );
     }
 
     #[test]

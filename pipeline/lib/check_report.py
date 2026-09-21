@@ -74,6 +74,17 @@ def validate(doc: object) -> list[str]:
         errors.append("harness should be icode")
     if doc.get("suite") not in (None, "deepswe", "lolbench"):
         errors.append("suite should be deepswe or lolbench")
+    icode_git = doc.get("icode_git")
+    if icode_git is not None:
+        if not isinstance(icode_git, dict):
+            errors.append("icode_git must be an object")
+        else:
+            for key in ("url", "kind", "ref", "sha"):
+                if key not in icode_git:
+                    errors.append(f"missing icode_git.{key}")
+            kind = icode_git.get("kind")
+            if kind is not None and kind not in ("branch", "tag", "commit"):
+                errors.append("icode_git.kind should be branch, tag, or commit")
     n_rollouts = doc.get("n_rollouts")
     if n_rollouts is not None and n_rollouts != 1:
         errors.append("n_rollouts must be 1 for *_one_task reports")

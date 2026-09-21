@@ -2,6 +2,8 @@
 # P5 — DeepSWE: Pier + iCode. LoLBench: Harbor + iCode.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
+# shellcheck source=../lib/icode_input.sh
+source "$PIPELINE_LIB/icode_input.sh"
 
 write_harness_meta() {
   python3 - "$HARNESS_DIR" "$DEEPSEEK_MODEL" "$STARTED_AT" "$FINISHED_AT" "$DURATION" "$1" "$PIPELINE_LIB" <<'PY'
@@ -79,7 +81,21 @@ if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
   [ -f "$WORKDIR/icode_bin_path.txt" ] || bash "$(dirname "$0")/p3_icode.sh"
   ICODE_BIN="$(cat "$WORKDIR/icode_bin_path.txt")"
   [ -n "$ICODE_BIN" ] && [ -f "$ICODE_BIN" ] || die "P3 did not resolve an icode binary (needed for Harbor bind-mount; GitCode clone is not used)"
-  HOST_ICODE="$(cd "$(dirname "$ICODE_BIN")" && pwd)"
+  if [ -s "$WORKDIR/icode_host_root.txt" ]; then
+    HOST_ICODE="$(cat "$WORKDIR/icode_host_root.txt")"
+  else
+    HOST_ICODE="$(cd "$(dirname "$ICODE_BIN")" && pwd)"
+  fi
+  [ -d "$HOST_ICODE" ] || die "icode host tree missing: $HOST_ICODE"
+  # Git clone has .venv/bin/icode. A release drop must keep its real binary —
+  # writing the git wrapper here overwrites it and Harbor then exits 127.
+  if [ -x "$HOST_ICODE/.venv/bin/icode" ]; then
+    echo "P5 harbor: git wrapper for $HOST_ICODE"
+    icode_embed_sandbox_cpython "$HOST_ICODE"
+    icode_write_wrapper "$HOST_ICODE/icode"
+  else
+    echo "P5 harbor: keeping release binary at $HOST_ICODE/$(basename "${ICODE_BIN:-icode}") (no git wrapper)"
+  fi
 
   export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
   export ICODE_MODEL="${ICODE_MODEL:-$DEEPSEEK_MODEL}"
@@ -106,6 +122,7 @@ if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
     printf 'ICODE_MODEL=%s\n' "${ICODE_MODEL}"
     printf 'ICODE_API_BASE=%s\n' "https://api.deepseek.com"
     printf 'ICODE_PROVIDER=%s\n' "DeepSeek"
+    printf 'PYTHONDONTWRITEBYTECODE=%s\n' "1"
     if [ -n "${GITCODE_TOKEN:-}" ]; then
       printf 'GITCODE_TOKEN=%s\n' "${GITCODE_TOKEN}"
     fi
@@ -164,6 +181,7 @@ PY
   CMD+=(--ae "ICODE_MODEL=${ICODE_MODEL}")
   CMD+=(--ae "ICODE_API_BASE=https://api.deepseek.com")
   CMD+=(--ae "ICODE_PROVIDER=DeepSeek")
+  CMD+=(--ae "PYTHONDONTWRITEBYTECODE=1")
   CMD+=(--ae "DEEPSEEK_MODEL=${DEEPSEEK_MODEL}")
   CMD+=(--ae "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")
   if [ -n "${GITCODE_TOKEN:-}" ]; then
@@ -201,6 +219,7 @@ PY
   heartbeat_pid=$!
   wait "$harbor_pid"
   rc=$?
+  icode_reclaim_host_tree "$HOST_ICODE"
   kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true
   if [ -s "$HARNESS_DIR/harbor.log" ]; then
@@ -258,16 +277,21 @@ done <"$WORKDIR/selected_tasks.txt"
 HOST_ICODE=""
 ICODE_BIN_HOST_IN_SANDBOX=""
 ICODE_BIN_IN_SANDBOX="icode"
-if [ "${ICODE_MODE}" = "source" ]; then
-  [ -d "$ICODE_SOURCE" ] || die "ICODE_SOURCE missing: $ICODE_SOURCE"
-  HOST_ICODE="$(cd "$ICODE_SOURCE" && pwd)"
+if [ -s "$WORKDIR/icode_host_root.txt" ]; then
+  HOST_ICODE="$(cat "$WORKDIR/icode_host_root.txt")"
+  [ -d "$HOST_ICODE" ] || die "icode host tree missing: $HOST_ICODE"
+  ICODE_BIN_HOST_IN_SANDBOX="/opt/icode-host/$(basename "${ICODE_BIN:-icode}")"
+  if [ -x "$HOST_ICODE/.venv/bin/icode" ]; then
+    icode_embed_sandbox_cpython "$HOST_ICODE"
+    icode_write_wrapper "$HOST_ICODE/icode"
+  fi
 elif [ -n "${ICODE_RELEASE:-}" ] && [[ "$ICODE_RELEASE" == http://* || "$ICODE_RELEASE" == https://* ]]; then
   HOST_ICODE=""
 elif [ -n "${ICODE_BIN:-}" ] && [ -f "$ICODE_BIN" ]; then
   HOST_ICODE="$(cd "$(dirname "$ICODE_BIN")" && pwd)"
   ICODE_BIN_HOST_IN_SANDBOX="/opt/icode-host/$(basename "$ICODE_BIN")"
 else
-  die "cannot resolve host iCode tree to bind-mount (set ICODE_SOURCE or a real ICODE_BIN path)"
+  die "cannot resolve host iCode tree to bind-mount (icode_host_root.txt or a real ICODE_BIN path)"
 fi
 
 PIER_HELP="$(pier run --help 2>&1 || true)"
@@ -293,6 +317,7 @@ umask 077
   printf 'ICODE_API_BASE=%s\n' "https://api.deepseek.com"
   printf 'ICODE_PROVIDER=%s\n' "DeepSeek"
   printf 'ICODE_SOURCE_HOST=%s\n' "/opt/icode-host"
+  printf 'PYTHONDONTWRITEBYTECODE=%s\n' "1"
   printf 'ICODE_BIN=%s\n' "${ICODE_BIN_IN_SANDBOX}"
   if [ -n "$ICODE_BIN_HOST_IN_SANDBOX" ]; then
     printf 'ICODE_BIN_HOST=%s\n' "$ICODE_BIN_HOST_IN_SANDBOX"
@@ -333,6 +358,7 @@ fi
 # Non-secret agent env only. API key is in --env-file (pier process → adapter os.environ).
 # ICODE_API_* match Harbor P5 so the binary can reach DeepSeek.
 CMD+=(--ae "ICODE_SOURCE_HOST=/opt/icode-host")
+CMD+=(--ae "PYTHONDONTWRITEBYTECODE=1")
 CMD+=(--ae "ICODE_BIN=${ICODE_BIN_IN_SANDBOX}")
 CMD+=(--ae "ICODE_API_BASE=https://api.deepseek.com")
 CMD+=(--ae "ICODE_PROVIDER=DeepSeek")
@@ -346,6 +372,7 @@ SECONDS=0
 set +e
 "${CMD[@]}" 2>&1 | tee "$HARNESS_DIR/pier.log"
 rc=${PIPESTATUS[0]:-1}
+icode_reclaim_host_tree "$HOST_ICODE"
 set -e
 DURATION="$SECONDS"
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

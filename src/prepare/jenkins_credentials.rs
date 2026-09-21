@@ -55,13 +55,13 @@ pub const CREDENTIAL_DEFS: &[CredDef] = &[
     CredDef {
         id: "gitcode-pat",
         env_var: "GITCODE_TOKEN",
-        prompt: "GitCode PAT (icode install / private repos)",
+        prompt: "GitCode PAT (private ICODE_MODE=git clone)",
         env_key: "MAC_K3D_GITCODE_PAT",
     },
     CredDef {
         id: "github-pat",
         env_var: "GITHUB_TOKEN",
-        prompt: "GitHub PAT (private agent repos / gh)",
+        prompt: "GitHub PAT (private ICODE_MODE=git clone / gh)",
         env_key: "MAC_K3D_GITHUB_PAT",
     },
 ];

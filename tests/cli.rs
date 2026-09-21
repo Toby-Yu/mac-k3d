@@ -76,7 +76,10 @@ fn eval_help_mentions_model() {
         .args(["eval", "--help"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("model"));
+        .stdout(predicates::str::contains("model"))
+        .stdout(predicates::str::contains("icode-git-url"))
+        .stdout(predicates::str::contains("icode-git-ref"))
+        .stdout(predicates::str::contains("icode-git-ref-kind"));
 }
 
 #[test]

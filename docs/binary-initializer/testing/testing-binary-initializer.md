@@ -460,7 +460,7 @@ mac-k3d eval --stage p8 --n-tasks 1
 Then once:
 
 ```bash
-mac-k3d eval --n-tasks 1 --icode-mode source
+mac-k3d eval --n-tasks 1 --icode-mode release
 # or local: mac-k3d eval --local --n-tasks 1
 ```
 
@@ -468,7 +468,7 @@ expected results:
 
 - **P1:** `pier --help` works (`uv tool install datacurve-pier` if missing).
 - **P2:** `$WORKDIR/deep-swe/tasks` exists (clone `https://github.com/datacurve-ai/deep-swe`).
-- **P3:** `icode --help` succeeds (source path above, or binary tarball via `ICODE_MODE=binary`).
+- **P3:** `icode --help` succeeds (`ICODE_MODE=release` drop or `ICODE_MODE=git` clone).
 - **P4:** Pier agent `icode` install script is executable.
 - **P5:** `PROGRESS` lines; one DeepSWE task through iCode (`--n-tasks 1`). Clear pier/docker errors still count as “stage ran”.
 - **P6:** DeepSeek API baseline on the same `instruction.md`.

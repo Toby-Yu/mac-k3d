@@ -16,7 +16,9 @@ elif [ -n "${ICODE_BIN_HOST:-}" ] && [ -f "${ICODE_BIN_HOST}" ]; then
   chmod +x /usr/local/bin/icode
 elif [ -d "${ICODE_SOURCE_HOST:-}" ]; then
   # Source tree mounted or copied by Pier/host wrapper
-  if [ -x "${ICODE_SOURCE_HOST}/.venv/bin/icode" ]; then
+  if [ -x "${ICODE_SOURCE_HOST}/.venv/sandbox-cpython/bin/python3.13" ] || [ -x "${ICODE_SOURCE_HOST}/.venv/sandbox-cpython/bin/python3" ] || [ -x "${ICODE_SOURCE_HOST}/.venv/sandbox-cpython/bin/python" ]; then
+    ln -sfn "${ICODE_SOURCE_HOST}/icode" /usr/local/bin/icode
+  elif [ -x "${ICODE_SOURCE_HOST}/.venv/bin/icode" ]; then
     ln -sf "${ICODE_SOURCE_HOST}/.venv/bin/icode" /usr/local/bin/icode
   else
     echo "ICODE_SOURCE_HOST present but no .venv/bin/icode; ensure uv sync on host first" >&2

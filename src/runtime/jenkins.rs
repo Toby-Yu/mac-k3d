@@ -15,6 +15,7 @@ const HELM_CHART: &str = "jenkins/jenkins";
 const ADDITIONAL_PLUGINS: &[&str] = &[
     "lockable-resources", // CPU_CORES / capacity locks for LoLBench workers
     "plain-credentials",  // Secret text credentials for LLM / forge PATs
+    "file-parameters",    // stashedFile: Pipeline-safe upload onto agent workspace
 ];
 
 pub async fn install_or_upgrade(helm: &Path, config: &MacK3dConfig) -> Result<()> {
@@ -123,6 +124,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert!(text.contains("lockable-resources"));
         assert!(text.contains("plain-credentials"));
+        assert!(text.contains("file-parameters"));
         assert!(!text.contains("- git"));
         assert!(!text.contains("workflow-aggregator"));
         assert!(text.contains("serviceType: LoadBalancer"));

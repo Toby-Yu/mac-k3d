@@ -8,6 +8,13 @@ use crate::eval_catalog;
 
 pub const LOLBENCH_ONE_TASK: &str = "lolbench_one_task";
 
+/// Static Jenkins parameter help. ASCII only (XML 1.0 POST). No apostrophes (Groovy singles).
+const DESC_ICODE_MODE: &str = "Choose release (upload a drop) or git (clone URL + ref). Fill only the fields for that choice; leave the other group as it is.";
+const DESC_ICODE_RELEASE_FILE: &str = "Release: choose the icode / icode-*-full-* drop here. Git: do not choose a file; leave this control as it is. Vice versa: if you chose git, ignore this; if you chose release, this is the file you upload.";
+const DESC_ICODE_GIT_URL: &str = "Git: https URL on github.com or gitcode.com. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
+const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, or commit SHA (match KIND). Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
+const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, or commit (no auto). Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
+
 /// Options used when rendering / updating `lolbench_one_task`.
 #[derive(Debug, Clone)]
 pub struct JobOpts {
@@ -94,10 +101,17 @@ impl JobOpts {
 }
 
 fn normalize_eval_mode(s: &str) -> String {
-    if s.trim().eq_ignore_ascii_case("source") {
-        "source".into()
-    } else {
-        "binary".into()
+    match s.trim().to_ascii_lowercase().as_str() {
+        "git" | "source" => "git".into(),
+        "release" | "binary" | "" => "release".into(),
+        other => other.to_string(),
+    }
+}
+
+fn jenkins_icode_mode(opts: &JobOpts) -> &'static str {
+    match opts.default_eval_mode.trim().to_ascii_lowercase().as_str() {
+        "git" | "source" => "git",
+        _ => "release",
     }
 }
 
@@ -209,7 +223,8 @@ fn update_job_script(
     cookie_file: &Path,
     opts: &JobOpts,
 ) -> Result<()> {
-    if update_job_config_xml(base, auth, crumb, cookie_file, opts).is_ok() {
+    let xml_ok = update_job_config_xml(base, auth, crumb, cookie_file, opts).is_ok();
+    if xml_ok {
         return Ok(());
     }
     let script = jenkinsfile(opts);
@@ -401,10 +416,10 @@ fn groovy_escape(s: &str) -> String {
 
 #[allow(dead_code)]
 fn eval_mode_choices(default_mode: &str) -> (&'static str, &'static str) {
-    if default_mode == "source" {
-        ("source", "binary")
+    if default_mode == "git" {
+        ("git", "release")
     } else {
-        ("binary", "source")
+        ("release", "git")
     }
 }
 
@@ -508,6 +523,22 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     let harness_fb = eval_catalog::HARNESSES[0];
     let llm_fb = eval_catalog::LLMS[0];
     let model_fb = eval_catalog::default_model();
+    let icode_mode_choices = eval_catalog::choices_preferred_first(
+        eval_catalog::ICODE_CI_MODES,
+        jenkins_icode_mode(opts),
+    );
+    let icode_mode_g = groovy_quoted_list(&icode_mode_choices);
+    let icode_mode_fb = jenkins_icode_mode(opts);
+    let icode_git_url_g = groovy_escape(opts.default_icode_git_url.trim());
+    let icode_git_ref_g = groovy_escape(&opts.default_icode_git_ref);
+    let icode_git_ref_kind_choices =
+        eval_catalog::choices_preferred_first(eval_catalog::ICODE_GIT_REF_KINDS, "branch");
+    let icode_git_ref_kind_g = groovy_quoted_list(&icode_git_ref_kind_choices);
+    let icode_mode_desc_g = groovy_escape(DESC_ICODE_MODE);
+    let icode_release_file_desc_g = groovy_escape(DESC_ICODE_RELEASE_FILE);
+    let icode_git_url_desc_g = groovy_escape(DESC_ICODE_GIT_URL);
+    let icode_git_ref_desc_g = groovy_escape(DESC_ICODE_GIT_REF);
+    let icode_git_ref_kind_desc_g = groovy_escape(DESC_ICODE_GIT_REF_KIND);
     format!(
         r#"pipeline {{
   agent {{ label params.AGENT_LABEL }}
@@ -523,9 +554,11 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     string(name: 'TASK', defaultValue: '{task}', description: 'One question id (empty + N_TASKS = first N sorted). LoLBench example: ruff_1')
     string(name: 'TASKS', defaultValue: '{tasks}', description: 'Comma-separated question ids (overrides TASK and first-N)')
     string(name: 'N_TASKS', defaultValue: '{n_tasks}', description: 'First N sorted questions when TASK and TASKS are empty. N>1 is slower/costlier.')
-    choice(name: 'ICODE_MODE', choices: ['binary', 'source'], description: 'iCode delivery (users: binary drop)')
-    string(name: 'ICODE_RELEASE', defaultValue: '', description: 'binary: empty = ~/.local/share/mac-k3d/icode or icode-*-full-* (tar.gz / folder)')
-    string(name: 'ICODE_SOURCE', defaultValue: '', description: 'source: path on worker; empty = discover (developers)')
+    choice(name: 'ICODE_MODE', choices: [{icode_mode_g}], description: '{icode_mode_desc_g}')
+    stashedFile(name: 'ICODE_RELEASE_FILE', description: '{icode_release_file_desc_g}')
+    string(name: 'ICODE_GIT_URL', defaultValue: '{icode_git_url_g}', description: '{icode_git_url_desc_g}')
+    string(name: 'ICODE_GIT_REF', defaultValue: '{icode_git_ref_g}', description: '{icode_git_ref_desc_g}')
+    choice(name: 'ICODE_GIT_REF_KIND', choices: [{icode_git_ref_kind_g}], description: '{icode_git_ref_kind_desc_g}')
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4')
     string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Dir with pipeline/stages/run_all.sh (optional)')
@@ -536,7 +569,14 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     stage('Prepare') {{
       steps {{
         lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
-{cred_open}          sh '''
+{cred_open}          script {{
+            try {{
+              unstash 'ICODE_RELEASE_FILE'
+            }} catch (Throwable t) {{
+              echo "No ICODE_RELEASE_FILE stash (${{t}})"
+            }}
+          }}
+          sh '''
             set -euo pipefail
             echo "PROGRESS 5% prepare workspace"
             export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
@@ -559,9 +599,20 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             export N_TASKS="${{N_TASKS:-1}}"
             export TASK="${{TASK:-}}"
             export TASKS="${{TASKS:-}}"
-            export ICODE_MODE="${{ICODE_MODE:-binary}}"
-            export ICODE_RELEASE="${{ICODE_RELEASE:-}}"
-            export ICODE_SOURCE="${{ICODE_SOURCE:-}}"
+            export ICODE_MODE="${{ICODE_MODE:-{icode_mode_fb}}}"
+            export ICODE_RELEASE=""
+            export ICODE_RELEASE_UPLOADED=""
+            if [ "${{ICODE_MODE}}" = "git" ]; then
+              bash "$MAC_K3D_ROOT/pipeline/lib/icode_input.sh" --force-rm "${{WORKSPACE}}/ICODE_RELEASE_FILE"
+              export ICODE_RELEASE=""
+              export ICODE_RELEASE_UPLOADED=""
+            elif [ -s "${{WORKSPACE}}/ICODE_RELEASE_FILE" ]; then
+              export ICODE_RELEASE="${{WORKSPACE}}/ICODE_RELEASE_FILE"
+              export ICODE_RELEASE_UPLOADED=1
+            fi
+            export ICODE_GIT_URL="${{ICODE_GIT_URL:-}}"
+            export ICODE_GIT_REF="${{ICODE_GIT_REF:-main}}"
+            export ICODE_GIT_REF_KIND="${{ICODE_GIT_REF_KIND:-branch}}"
             export HARNESS="${{HARNESS:-{harness_fb}}}"
             export LLM="${{LLM:-{llm_fb}}}"
             export BENCHMARK="${{BENCHMARK:-{bench}}}"
@@ -570,6 +621,12 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             if [ -z "${{DEEPSEEK_API_KEY:-}}" ]; then
               echo "DEEPSEEK_API_KEY missing. Store credential deepseek-api-key on the Jenkins controller." >&2
               exit 1
+            fi
+            if [ "${{ICODE_MODE}}" = "release" ] || [ "${{ICODE_MODE}}" = "binary" ]; then
+              if [ -z "${{ICODE_RELEASE}}" ]; then
+                echo "ICODE_MODE=release: upload ICODE_RELEASE_FILE on Jenkins Build with Parameters (not a worker path)." >&2
+                exit 1
+              fi
             fi
             echo "PROGRESS 10% running pipeline/stages"
             bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
@@ -602,6 +659,16 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
         model_fb = model_fb,
         cred_open = cred_open,
         cred_close = cred_close,
+        icode_mode_g = icode_mode_g,
+        icode_mode_fb = icode_mode_fb,
+        icode_git_url_g = icode_git_url_g,
+        icode_git_ref_g = icode_git_ref_g,
+        icode_git_ref_kind_g = icode_git_ref_kind_g,
+        icode_mode_desc_g = icode_mode_desc_g,
+        icode_release_file_desc_g = icode_release_file_desc_g,
+        icode_git_url_desc_g = icode_git_url_desc_g,
+        icode_git_ref_desc_g = icode_git_ref_desc_g,
+        icode_git_ref_kind_desc_g = icode_git_ref_kind_desc_g,
     )
 }
 
@@ -620,8 +687,23 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
     let harness_xml = xml_choice_strings(&harness_choices);
     let llm_xml = xml_choice_strings(&llm_choices);
     let model_xml = xml_choice_strings(&model_choices);
+    let icode_mode_choices = eval_catalog::choices_preferred_first(
+        eval_catalog::ICODE_CI_MODES,
+        jenkins_icode_mode(opts),
+    );
+    let icode_mode_xml = xml_choice_strings(&icode_mode_choices);
+    let icode_git_url_xml = xml_escape(opts.default_icode_git_url.trim());
+    let icode_git_ref_xml = xml_escape(&opts.default_icode_git_ref);
+    let icode_git_ref_kind_choices =
+        eval_catalog::choices_preferred_first(eval_catalog::ICODE_GIT_REF_KINDS, "branch");
+    let icode_git_kind_xml = xml_choice_strings(&icode_git_ref_kind_choices);
+    let icode_mode_desc_xml = xml_escape(DESC_ICODE_MODE);
+    let icode_release_file_desc_xml = xml_escape(DESC_ICODE_RELEASE_FILE);
+    let icode_git_url_desc_xml = xml_escape(DESC_ICODE_GIT_URL);
+    let icode_git_ref_desc_xml = xml_escape(DESC_ICODE_GIT_REF);
+    let icode_git_ref_kind_desc_xml = xml_escape(DESC_ICODE_GIT_REF_KIND);
     format!(
-        r#"<?xml version='1.1' encoding='UTF-8'?>
+        r#"<?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
   <description>{desc_xml}</description>
   <keepDependencies>false</keepDependencies>
@@ -669,23 +751,38 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         </hudson.model.StringParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
           <name>ICODE_MODE</name>
+          <description>{icode_mode_desc_xml}</description>
           <choices class="java.util.Arrays$ArrayList">
             <a class="string-array">
-              <string>binary</string>
-              <string>source</string>
+{icode_mode_xml}
             </a>
           </choices>
         </hudson.model.ChoiceParameterDefinition>
+        <io.jenkins.plugins.file_parameters.StashedFileParameterDefinition>
+          <name>ICODE_RELEASE_FILE</name>
+          <description>{icode_release_file_desc_xml}</description>
+        </io.jenkins.plugins.file_parameters.StashedFileParameterDefinition>
         <hudson.model.StringParameterDefinition>
-          <name>ICODE_RELEASE</name>
-          <defaultValue></defaultValue>
+          <name>ICODE_GIT_URL</name>
+          <description>{icode_git_url_desc_xml}</description>
+          <defaultValue>{icode_git_url_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
-          <name>ICODE_SOURCE</name>
-          <defaultValue></defaultValue>
+          <name>ICODE_GIT_REF</name>
+          <description>{icode_git_ref_desc_xml}</description>
+          <defaultValue>{icode_git_ref_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>ICODE_GIT_REF_KIND</name>
+          <description>{icode_git_ref_kind_desc_xml}</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+{icode_git_kind_xml}
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>AGENT_LABEL</name>
           <defaultValue>lolbench</defaultValue>
@@ -1002,6 +1099,24 @@ mod tests {
         assert!(jf.contains("ruff_1"));
         assert!(jf.contains("export TASK="));
         assert!(jf.contains("export HARNESS="));
+        assert!(jf.contains("export ICODE_MODE="));
+        assert!(jf.contains("ICODE_GIT_URL"));
+        assert!(jf.contains("ICODE_GIT_REF"));
+        assert!(jf.contains("ICODE_GIT_REF_KIND"));
+        assert!(!jf.contains("ICODE_SOURCE"));
+        assert!(!jf.contains("'source'"));
+        assert!(!jf.contains("string(name: 'ICODE_RELEASE'"));
+        assert!(jf.contains("ICODE_RELEASE_FILE"));
+        assert!(jf.contains("ICODE_RELEASE_UPLOADED"));
+        assert!(jf.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"));
+        assert!(jf.contains("unstash 'ICODE_RELEASE_FILE'"));
+        assert!(jf.contains("--force-rm"));
+        assert!(jf.contains(r#"if [ "${ICODE_MODE}" = "git" ]"#));
+        assert!(jf.contains("leave this control as it is"));
+        assert!(jf.contains("Vice versa"));
+        assert!(jf.contains("ICODE_GIT_REF_KIND:-branch"));
+        assert!(!jf.contains("ICODE_GIT_REF_KIND:-auto"));
+        assert!(jf.contains("upload ICODE_RELEASE_FILE"));
         assert!(jf.contains("icode"));
         assert!(jf.contains("lock(label: 'CPU_CORES'"));
         assert!(jf.contains("withCredentials"));
@@ -1022,7 +1137,36 @@ mod tests {
         assert!(xml.contains("<name>BENCHMARK</name>"));
         assert!(xml.contains("<string>lolbench</string>"));
         assert!(xml.contains("<defaultValue>ruff_1</defaultValue>"));
-        assert!(xml.contains("<string>binary</string>"));
+        assert!(xml.contains("<string>release</string>"));
+        assert!(xml.contains("<name>ICODE_GIT_URL</name>"));
+        assert!(xml.contains("<name>ICODE_GIT_REF</name>"));
+        assert!(xml.contains("<name>ICODE_GIT_REF_KIND</name>"));
+        assert!(xml.contains("<name>ICODE_RELEASE_FILE</name>"));
+        assert!(xml.contains("StashedFileParameterDefinition"));
+        assert!(
+            !xml.contains("<name>ICODE_RELEASE</name>"),
+            "Jenkins UI must not ask for a worker ICODE_RELEASE path"
+        );
+        assert!(xml.contains("<?xml version='1.0'"));
+        assert!(xml.contains("leave this control as it is"));
+        assert!(xml.contains("Vice versa"));
+        assert!(xml.contains("<string>branch</string>"));
+        assert!(xml.contains("<string>tag</string>"));
+        assert!(xml.contains("<string>commit</string>"));
+        assert!(
+            !xml.contains("<string>auto</string>"),
+            "Jenkins KIND list is branch/tag/commit only"
+        );
+        assert!(
+            !xml.contains('\u{2013}'),
+            "en-dash breaks Jenkins XML 1.1 POST"
+        );
+        assert!(
+            !xml.contains('\u{2192}'),
+            "unicode arrow breaks Jenkins XML 1.1 POST"
+        );
+        assert!(!xml.contains("<name>ICODE_SOURCE</name>"));
+        assert!(!xml.contains("<string>source</string>"));
         assert!(!xml.contains("<name>EVAL_MODE</name>"));
         assert!(!xml.contains("<name>LOLBENCH_PATH</name>"));
         assert!(xml.contains("pipeline {"));
@@ -1037,7 +1181,7 @@ mod tests {
         let opts = JobOpts::from_config(&cfg, Vec::new());
         assert_eq!(opts.default_icode_release, "/tmp/icode");
         assert_eq!(opts.default_task, "ruff_1");
-        assert_eq!(opts.default_eval_mode, "binary");
+        assert_eq!(opts.default_eval_mode, "release");
         assert_eq!(opts.default_icode_git_ref, "main");
     }
 
@@ -1048,12 +1192,15 @@ mod tests {
         cfg.jenkins_job.default_icode_git_url = "https://gitcode.com/example/icode.git".into();
         cfg.jenkins_job.default_icode_git_ref.clear();
         let opts = JobOpts::from_config(&cfg, Vec::new());
-        assert_eq!(opts.default_eval_mode, "source");
+        assert_eq!(opts.default_eval_mode, "git");
         assert_eq!(opts.default_icode_git_ref, "main");
         assert_eq!(
             opts.default_icode_git_url,
             "https://gitcode.com/example/icode.git"
         );
+        let jf = jenkinsfile(&opts);
+        assert!(jf.contains("ICODE_MODE:-git"));
+        assert!(!jf.contains("export ICODE_SOURCE="));
     }
 
     #[test]
@@ -1119,6 +1266,10 @@ mod tests {
         assert!(deepswe.contains("Pier + iCode"));
         assert!(!deepswe.contains("harbor run"));
         assert!(!lolbench.contains("harbor run"));
+        assert!(deepswe.contains("StashedFileParameterDefinition"));
+        assert!(lolbench.contains("StashedFileParameterDefinition"));
+        assert!(!deepswe.contains("<name>ICODE_RELEASE</name>"));
+        assert!(!lolbench.contains("<name>ICODE_RELEASE</name>"));
     }
 
     #[test]
@@ -1158,6 +1309,19 @@ mod tests {
     }
 
     #[test]
+    fn job_xml_file_param_does_not_bake_worker_release_path() {
+        let mut opts = sample_opts();
+        opts.default_icode_release = "/tmp/lab-icode-full-drop".into();
+        let xml = job_config_xml(&opts);
+        assert!(xml.contains("<name>ICODE_RELEASE_FILE</name>"));
+        assert!(xml.contains("StashedFileParameterDefinition"));
+        assert!(!xml.contains("/tmp/lab-icode-full-drop"));
+        assert!(!xml.contains("file(name:"));
+        assert!(xml.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"));
+        assert!(xml.contains("unstash 'ICODE_RELEASE_FILE'"));
+    }
+
+    #[test]
     fn deepseek_model_is_catalog_choice_with_both_ids() {
         let xml = deepswe_one_task_job_xml(&deepswe_opts(Vec::new()));
         assert!(xml.contains("<name>DEEPSEEK_MODEL</name>"));
@@ -1170,7 +1334,9 @@ mod tests {
         opts.default_deepseek_model = "deepseek-flash".into();
         let jf = jenkinsfile(&opts);
         assert!(
-            jf.contains("choice(name: 'DEEPSEEK_MODEL', choices: ['deepseek-flash', 'deepseek-v4-pro']"),
+            jf.contains(
+                "choice(name: 'DEEPSEEK_MODEL', choices: ['deepseek-flash', 'deepseek-v4-pro']"
+            ),
             "{jf}"
         );
         assert!(jf.contains("export DEEPSEEK_MODEL=\"${DEEPSEEK_MODEL:-deepseek-v4-pro}\""));

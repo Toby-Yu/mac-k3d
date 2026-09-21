@@ -5,7 +5,7 @@ Copy-paste these blocks. Every command has a `#` comment.
 Two different downloads:
 
 - **mac-k3d CLI** — GitHub asset `mac-k3d-linux-x86_64` (or `linux-aarch64` / `darwin-aarch64` / `darwin-x86_64`). Used in steps 1–2.
-- **iCode release** — official `icode-<os>-<arch>-full-vX.Y.Z` from the iCode project. Used in step 3 on the **worker only**. Not the same file as mac-k3d.
+- **iCode release** — official `icode-<os>-<arch>-full-vX.Y.Z` from the iCode project. Jenkins **uploads** it on **Build with Parameters**. Local `--stage` / `--local` still uses a worker path or `~/.local/share/mac-k3d/` discover. Not the same file as mac-k3d.
 
 Prefer **v0.5.2** Latest (or this checkout’s `cargo build --release`). **v0.5.1** DeepSWE Pier used the wrong iCode CLI and often exited in ~20s. **v0.5.0** still has the old P3: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1+.
 
@@ -25,7 +25,7 @@ Default worker Jenkins URL is `http://43.107.42.252:17070`. Type a new `http://<
 - Cloud Linux VM (this lab: `43.107.42.252`) with **root**, ~8 GB RAM, **60 GB** free, security group **17070** open to the worker.
 - New Mac or Linux worker with **sudo** (Linux may be a single root account), ~8 GB RAM, **40 GB** free, Docker allowed.
 - **mac-k3d CLI** GitHub asset matching the machine (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, `mac-k3d-darwin-x86_64`).
-- **iCode release** `icode-<os>-<arch>-full-vX.Y.Z` (or a standalone executable named `icode`) to copy onto the worker **after** setup, before eval.
+- **iCode release** `icode-<os>-<arch>-full-vX.Y.Z` (or a standalone executable named `icode`) to **upload in Jenkins** when you start a release-mode job. For local `--stage` / `--local` only, copy it onto the worker after setup.
 
 Developer checkout + `.env` is optional (appendix). Users run eval through Jenkins.
 
@@ -122,42 +122,34 @@ In Jenkins: **Manage Jenkins → Nodes**. This machine must be **online** with l
 
 ---
 
-## 3. Place the iCode release on the worker (after the node is Online, before eval)
+## 3. Provide iCode (after the node is Online, before eval)
 
-Do this on the **worker**, not the cloud controller. New users use **A**. Type a Jenkins path only when the file is **not** in the drop folder.
+Details: [icode-harness-inputs.md](icode-harness-inputs.md). Both methods work for DeepSWE and LoLBench.
 
-### A. New user — binary (default)
-
-Put **one** official iCode download into `~/.local/share/mac-k3d/` (keep the name GitHub/GitCode gave it; do not invent a `.tar.gz` suffix):
+1. **Release binary (typical)** — download `icode-<os>-<arch>-full-vX.Y.Z`. **Jenkins:** Build with Parameters → `ICODE_MODE=release` → upload `ICODE_RELEASE_FILE` (the original `*-full-*` name is lost; P3 uses gzip/tar magic or copies a standalone binary as `icode`). **Local `--stage` / `--local`:** copy to `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release /path/to/that-drop`. This is **not** a git clone of GitHub Release assets.
+2. **Git clone** — `ICODE_MODE=git` plus URL + `ICODE_GIT_REF` + `ICODE_GIT_REF_KIND` (`branch` / `tag` / `commit`). A tag checkout is a git tag, not a downloaded zip. Report field `icode_git` records the resolved SHA. The clone is under the eval workdir, not a permanent developer tree.
 
 ```bash
+# Local only (not Jenkins): discover under the worker share
 mkdir -p "$HOME/.local/share/mac-k3d"
 # Browser often saves this with no .tar.gz — that is OK:
 cp /path/to/icode-linux-x86_64-full-v0.1.41 "$HOME/.local/share/mac-k3d/"
-# or the archive, if that is what you have:
-# cp /path/to/icode-linux-x86_64-full-v0.1.41.tar.gz "$HOME/.local/share/mac-k3d/"
-# or an unpacked folder of that name:
-# cp -a /path/to/icode-linux-x86_64-full-v0.1.41 "$HOME/.local/share/mac-k3d/"
-# or a standalone executable already named icode:
-# cp /path/to/icode "$HOME/.local/share/mac-k3d/icode" && chmod +x "$HOME/.local/share/mac-k3d/icode"
 ```
 
 - A `*.tar.gz` / `*.tgz` or unpacked `*-full-*` **folder** must contain a file named `icode`.
-- A **single file** named `icode-…-full-…` (no suffix) is the release itself; P3 copies it to `eval-runs/icode-bin/icode`.
-- Do **not** also leave an old file named `icode` next to a `*-full-*` drop. Discover prefers the official `*-full-*` name, then `icode`.
-- Do **not** copy `.venv/bin/icode` (tiny Python wrapper). Do **not** put iCode inside `pipeline/` (mac-k3d extracts that folder).
+- Do **not** copy `.venv/bin/icode` (tiny Python wrapper) into the drop folder. Do **not** put iCode inside `pipeline/`.
 
-Optional fallback (sudo, not required): the same shapes under `/opt/mac-k3d/`.
+```bash
+# Persist the binary drop path (once)
+mac-k3d set --icode-release /path/to/icode-linux-x86_64-full-v0.1.41
 
-If the file stays in Downloads, set Jenkins `ICODE_RELEASE` to that path (or `mac-k3d eval --icode-release`). Still leave `ICODE_SOURCE` empty.
+# Git tag (clone, not Release assets)
+mac-k3d eval --stage p3 --icode-mode git \
+  --icode-git-url https://github.com/ORG/icode.git \
+  --icode-git-ref v0.1.41 --icode-git-ref-kind tag
+```
 
-Jenkins UI: `ICODE_MODE=binary`, **`ICODE_RELEASE` and `ICODE_SOURCE` empty**.
-
-### B. Developer — source
-
-Use a **directory** (git checkout) that has `.venv/bin/icode` or `pyproject.toml` (then `uv sync` on the worker).
-
-Jenkins: `ICODE_MODE=source`. Leave `ICODE_RELEASE` empty. Leave **`ICODE_SOURCE` empty** only if the tree is one of: `$HOME/Documents/iCode-main`, `$HOME/iCode-main`, `$HOME/src/iCode-main`, or `iCode-main` next to the mac-k3d checkout. Otherwise paste the folder path, or `mac-k3d eval --icode-mode source --icode-source /path/to/iCode`.
+Rebuild/extract pipeline on the worker (`mac-k3d eval --stage p0` or `config`) so `pipeline/lib/icode_input.sh` is present.
 
 ---
 
@@ -173,15 +165,19 @@ Jenkins: `ICODE_MODE=source`. Leave `ICODE_RELEASE` empty. Leave **`ICODE_SOURCE
 | HARNESS / LLM / BENCHMARK | `icode` / `deepseek` / `deepswe` or `lolbench` (fixed on that job) |
 | TASK | empty on DeepSWE = first alphabetical; LoLBench default `ruff_1` |
 | N_TASKS | `1` |
-| ICODE_MODE | `binary` |
-| ICODE_RELEASE | empty (discovers the drop path) |
-| ICODE_SOURCE | empty |
+| ICODE_MODE | Choose `release` (upload a drop) or `git` (clone URL + ref). Fill only the fields for that choice; leave the other group as it is. |
+| ICODE_RELEASE_FILE | **release:** choose the `icode` / `icode-*-full-*` drop here. **git:** do not choose a file; leave this control as it is. Vice versa: if you chose git, ignore this; if you chose release, this is the file you upload. |
+| ICODE_GIT_URL | **git:** https URL on github.com or gitcode.com. **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required. |
+| ICODE_GIT_REF | **git:** branch name, tag, or commit SHA (match KIND). **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required. |
+| ICODE_GIT_REF_KIND | **git:** pick `branch`, `tag`, or `commit` (no auto). **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF. |
 | AGENT_LABEL | `lolbench` |
 | CPU_LOCK_QTY | `4` |
 | MAC_K3D_ROOT | empty |
 | DEEPSEEK_MODEL | `deepseek-v4-pro` (catalog default; or `deepseek-flash`) |
 
-Source-mode users: set `ICODE_MODE=source` and fill `ICODE_SOURCE` only when the tree is not in the default list (see §3 B).
+Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND`. The archived JSON includes `icode_git` (resolved SHA + subject). Full split: [icode-harness-inputs.md](icode-harness-inputs.md).
+
+Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --yes` cannot attach a file (it uses GET `buildWithParameters`).
 
 3. Click **Build**. Console must say `Running on <this-worker-name>`.
 4. Download **Build Artifacts** → `eval-runs/reports/eval-icode-deepseek-{deepswe|lolbench}-n1-*.json`.
@@ -193,11 +189,12 @@ Source-mode users: set `ICODE_MODE=source` and fill `ICODE_SOURCE` only when the
 # Queue deepswe_one_task on the controller. Uses worker.yaml when config.yaml is absent.
 # Does not run Pier on this shell — watch Jenkins Console Output.
 export PATH="$HOME/.local/bin:$PATH"
-mac-k3d eval --benchmark deepswe --n-tasks 1 --icode-mode binary --yes
-# LoLBench, one task through Harbor + iCode (not Pier):
-# mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode binary --yes
-# Same thing, explicit file:
-# mac-k3d eval -c ~/.config/mac-k3d/worker.yaml --benchmark deepswe --icode-mode binary --yes
+# Git mode still queues with --yes:
+mac-k3d eval --benchmark deepswe --n-tasks 1 --icode-mode git \
+  --icode-git-url https://github.com/ORG/icode.git --icode-git-ref main --yes
+# Release mode: do not use --yes. Open Jenkins UI, set ICODE_MODE=release, upload ICODE_RELEASE_FILE.
+# LoLBench git, one task through Harbor + iCode (not Pier):
+# mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git --icode-git-url … --yes
 ```
 
 `--yes` without `--local` means **Jenkins**. An old binary may run a local eval instead; replace `~/.local/bin/mac-k3d` with v0.5.2 or newer.
@@ -224,7 +221,7 @@ export PATH="$HOME/.local/bin:$PATH"
 mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode binary
 # mac-k3d eval --local --benchmark lolbench --task ruff_1 --icode-mode binary
 # LoLBench local still uses Harbor in P5; P3 still resolves the iCode drop for the bind-mount
-# or ICODE_MODE=source if you have an iCode git tree
+# or ICODE_MODE=git to clone from GitHub/GitCode
 ```
 
 ---
@@ -235,7 +232,8 @@ mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode binary
 |---------|------------|
 | Waiting for executor | Worker node offline; do not `start -c worker.yaml` |
 | `pipeline/stages/run_all.sh` missing | Worker: `mac-k3d config -c worker.yaml` (extracts) **or** `mac-k3d eval --stage p0` |
-| iCode not found | Drop official `icode-*-full-*` or a file named `icode` in `~/.local/share/mac-k3d/` (see §3). Both DeepSWE (Pier) and LoLBench (Harbor) bind-mount that drop; GitCode clone is not used. |
+| iCode not found | Jenkins release: upload `ICODE_RELEASE_FILE`. Local: drop official `icode-*-full-*` or a file named `icode` in `~/.local/share/mac-k3d/` (see §3), or use `ICODE_MODE=git`. Both DeepSWE (Pier) and LoLBench (Harbor) bind-mount that tree. |
+| `cannot remove leftover … icode-src` | Old pipeline on the worker. Rebuild/install CLI, then `mac-k3d eval --stage p0` (or `config -c worker.yaml`) so `~/.local/share/mac-k3d/pipeline` has `icode_force_rm`. Do not `sudo rm` as a routine step. |
 | First LoLBench image is slow | Expected: P1 may `uv tool install harbor`; P0 installs `docker buildx` if missing. Hub `smartdub26/lolbench` tags are **linux/arm64**. On x86_64, P5 runs `docker build --progress=plain` once (not Harbor `--force-build`, which hangs after the image is tagged). |
 | `DEEPSEEK_API_KEY missing` on Jenkins | Add credential `deepseek-api-key` on the **controller** |
 | Disk/RAM preflight | Free space (`docker system df`); keep `N_TASKS=1` |

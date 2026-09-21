@@ -787,19 +787,19 @@ fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
     );
 
     let mode_options = [
-        "binary (GitCode -full- tarball)",
-        "source (git clone + uv sync)",
+        "release (downloaded *-full-* binary on the worker)",
+        "git (clone branch / tag / commit from github.com or gitcode.com)",
     ];
     let mode_idx = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Default EVAL_MODE")
+        .with_prompt("Default ICODE_MODE")
         .items(&mode_options)
         .default(0)
         .interact()
         .map_err(|_| Error::Cancelled)?;
     let default_eval_mode = if mode_idx == 1 {
-        "source".to_string()
+        "git".to_string()
     } else {
-        "binary".to_string()
+        "release".to_string()
     };
 
     let default_task: String = Input::with_theme(&ColorfulTheme::default())
@@ -809,21 +809,23 @@ fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
         .map_err(|_| Error::Cancelled)?;
 
     let default_icode_release: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Default ICODE_RELEASE (binary: full .tar.gz URL/path, or path to icode)")
+        .with_prompt(
+            "Default ICODE_RELEASE for local eval (path/URL; Jenkins release uses UI upload)",
+        )
         .default(String::new())
         .allow_empty(true)
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
 
     let default_icode_git_url: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Default ICODE_GIT_URL (source: iCode git URL)")
+        .with_prompt("Default ICODE_GIT_URL (git mode: iCode https URL)")
         .default(String::new())
         .allow_empty(true)
         .interact_text()
         .map_err(|_| Error::Cancelled)?;
 
     let default_icode_git_ref: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Default ICODE_GIT_REF (source: branch or tag)")
+        .with_prompt("Default ICODE_GIT_REF (git: branch, tag, or commit SHA)")
         .default("main".into())
         .allow_empty(true)
         .interact_text()

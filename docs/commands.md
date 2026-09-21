@@ -46,15 +46,20 @@ Keep `prepare` / `start` / `config` for power users. Controller `config`/`start`
 
 ## `eval`
 
-Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on DeepSWE (Process 2). See [binary-initializer/user-guide.md](binary-initializer/user-guide.md) and [binary-initializer/testing/testing-eval-pipeline.md](binary-initializer/testing/testing-eval-pipeline.md).
+Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on DeepSWE (Process 2). See [binary-initializer/user-guide.md](binary-initializer/user-guide.md), [binary-initializer/icode-harness-inputs.md](binary-initializer/icode-harness-inputs.md), and [binary-initializer/testing/testing-eval-pipeline.md](binary-initializer/testing/testing-eval-pipeline.md).
 
 ```bash
 mac-k3d eval --stage p0
 mac-k3d eval --stage p5 --n-tasks 1
-mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode source --model deepseek-v4-pro
+mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode release --model deepseek-v4-pro
+mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode git \
+  --icode-git-url https://github.com/org/icode.git --icode-git-ref v0.1.41 \
+  --icode-git-ref-kind tag
 mac-k3d eval --local --benchmark deepswe --n-tasks 1 --model deepseek-flash
-mac-k3d eval --benchmark lolbench --task ruff_1 --yes
+mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git \
+  --icode-git-url https://github.com/org/icode.git --icode-git-ref main --yes
 mac-k3d eval                         # interactive → local or Jenkins *_one_task
+# Jenkins release: open UI and upload ICODE_RELEASE_FILE (--yes cannot attach a file)
 ```
 
 ### Flags
@@ -66,12 +71,16 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 | `--n-tasks N` | Number of tasks when `--task` is empty (default 1) |
 | `--benchmark deepswe\|lolbench` | Suite (default `deepswe`; Jenkins job follows this) |
 | `--task ID` | One question id (empty DeepSWE = first alphabetical; LoLBench example `ruff_1`) |
-| `--icode-mode source\|binary` | Users: `binary` (iCode release drop). Developers: `source` |
-| `--icode-release PATH\|URL` | Binary mode; empty discovers `~/.local/share/mac-k3d/icode-*-full-*` or `icode` |
-| `--icode-source PATH` | Source tree (developer); discovered if unset |
+| `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref). See [icode-harness-inputs.md](binary-initializer/icode-harness-inputs.md) |
+| `--icode-release PATH\|URL` | `release` mode for `--local` / `--stage`; empty = persist file then `~/.local/share/mac-k3d/icode-*-full-*` or `icode`. Jenkins release uses UI upload `ICODE_RELEASE_FILE` (`--yes` does not attach a file) |
+| `--icode-git-url URL` | `git` mode: `https://` on github.com or gitcode.com (no tokens in the URL) |
+| `--icode-git-ref REF` | `git` mode: branch name, tag, or commit SHA (PR commit to score before merge). Default `main` |
+| `--icode-git-ref-kind KIND` | `branch` (default), `tag`, or `commit` (PR SHA). Leftover `auto` still maps: 7–40 hex → commit, else branch |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
 | `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-v4-pro` (default) or `deepseek-flash`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted |
-| `--yes` | Skip prompts: Jenkins `deepswe_one_task` or `lolbench_one_task` unless `--local` |
+| `--yes` | Skip prompts: Jenkins `deepswe_one_task` or `lolbench_one_task` unless `--local`. Git `--yes` queues the job. Release `--yes` prints UI upload instructions (cannot attach `ICODE_RELEASE_FILE`). Also skips the git PAT prompt |
+
+Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.
 
 v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-v4-pro` (default) and `deepseek-flash`. Benchmark is `deepswe` or `lolbench`. Output: `eval-runs/reports/eval-icode-deepseek-{benchmark}-n{N}-{utc}.json`.
 
@@ -206,7 +215,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with `EVAL_MODE` (`binary` / `source`), `ICODE_RELEASE`, `ICODE_GIT_URL`, `TASK`, `ICODE_ARGS`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md).
+4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline jobs `deepswe_one_task` / `lolbench_one_task` with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md) and [icode-harness-inputs.md](binary-initializer/icode-harness-inputs.md).
 5. **Worker:** extract `~/.local/share/mac-k3d/pipeline` (does not overwrite `icode`); using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
@@ -260,7 +269,7 @@ Positional argument is the incoming file. Global `-c` is the **dest**; if omitte
 
 ## `set`
 
-Edit **non-secret** `jenkins_job` fields on a YAML file (harness, LLM family, DeepSeek model, benchmark, questions). Writes YAML only — does not upload Jenkins credentials or queue an eval. Allowed values come from the catalog (`src/eval_catalog.rs`); unknown ids are rejected with `allowed: …`.
+Edit **non-secret** `jenkins_job` fields on a YAML file (harness, LLM family, DeepSeek model, benchmark, questions). Also persist the worker iCode **release drop** path with `--icode-release` (`~/.config/mac-k3d/icode-paths.yaml`; not the YAML you pass with `-c`). Writes YAML only for job fields — does not upload Jenkins credentials or queue an eval. Allowed values come from the catalog (`src/eval_catalog.rs`); unknown ids are rejected with `allowed: …`.
 
 ```bash
 mac-k3d set --list
@@ -268,7 +277,7 @@ mac-k3d set -c /tmp/imported-config.yaml --harness icode --llm deepseek --benchm
 mac-k3d set -c ~/.config/mac-k3d/config.yaml --model deepseek-flash
 mac-k3d set --check-models
 mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --n-tasks 2
-mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --tasks abs-module-cache-flags,abs-stepped-slices
+mac-k3d set --icode-release /path/to/icode-linux-x86_64-full-v0.1.41
 ```
 
 TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, then question mode. Non-TTY requires flags (or `--check-models` / `--list`).
@@ -286,6 +295,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--task <ID>` | One question id |
 | `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |
 | `--tasks a,b` | Explicit comma-separated ids |
+| `--icode-release PATH` | Worker `*-full-*` drop; writes `~/.config/mac-k3d/icode-paths.yaml` |
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.
 

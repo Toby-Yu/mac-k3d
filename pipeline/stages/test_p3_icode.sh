@@ -30,7 +30,6 @@ run_p3() {
     MAC_K3D_SHARE="$2" \
     ICODE_MODE=binary \
     ICODE_RELEASE="${3-}" \
-    ICODE_SOURCE="" \
     bash "$STAGES/p3_icode.sh"
 }
 
@@ -113,5 +112,113 @@ help6="$("$BIN6" --help)"
 echo "$help6" | grep -q "usage: icode" || fail "expected tarball stub, got: $help6"
 echo "$help6" | grep -q WRAPPER && fail "leftover wrapper won over *-full-*"
 ok "discover prefers *-full-* over leftover icode"
+
+# 7. git mode with MAC_K3D_ICODE_FETCH_DIR (no network): wrapper + host root
+FETCH="$TMP/fake-icode-src"
+mkdir -p "$FETCH/.venv/bin"
+make_stub "$FETCH/.venv/bin/icode"
+W7="$TMP/w7"
+mkdir -p "$W7"
+env \
+  MAC_K3D_EVAL_WORKDIR="$W7" \
+  MAC_K3D_SHARE="$SHARE" \
+  ICODE_MODE=git \
+  MAC_K3D_ICODE_FETCH_DIR="$FETCH" \
+  ICODE_RELEASE="" \
+  bash "$STAGES/p3_icode.sh" >/dev/null
+BIN7="$(cat "$W7/icode_bin_path.txt")"
+ROOT7="$(cat "$W7/icode_host_root.txt")"
+[ "$ROOT7" = "$FETCH" ] || fail "icode_host_root.txt expected $FETCH got $ROOT7"
+[ -x "$BIN7" ] || fail "missing git wrapper $BIN7"
+grep -q 'sandbox-cpython' "$BIN7" || fail "wrapper does not exec sandbox-cpython"
+"$FETCH/.venv/bin/icode" --help >/dev/null || fail "fixture venv icode --help"
+ok "ICODE_MODE=git MAC_K3D_ICODE_FETCH_DIR wrapper"
+
+# 8. Release P3 must not keep a previous git-mode icode_git.json
+W8="$TMP/w8"
+mkdir -p "$W8"
+printf '%s\n' '{"url":"stale","kind":"commit","ref":"dead","sha":"deadbeef","subject":"no"}' >"$W8/icode_git.json"
+assert_p3_ok "$W8" "$SHARE" "$TARBALL"
+[ ! -f "$W8/icode_git.json" ] || fail "release P3 left stale icode_git.json"
+ok "release P3 drops leftover icode_git.json"
+
+# 9. source mode is rejected (worker is not a developer checkout)
+W9="$TMP/w9"
+mkdir -p "$W9"
+if env \
+  MAC_K3D_EVAL_WORKDIR="$W9" \
+  MAC_K3D_SHARE="$SHARE" \
+  ICODE_MODE=source \
+  ICODE_RELEASE="" \
+  bash "$STAGES/p3_icode.sh" >/dev/null 2>&1; then
+  fail "expected P3 to reject ICODE_MODE=source"
+fi
+ok "P3 rejects ICODE_MODE=source"
+
+# 10. release from persist parent folder containing *-full-* child
+PARENT="$TMP/iCode-binary"
+mkdir -p "$PARENT"
+cp "$TARBALL" "$PARENT/icode-linux-x86_64-full-v0.1.41.tar.gz"
+PATHS="$TMP/icode-paths.yaml"
+printf 'release: %s\n' "$PARENT" >"$PATHS"
+W10="$TMP/w10"
+env \
+  MAC_K3D_EVAL_WORKDIR="$W10" \
+  MAC_K3D_SHARE="$TMP/empty-share-10" \
+  MAC_K3D_ICODE_PATHS="$PATHS" \
+  ICODE_MODE=release \
+  ICODE_RELEASE="" \
+  bash "$STAGES/p3_icode.sh" >/dev/null
+[ -s "$W10/icode_bin_path.txt" ] || fail "missing release bin from parent folder persist"
+ok "release P3 from persist parent folder with *-full-* child"
+
+# 11. Jenkins File Parameter: gzip magic, name is not *-full-*
+UP_GZ="$TMP/ws-upload/ICODE_RELEASE_FILE"
+mkdir -p "$TMP/ws-upload"
+cp "$TARBALL" "$UP_GZ"
+W11="$TMP/w11"
+mkdir -p "$W11"
+env \
+  MAC_K3D_EVAL_WORKDIR="$W11" \
+  MAC_K3D_SHARE="$TMP/empty-share-11" \
+  ICODE_MODE=release \
+  ICODE_RELEASE="$UP_GZ" \
+  ICODE_RELEASE_UPLOADED=1 \
+  bash "$STAGES/p3_icode.sh" >/dev/null
+[ -s "$W11/icode_bin_path.txt" ] || fail "missing bin from unnamed gzip upload"
+ok "Jenkins upload unnamed gzip (ICODE_RELEASE_FILE) unpacks"
+
+# 12. Jenkins upload standalone binary (not named icode or *-full-*)
+UP_BIN="$TMP/ws-stub/ICODE_RELEASE_FILE"
+mkdir -p "$TMP/ws-stub"
+make_stub "$UP_BIN"
+W12="$TMP/w12"
+mkdir -p "$W12"
+env \
+  MAC_K3D_EVAL_WORKDIR="$W12" \
+  MAC_K3D_SHARE="$TMP/empty-share-12" \
+  ICODE_MODE=release \
+  ICODE_RELEASE="$UP_BIN" \
+  ICODE_RELEASE_UPLOADED=1 \
+  bash "$STAGES/p3_icode.sh" >/dev/null
+[ -s "$W12/icode_bin_path.txt" ] || fail "missing bin from unnamed stub upload"
+ok "Jenkins upload unnamed stub copies as icode"
+
+# 13. Empty Jenkins upload must not fall back to persist
+PATHS13="$TMP/icode-paths-13.yaml"
+printf 'release: %s\n' "$TARBALL" >"$PATHS13"
+W13="$TMP/w13"
+mkdir -p "$W13"
+if env \
+  MAC_K3D_EVAL_WORKDIR="$W13" \
+  MAC_K3D_SHARE="$TMP/empty-share-13" \
+  MAC_K3D_ICODE_PATHS="$PATHS13" \
+  ICODE_MODE=release \
+  ICODE_RELEASE="" \
+  ICODE_RELEASE_UPLOADED=1 \
+  bash "$STAGES/p3_icode.sh" >/dev/null 2>&1; then
+  fail "expected P3 to reject empty Jenkins upload"
+fi
+ok "empty Jenkins upload does not fall back to persist"
 
 echo "OK test_p3_icode.sh"

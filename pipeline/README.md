@@ -7,6 +7,6 @@
 
 Runtime (gitignored): **`eval-runs/`** with reports in `eval-runs/reports/`.
 
-A Release binary extracts this tree to `~/.local/share/mac-k3d/pipeline`. Users drop iCode at `~/.local/share/mac-k3d/icode` (sibling of `pipeline/`).
+A Release binary extracts this tree to `~/.local/share/mac-k3d/pipeline`. Users provide iCode via a `*-full-*` drop or a git clone — [icode-harness-inputs.md](../docs/binary-initializer/icode-harness-inputs.md).
 
 Operator commands: [docs/binary-initializer/user-guide.md](../docs/binary-initializer/user-guide.md).

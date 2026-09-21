@@ -18,7 +18,7 @@ mac-k3d eval                        # interactive → Jenkins job deepswe_one_ta
 ```
 
 Default workdir: `./eval-runs` (override with `MAC_K3D_EVAL_WORKDIR`).  
-Default iCode for users: `ICODE_MODE=binary` and `~/.local/share/mac-k3d/icode` (or `/opt/mac-k3d/icode`). Developer source trees are discovered only when `ICODE_MODE=source`.  
+Default iCode for CI: `ICODE_MODE=release` (alias `binary`) and `~/.local/share/mac-k3d/icode` or `icode-*-full-*`, or `ICODE_MODE=git` (clone URL + ref). See [icode-harness-inputs.md](../icode-harness-inputs.md). `ICODE_MODE=git` clones an allow-listed `https://` URL at `ICODE_GIT_REF` using `ICODE_GIT_REF_KIND` (`branch` / `tag` / `commit`, including a PR SHA) then bind-mounts a wrapper at `/opt/icode-host`. The eval JSON records `icode_git` (url, kind, ref, resolved sha, subject). Private clones need `GITCODE_TOKEN` / `GITHUB_TOKEN` in gitignored `.env` (TTY PAT prompt) or Jenkins `gitcode-pat` / `github-pat`.  
 Default model: `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`). Catalog also allows `deepseek-flash` (`mac-k3d eval --model deepseek-flash`, Jenkins **DEEPSEEK_MODEL** choice, or `mac-k3d set --model`). API `model` in the response is stored as `model_served`.
 
 ---
@@ -54,7 +54,7 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 | Jenkins admin password | After cloud `setup` |
 | Jenkins API token | **Secret**, not the token *name*, for worker register |
 | Credential `deepseek-api-key` | Stored on the **cloud** controller |
-| iCode tree on this PC | Discovered path (often `$HOME/Documents/iCode-main`) or a `-full-` tarball |
+| iCode on this PC | Downloaded `*-full-*` drop under `~/.local/share/mac-k3d/`, or `ICODE_MODE=git` |
 | `MAC_K3D_ROOT` on this PC | mac-k3d checkout (or Release share dir `~/.local/share/mac-k3d`) |
 | API model string | Catalog `deepseek-v4-pro` (default) or `deepseek-flash` (`DEEPSEEK_MODEL` / `--model` / Jenkins choice) |
 | N for smoke | **1**; larger N later (E8) |
@@ -92,6 +92,23 @@ mac-k3d eval --stage p4
 ```
 
 Schema unit test (no network): `python3 pipeline/lib/test_report.py`
+
+### Git-mode P3 (same path a user runs)
+
+Do **not** use `MAC_K3D_ICODE_FETCH_DIR`. Rebuild the CLI first so the PAT prompt exists.
+
+```bash
+cargo build --release
+export PATH="$PWD/target/release:$HOME/.local/bin:$PATH"
+# Hidden PAT prompt if .env has no GITCODE_TOKEN. Do not paste the PAT into chat.
+mac-k3d eval --stage p3 --icode-mode git \
+  --icode-git-url https://gitcode.com/ORG/icode --icode-git-ref main \
+  --icode-git-ref-kind branch
+```
+
+Expected: `Saved GITCODE_TOKEN to .env (mode 600)` on first run (or `Using GITCODE_TOKEN from env or .env`); clone finishes (or fails within 90s with a PAT hint); `eval-runs/icode_bin_path.txt`, `icode_host_root.txt`, and `icode_git.json` exist; console prints `OK iCode git kind=branch ref=main sha=…`.
+
+Jenkins (after local P3 works): on the **controller**, `mac-k3d config --update-secrets` and enter the GitCode PAT into `gitcode-pat`. Then UI **Build with Parameters**: `ICODE_MODE=git`, the same URL/ref, `ICODE_GIT_REF_KIND=branch` (or `tag` / `commit` for a PR SHA), no PAT in those fields. Worker job param `MAC_K3D_ROOT` empty for a user-like run (or this checkout to test unreleased pipeline).
 
 ---
 
@@ -179,18 +196,19 @@ mac-k3d eval --stage p2
 
 **Expected:** `$WORKDIR/deep-swe/tasks` exists after shallow clone of `https://github.com/datacurve-ai/deep-swe`.
 
-## P3 — iCode binary or source
+## P3 — iCode release binary or git clone
 
 **Why:** Arm A must invoke the harness under test.
 
 ```bash
-# binary mode
-ICODE_MODE=binary ICODE_RELEASE=/path/to/icode-*-full-*.tar.gz mac-k3d eval --stage p3
-# source mode (default path)
-mac-k3d eval --stage p3
+# release / binary drop
+ICODE_MODE=release ICODE_RELEASE=/path/to/icode-*-full-*.tar.gz mac-k3d eval --stage p3
+# git clone
+mac-k3d eval --stage p3 --icode-mode git \
+  --icode-git-url https://github.com/ORG/icode.git --icode-git-ref main --icode-git-ref-kind branch
 ```
 
-**Expected:** unpacked/`uv run` `icode --help` succeeds.
+**Expected:** unpacked binary or git wrapper `icode --help` succeeds.
 
 ## P4 — Pier sees agent `icode`
 
@@ -254,7 +272,7 @@ After P0–P8 / E6:
 mac-k3d eval --local --n-tasks 1 --model deepseek-v4-pro
 # flash: mac-k3d eval --local --n-tasks 1 --model deepseek-flash
 # or trigger Jenkins on the cloud controller (runs on this worker):
-mac-k3d eval --n-tasks 1 --icode-mode source --model deepseek-v4-pro
+mac-k3d eval --n-tasks 1 --icode-mode release --model deepseek-v4-pro
 ```
 
 **Expected:** Jenkins `deepswe_one_task` (or local) runs both arms, prints progress, archives JSON that passes `check_report.sh`.

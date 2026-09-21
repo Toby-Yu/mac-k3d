@@ -2,7 +2,7 @@
 
 ## Local eval keys (this machine only)
 
-**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. `DEEPSEEK_MODEL` must be a catalog id: `deepseek-v4-pro` (default) or `deepseek-flash` — copy `data[].id` from `GET /models`, never a product name. `mac-k3d set --check-models` and P0 (when the key is set) enforce that before paid P5/P6. This is the correct way to store the key for `mac-k3d eval --stage p5` / `p6` on this PC.
+**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. For **`ICODE_MODE=git`**, the same file may hold `GITCODE_TOKEN` or `GITHUB_TOKEN` (written by the TTY PAT prompt, mode 600). `DEEPSEEK_MODEL` must be a catalog id: `deepseek-v4-pro` (default) or `deepseek-flash` — copy `data[].id` from `GET /models`, never a product name. `mac-k3d set --check-models` and P0 (when the key is set) enforce that before paid P5/P6. This is the correct way to store keys for `mac-k3d eval --stage p5` / `p6` and private git clones on this PC.
 
 ```bash
 cp .env.example .env
@@ -20,9 +20,9 @@ ln -sf ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit
 ```
 
 - Scripts parse `KEY=value` only; they do not `source` the file as shell.
-- If `DEEPSEEK_API_KEY` is already set (Jenkins `withCredentials`), the file is not used to overwrite it.
-- **Never** `export DEEPSEEK_API_KEY=sk-…` (shell history, terminal capture, chat attachments).
-- **Never** commit `.env`, put the key in job parameters, or paste it into chat.
+- If `DEEPSEEK_API_KEY` is already set (Jenkins `withCredentials`), the file is not used to overwrite it. Same for `GITCODE_TOKEN` / `GITHUB_TOKEN`.
+- **Never** `export DEEPSEEK_API_KEY=sk-…` or `export GITCODE_TOKEN=…` (shell history, terminal capture, chat attachments).
+- **Never** commit `.env`, put a PAT in `ICODE_GIT_URL` or job parameters, or paste keys into chat.
 
 **Supported CI method (unchanged):** Jenkins credential `deepseek-api-key` on the **controller**. Local `.env` is not a substitute for E7 and is not copied to other workers.
 

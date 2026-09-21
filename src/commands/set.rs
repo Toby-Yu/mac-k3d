@@ -46,6 +46,10 @@ pub struct SetArgs {
     /// Comma-separated question ids
     #[arg(long)]
     pub tasks: Option<String>,
+
+    /// Persist iCode `*-full-*` drop path on this worker
+    #[arg(long)]
+    pub icode_release: Option<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -95,14 +99,15 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
         || patch.task.is_some()
         || patch.n_tasks.is_some()
         || patch.tasks.is_some();
+    let path_flags = args.icode_release.is_some();
 
-    if !any_flag && !args.check_models {
+    if !any_flag && !args.check_models && !path_flags {
         if atty::is(atty::Stream::Stdin) {
             patch = prompt_patch(&config)?;
             any_flag = true;
         } else {
             return Err(Error::Config(
-                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks, --check-models, or --list"
+                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks / --icode-release, --check-models, or --list"
                     .into(),
             ));
         }
@@ -113,6 +118,9 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
     }
     if args.check_models {
         check_model_on_provider(&config)?;
+    }
+    if let Some(rel) = args.icode_release.as_deref() {
+        crate::prepare::icode_paths::set_release(rel)?;
     }
     if any_flag {
         config.save(Some(&path))?;

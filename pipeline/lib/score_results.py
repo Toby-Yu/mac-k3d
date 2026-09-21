@@ -138,6 +138,34 @@ def find_pier_task_dir(harness_dir: Path, tid: str) -> Path | None:
     return max(candidates, key=_mtime)
 
 
+def load_icode_git() -> dict | None:
+    """P3 writes WORKDIR/icode_git.json so a PR SHA eval can be identified later."""
+    candidates: list[Path] = []
+    for env in ("WORKDIR", "MAC_K3D_EVAL_WORKDIR"):
+        raw = os.environ.get(env)
+        if raw:
+            candidates.append(Path(raw) / "icode_git.json")
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        data = load_json(path)
+        if not isinstance(data, dict):
+            continue
+        sha = str(data.get("sha") or "").strip()
+        if not sha:
+            continue
+        return {
+            "url": str(data.get("url") or ""),
+            "kind": str(data.get("kind") or ""),
+            "ref": str(data.get("ref") or ""),
+            "sha": sha,
+            "subject": str(data.get("subject") or ""),
+        }
+    return None
+
+
 def _norm_key(key: object) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
 
@@ -616,6 +644,9 @@ def main() -> int:
         "tokens": {"in": tokens_in, "out": tokens_out, "total": tokens_total},
         "tasks": per_task,
     }
+    icode_git = load_icode_git()
+    if icode_git:
+        doc["icode_git"] = icode_git
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

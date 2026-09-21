@@ -17,6 +17,9 @@ export LOLBENCH_DIR="${LOLBENCH_DIR:-$WORKDIR/lolbench}"
 export LOLBENCH_GIT_URL="${LOLBENCH_GIT_URL:-https://github.com/MichaelLing83/LoLBench-Preview.git}"
 export ICODE_MODE="${ICODE_MODE:-binary}"
 export ICODE_RELEASE="${ICODE_RELEASE:-}"
+export ICODE_GIT_URL="${ICODE_GIT_URL:-}"
+export ICODE_GIT_REF="${ICODE_GIT_REF:-main}"
+export ICODE_GIT_REF_KIND="${ICODE_GIT_REF_KIND:-branch}"
 export N_TASKS="${N_TASKS:-1}"
 export TASK="${TASK:-}"
 export HARNESS="${HARNESS:-icode}"
@@ -57,6 +60,7 @@ missing_deepseek_key_hint() {
 _env_key_allowed() {
   case "$1" in
     DEEPSEEK_API_KEY | DEEPSEEK_MODEL | MAC_K3D_DEEPSEEK_API_KEY) return 0 ;;
+    GITCODE_TOKEN | MAC_K3D_GITCODE_PAT | GITHUB_TOKEN | MAC_K3D_GITHUB_PAT | MAC_K3D_GIT_USERNAME) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -106,6 +110,12 @@ load_local_env() {
     done <"$f"
     if [ -z "${DEEPSEEK_API_KEY:-}" ] && [ -n "${MAC_K3D_DEEPSEEK_API_KEY:-}" ]; then
       export DEEPSEEK_API_KEY="$MAC_K3D_DEEPSEEK_API_KEY"
+    fi
+    if [ -z "${GITCODE_TOKEN:-}" ] && [ -n "${MAC_K3D_GITCODE_PAT:-}" ]; then
+      export GITCODE_TOKEN="$MAC_K3D_GITCODE_PAT"
+    fi
+    if [ -z "${GITHUB_TOKEN:-}" ] && [ -n "${MAC_K3D_GITHUB_PAT:-}" ]; then
+      export GITHUB_TOKEN="$MAC_K3D_GITHUB_PAT"
     fi
     echo "OK loaded local env from $f (values not printed)"
     return 0
@@ -225,7 +235,15 @@ discover_icode_release() {
   return 1
 }
 
+# Jenkins File Parameter lands in the workspace as ICODE_RELEASE_FILE (original *-full-* name is lost).
+icode_release_is_uploaded() {
+  [ "${ICODE_RELEASE_UPLOADED:-}" = 1 ] && return 0
+  [ "$(basename "${1:-}")" = "ICODE_RELEASE_FILE" ] && return 0
+  return 1
+}
+
 # Copy or unpack ICODE_RELEASE into $2. Explicit dirs need a file named icode (any folder name).
+# Local CLI keeps named-path rules (icode or *-full-*). Jenkins uploads use gzip/tar magic, else copy as icode.
 install_icode_release() {
   local src="$1" unpack="$2" base
   [ -e "$src" ] || die "ICODE_RELEASE not found: $src"
@@ -236,6 +254,9 @@ install_icode_release() {
   fi
   [ -f "$src" ] || die "ICODE_RELEASE not found: $src"
   if _icode_is_archive "$src"; then
+    if icode_release_is_uploaded "$src"; then
+      echo "Jenkins upload ICODE_RELEASE_FILE (archive magic): $src" >&2
+    fi
     if _icode_gzip_magic "$src" || [[ "$(basename "$src")" == *.tar.gz || "$(basename "$src")" == *.tgz ]]; then
       tar -xzf "$src" -C "$unpack"
     else
@@ -244,6 +265,12 @@ install_icode_release() {
     return 0
   fi
   base="$(basename "$src")"
+  if icode_release_is_uploaded "$src"; then
+    echo "Jenkins upload (unnamed) as icode binary: $src" >&2
+    cp "$src" "$unpack/icode"
+    chmod +x "$unpack/icode" || true
+    return 0
+  fi
   if [ "$base" != "icode" ] && [[ "$base" != *-full-* ]]; then
     die "ICODE_RELEASE is not an icode binary or *-full-* release: $src"
   fi
@@ -251,37 +278,11 @@ install_icode_release() {
   chmod +x "$unpack/icode" || true
 }
 
-# Developer source tree. Toby's lab path is a candidate only if it exists.
-discover_icode_source() {
-  local c
-  if [ -n "${ICODE_SOURCE:-}" ] && [ -d "$ICODE_SOURCE" ]; then
-    echo "$ICODE_SOURCE"
-    return 0
-  fi
-  for c in \
-    "$HOME/Documents/iCode-main" \
-    "$HOME/iCode-main" \
-    "$HOME/src/iCode-main" \
-    "$(dirname "$ROOT")/iCode-main" \
-    "$HOME/Documents/Toby/iCode-main"
-  do
-    if _icode_tree_ok "$c"; then
-      echo "$c"
-      return 0
-    fi
-  done
-  echo "$HOME/Documents/iCode-main"
-}
-
-if [ -z "${ICODE_SOURCE:-}" ]; then
-  ICODE_SOURCE="$(discover_icode_source)"
-fi
-export ICODE_SOURCE
-
-if [ -z "${ICODE_RELEASE:-}" ]; then
-  ICODE_RELEASE="$(discover_icode_release || true)"
-fi
-export ICODE_RELEASE
+# ICODE_RELEASE stays empty unless the job/CLI set it.
+# get_release_icode then reads icode-paths.yaml and share discover (local).
+# Jenkins release sets ICODE_RELEASE_UPLOADED=1 and points at WORKSPACE/ICODE_RELEASE_FILE.
+export ICODE_RELEASE="${ICODE_RELEASE:-}"
+export ICODE_RELEASE_UPLOADED="${ICODE_RELEASE_UPLOADED:-}"
 
 # DeepSWE: eval-runs/deep-swe/tasks/<id>
 # LoLBench: eval-runs/lolbench/harbor_tasks/<id>

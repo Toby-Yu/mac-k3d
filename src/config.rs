@@ -183,13 +183,13 @@ pub struct JenkinsAgentConfig {
 #[serde(default)]
 pub struct JenkinsJobConfig {
     pub default_task: String,
-    /// `binary` (GitCode `-full-` tarball) or `source` (git clone + uv sync in the job).
+    /// `release` (`*-full-*` drop) or `git` (clone URL + ref). `binary` is an alias of `release`.
     pub default_eval_mode: String,
     /// GitCode `icode-<os>-<arch>-full-vX.Y.Z.tar.gz` URL or path (or a stub `icode` binary).
     pub default_icode_release: String,
-    /// iCode git URL for `EVAL_MODE=source` (private GitCode clone uses `gitcode-pat`).
+    /// iCode git URL for `ICODE_MODE=git` (private GitCode clone uses `gitcode-pat`).
     pub default_icode_git_url: String,
-    /// Git ref for source mode (branch or tag). Empty becomes `main`.
+    /// Git ref for git mode (branch, tag, or commit). Empty becomes `main`.
     pub default_icode_git_ref: String,
     pub default_icode_args: String,
     /// Deprecated; ignored if `default_icode_release` is set.
@@ -648,10 +648,7 @@ mod tests {
         let loaded: MacK3dConfig = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(loaded.jenkins_job.default_harness, "icode");
         assert_eq!(loaded.jenkins_job.default_llm, "deepseek");
-        assert_eq!(
-            loaded.jenkins_job.default_deepseek_model,
-            "deepseek-flash"
-        );
+        assert_eq!(loaded.jenkins_job.default_deepseek_model, "deepseek-flash");
         assert_eq!(loaded.jenkins_job.default_benchmark, "deepswe");
         assert_eq!(loaded.jenkins_job.default_n_tasks, 2);
         assert_eq!(
