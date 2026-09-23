@@ -2,11 +2,11 @@
 
 Lab runbook (this team), not the user start-here. **Users:** [user-guide.md](../user-guide.md). This lab’s IPs: [cloud-eval-runbook.md](cloud-eval-runbook.md).
 
-Per-stage CLI checks for Process 2 (DeepSWE + Pier + iCode vs DeepSeek V4 Pro baseline).  
+Per-stage CLI checks for Process 2 (Harbor + iCode vs DeepSeek V4 Pro baseline).  
 Machine bootstrap first: [testing-binary-initializer.md](testing-binary-initializer.md) and [workflow.md](../workflow.md).  
 **This lab (cloud root + this PC):** copy-paste phases and flowcharts in [cloud-eval-runbook.md](cloud-eval-runbook.md). **Users:** [user-guide.md](../user-guide.md).
 
-**Sign-off:** DeepSWE **E0–E7** with `--n-tasks 1` (default Pier path). LoLBench is a **separate** job (`lolbench_one_task`); use the LoLBench track below, do not reuse Pier P4/P5 commands. E8 is optional N>1. Keep P0–P4 cheap (no LLM).
+**Sign-off:** DeepSWE **E0–E7** with `--n-tasks 1` (Harbor path). LoLBench and SWE-bench Pro are separate jobs with the same P0–P5 Harbor stages. E8 is optional N>1. Keep P0–P4 cheap (no LLM).
 
 Scripts live under [`pipeline/stages/`](../../pipeline/stages/). Helpers under [`pipeline/lib/`](../../pipeline/lib/). The CLI wraps them:
 
@@ -27,7 +27,7 @@ Default model: `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`). Catalog also a
 
 ## Topology (cloud controller + this PC as worker)
 
-Jobs must **not** run inside the controller’s k3d nodes. Jenkins on the cloud VM only queues; this PC (Docker + Pier + iCode) executes.
+Jobs must **not** run inside the controller’s k3d nodes. Jenkins on the cloud VM only queues; this PC (Docker + Harbor + iCode) executes.
 
 ```text
 Cloud VM: k3d + Jenkins :17070
@@ -73,9 +73,9 @@ Copy-paste commands. Use `--n-tasks 1` until E4–E6 are green.
 |-------|---------|----------|------------|-------|
 | **E0** Cloud controller | On the **cloud** VM: Release binary, first-run wizard, role **CI controller**, Jenkins **17070**, Harbor skip, credential `deepseek-api-key`. Open security group **17070**. Then `JENKINS_URL=http://127.0.0.1:17070 ./scripts/env_set_up/02_check_controller.sh` | Browser `http://<cloud-ip>:17070` HTTP 200; job `deepswe_one_task` present | | Once per VM |
 | **E1** This PC as worker | On this PC: `setup -c worker.yaml`. Enter keeps `http://43.107.42.252:17070`. User `admin`, API **secret**, distinct agent name. Never `start -c worker.yaml`. `JENKINS_URL=http://43.107.42.252:17070 ./pipeline/stages/e1_reach_jenkins.sh` then `REQUIRE_WORKER=1 JENKINS_URL=http://43.107.42.252:17070 ./scripts/env_set_up/03_check_worker.sh` | `e1`: HTTP 200; start rejected; unit active; node **online** in **cloud** Jenkins → Nodes | | |
-| **E2** P0–P4 (no LLM) | See commands below | Existing P0–P4 OK lines; Pier agent `icode` present | | Fast |
+| **E2** P0–P4 (no LLM) | See commands below | Existing P0–P4 OK lines; Harbor agent `icode` imports | | Fast |
 | **E3** Report schema (no LLM) | `./pipeline/stages/check_report.sh pipeline/lib/testdata/report-min.json` | `OK report schema` | | Instant |
-| **E4** P5 n=1 harness (paid) | `mac-k3d eval --stage p5 --n-tasks 1` with gitignored `.env` (or Jenkins bind `deepseek-api-key`) | `PROGRESS` P5; minutes of Pier/Docker/LLM; `harness/` artifacts. CLI usage errors fail the stage | | |
+| **E4** P5 n=1 harness (paid) | `mac-k3d eval --stage p5 --n-tasks 1` with gitignored `.env` (or Jenkins bind `deepseek-api-key`) | `PROGRESS` P5; minutes of Harbor/Docker/LLM; `reward.json`. CLI usage errors fail the stage | | |
 | **E5** P6 baseline | `DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage p6 --n-tasks 1` | `baseline/<task>/agent.patch`; `baseline/summary.json` includes usage/time/model | | |
 | **E6** P7/P8 report fields | `mac-k3d eval --stage p7` then `--stage p8 --n-tasks 1`; then `./pipeline/stages/check_report.sh` | `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` with `suite`, `pass_at_1`, `macro.f2p`/`p2p`/`reward`, `tokens`, `wall_seconds`/`wall_minutes`, `model` | | |
 | **E7** Jenkins `deepswe_one_task` | UI **Build with Parameters**: `ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`. Git: same UI with `ICODE_MODE=git` (or `mac-k3d eval --icode-mode git … --yes` without `--local`). Release `--yes` cannot attach a file | Build on **this** node; archived JSON; same schema | | |
@@ -121,20 +121,20 @@ Jenkins (after local P3 works): on the **controller**, `mac-k3d config --update-
 
 ---
 
-## LoLBench track (do not reuse DeepSWE P4/P5)
+## LoLBench track (Harbor)
 
-`lolbench_one_task` is Harbor + iCode, not Pier. Jenkins **SUCCESS** means `reward.json` exists (the pipeline ran). It does **not** mean `pass_at_1=1`. Match Harbor’s Resolved/Reward column: F2P 0.368 with Resolved 0.0 is a valid score.
+`lolbench_one_task` is Harbor + iCode, same runner as DeepSWE and SWE-bench Pro. P4 checks that `icode_harbor_agent` imports. Jenkins **SUCCESS** means `reward.json` exists (the pipeline ran). It does **not** mean `pass_at_1=1`. Match Harbor’s Resolved/Reward column: F2P 0.368 with Resolved 0.0 is a valid score.
 
 Jenkins runs `~/.local/share/mac-k3d/pipeline` unless you set job param **`MAC_K3D_ROOT`** to this checkout. To test git changes: `MAC_K3D_ROOT=/home/Toby/Documents/Toby/mac-k3d` on the job, or `mac-k3d config -c ~/.config/mac-k3d/worker.yaml` to re-extract `pipeline/`.
 
 | Check | Command | Expected | Pass (y/n) | Notes |
 |-------|---------|----------|------------|-------|
-| **L2** P0–P3 (no LLM) | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p0` then `p1` `p2` `p3` (not p4) | P0–P3 OK; `run_all` prints `P4 skipped: LoLBench uses Harbor` | | Fast |
+| **L2** P0–P4 (no LLM) | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p0` then `p1` `p2` `p3` `p4` | P0–P4 OK; P4 prints `icode_harbor_agent:ICodeAgent` | | Fast |
 | **L3** Schema | `./pipeline/stages/check_report.sh pipeline/lib/testdata/report-min.json` and `python3 pipeline/lib/test_report.py` | `OK report schema`; unit tests include nested Harbor `ruff_1` rates | | Instant |
 | **L4** P5 n=1 Harbor (paid) | `mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode binary --stage p5` | `PROGRESS` P5; `harbor_runs/…/reward.json`; local image or docker build. Missing `reward.json` fails; reward `0.0` is a score | | |
 | **L5** P6 | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p6` | `baseline/ruff_1/agent.patch`; summary usage/time/model | | |
 | **L6** P7/P8 | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p7` then `--stage p8`; `./pipeline/stages/check_report.sh` | Same schema as DeepSWE (`suite=lolbench`); `f2p` / `p2p` rates from Harbor; `reward` from reward.json; `wall_minutes` | | |
-| **L7** Jenkins `lolbench_one_task` | UI **Build with Parameters**: `TASK=ruff_1`, `ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`. Git: same UI or `mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git … --yes` without `--local`. Release `--yes` cannot attach a file | Build on **this** node (not a k3d agent); P4 skipped; archived JSON; SUCCESS ≠ resolved | | |
+| **L7** Jenkins `lolbench_one_task` | UI **Build with Parameters**: `TASK=ruff_1`, `ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`. Git: same UI or `mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git … --yes` without `--local`. Release `--yes` cannot attach a file | Build on **this** node (not a k3d agent); P5 is `harbor run`; archived JSON; SUCCESS ≠ resolved | | |
 
 L2 commands:
 
@@ -145,19 +145,30 @@ mac-k3d eval --benchmark lolbench --task ruff_1 --stage p0
 mac-k3d eval --benchmark lolbench --task ruff_1 --stage p1
 mac-k3d eval --benchmark lolbench --task ruff_1 --stage p2
 mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode binary --stage p3
+mac-k3d eval --benchmark lolbench --task ruff_1 --stage p4
 ```
 
-Do **not** run `--stage p4` for LoLBench.
+---
+
+## SWE-bench Pro track (Harbor)
+
+`swebenchpro_one_task` is Harbor + iCode, same runner as DeepSWE. P2 writes a Harbor task whose `docker_image` is the official `jefzda/sweap-images:…` tag. The Dockerfile clears the image `ENTRYPOINT` so Harbor's keepalive can start. The verifier scores `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are 1–3 GB; first live job is **one** `TASK` (`instance_id`).
+
+| Id | What | Pass when | Notes |
+|----|------|-----------|-------|
+| **S2** P0–P4 (no LLM) | `mac-k3d eval --benchmark swebenchpro --n-tasks 1 --stage p0` then `p1` `p2` `p3` `p4` | P0–P4 OK; task dir has `task.toml` | Fast after P2 clone |
+| **S4** P5 n=1 (paid + large image) | `mac-k3d eval --benchmark swebenchpro --n-tasks 1 --icode-mode binary --stage p5` | `harbor run` with `icode_harbor_agent:ICodeAgent`; `reward.json` | Slow |
+| **S7** Jenkins | UI **Build with Parameters** on `swebenchpro_one_task`; same iCode git/release as DeepSWE | Build on this node; archived JSON `suite=swebenchpro` | |
 
 ---
 
 ## JSON report fields
 
-Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py) at P7/P8. Same schema for `deepswe_one_task` and `lolbench_one_task` (`suite` differs). Validate with [`pipeline/stages/check_report.sh`](../../pipeline/stages/check_report.sh).
+Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py) at P7/P8. Same schema for `deepswe_one_task`, `lolbench_one_task`, and `swebenchpro_one_task` (`suite` differs). Validate with [`pipeline/stages/check_report.sh`](../../pipeline/stages/check_report.sh).
 
 | Field | Meaning |
 |-------|---------|
-| `suite`, `harness`, `n_tasks`, `n_rollouts` | `deepswe` or `lolbench`; `icode`; N questions; **1** attempt per question |
+| `suite`, `harness`, `n_tasks`, `n_rollouts` | `deepswe`, `lolbench`, or `swebenchpro`; `icode`; N questions; **1** attempt per question |
 | `model` / `model_served` / `api_base` | Requested catalog id (default `deepseek-v4-pro`), API-served id, endpoint |
 | `access_date_utc` | When the run was recorded (UTC) |
 | `wall_seconds` / `wall_minutes` | P5 harness + P6 baseline wall clock |
@@ -166,7 +177,7 @@ Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py
 | `tokens.in` / `out` / `total` | API prompt/completion (harness if known, else baseline). Missing → `null` |
 | `tasks[].id` | Question dir name |
 | `tasks[].c` / `n` / `pass_frac` / `first` | Resolved rollouts, attempts, `c/n`, first-rollout resolved |
-| `tasks[].reward` | 1.0 resolved, 0.0 not (Harbor `reward.json`; Pier `resolved`) |
+| `tasks[].reward` | 1.0 resolved, 0.0 not (Harbor `reward.json`) |
 | `tasks[].f2p` / `p2p` | FAIL_TO_PASS / PASS_TO_PASS **rates** in `[0,1]`, never test-name lists |
 | `tasks[].f2p_pass` / `f2p_total` | Optional counts when the verifier exposes them |
 | `tasks[].tok_in` / `tok_out` / `dur_s` / `dur_min` | Harness API tokens and time for this question (`null` if unknown) |
@@ -176,7 +187,7 @@ Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py
 
 ## P0 — Docker, CLI, worker readiness
 
-**Why:** Without Docker and an online agent (or local Docker for `--local`), Pier cannot run sandboxes.
+**Why:** Without Docker and an online agent (or local Docker for `--local`), Harbor cannot run sandboxes.
 
 ```bash
 mac-k3d eval --stage p0
@@ -185,15 +196,15 @@ mac-k3d eval --stage p0
 
 **Expected:** `docker info` shows Server; `mac-k3d --help` lists `eval`; optional note if Jenkins worker is offline (OK for `--local`). When `DEEPSEEK_API_KEY` is set (local `.env` or Jenkins credential), P0 also `GET /models` and fails if `DEEPSEEK_MODEL` is not a `data[].id` (cheap; not a paid completion).
 
-## P1 — Pier on PATH
+## P1 — Harbor on PATH
 
-**Why:** DeepSWE is Pier/Harbor-format; Pier builds task images and runs agents.
+**Why:** DeepSWE, LoLBench, and SWE-bench Pro all run through Harbor.
 
 ```bash
 mac-k3d eval --stage p1
 ```
 
-**Expected:** installs via `uv tool install datacurve-pier` if missing; `pier --help` works.
+**Expected:** installs via `uv tool install harbor` if missing; `harbor --help` works. Prints `OK harbor=`.
 
 ## P2 — DeepSWE clone
 
@@ -219,15 +230,15 @@ mac-k3d eval --stage p3 --icode-mode git \
 
 **Expected:** unpacked binary or git wrapper `icode --help` succeeds.
 
-## P4 — Pier sees agent `icode`
+## P4 — Harbor agent `icode` imports
 
-**Why:** Custom agent install + DeepSeek allowlist must register with Pier.
+**Why:** P5 loads `icode_harbor_agent:ICodeAgent`. This check does not call the model.
 
 ```bash
 mac-k3d eval --stage p4
 ```
 
-**Expected:** `pipeline/lib/icode_pier_agent.py` present; `pipeline/lib/pier-agent-icode` scripts executable; P4 prints `--agent-import-path icode_pier_agent:ICodeAgent`.
+**Expected:** `pipeline/lib/icode_harbor_agent.py` imports; P4 prints `icode_harbor_agent:ICodeAgent`.
 
 ## P5 — One DeepSWE task through iCode (N=1)
 
@@ -238,7 +249,7 @@ mac-k3d eval --stage p4
 mac-k3d eval --stage p5 --n-tasks 1
 ```
 
-**Expected:** `PROGRESS` lines; Pier run for one task (**minutes of iCode**, not a ~20s `NonZeroAgentExitCodeError`). Pier uses the same iCode CLI as LoLBench Harbor: `icode -p … run -t <instruction> -C <repo> -a code --json`, plus `ICODE_API_BASE` / `ICODE_PROVIDER` / `ICODE_MODEL`. `harness/meta.json` (timing/model/tokens); patch under workdir. `No such option` / usage errors **fail** the stage. Jenkins `mac-k3d eval --yes` embeds `pipeline/` from the **installed binary** — rebuild (`cargo build --release` and copy to `~/.local/bin/mac-k3d`) after changing Pier `run.sh`.
+**Expected:** `PROGRESS` lines; `harbor run` for one task (**minutes of iCode**). The agent runs `icode -p … run -t <instruction> -C <repo> -a code --json`, plus `ICODE_API_BASE` / `ICODE_PROVIDER` / `ICODE_MODEL`. Allowlist is `api.deepseek.com` and `api.deepseek.ai`. Missing `reward.json` fails the stage; reward `0.0` is a score. `harness/meta.json` (timing/model/tokens). `No such option` / usage errors **fail** the stage. Jenkins `mac-k3d eval --yes` embeds `pipeline/` from the **installed binary** — rebuild (`cargo build --release` and copy to `~/.local/bin/mac-k3d`) after changing the Harbor agent.
 
 ## P6 — Same task via DeepSeek API only
 
@@ -292,12 +303,12 @@ mac-k3d eval --n-tasks 1 --icode-mode release --model deepseek-v4-pro
 
 | Message | What to do |
 |---------|------------|
-| pier not found | `uv tool install datacurve-pier` or `uv tool install git+https://github.com/datacurve-ai/pier` |
+| harbor not found | Re-run P1 (`uv tool install harbor`) |
 | DeepSWE clone fails | Network / git; retry P2 |
 | DEEPSEEK_API_KEY missing | Copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller ([secrets.md](../secrets.md)) |
-| No such option: --agent-dir | Pier 0.3.1 has no `--agent-dir`. Use this tree’s `--agent-import-path icode_pier_agent:ICodeAgent` |
+| No such option: --agent-dir | Old Pier flags. This tree runs `harbor run -a icode_harbor_agent:ICodeAgent`. |
 | Docker OOM / disk | DeepSWE images are large; free disk; lower N |
 | Worker offline | Finish E1; for local-only tests use `--local` |
 | Job still uses `deepseek-chat` | Re-run `mac-k3d config --skip-secrets` on the **cloud** controller after pulling this tree |
 | Worker points at localhost | For this lab set `controller_url: http://43.107.42.252:17070` (or export `JENKINS_URL` before setup); restart the agent unit if it was already running |
-| No such option / docker compose unknown | P0 installs the Compose v2 user plugin; re-run `--stage p0`. P5 now fails on a 0-trial Pier job. |
+| No such option / docker compose unknown | P0 installs the Compose v2 user plugin; re-run `--stage p0`. P5 fails when Harbor writes no `reward.json`. |

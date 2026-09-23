@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P2 — clone the selected benchmark (DeepSWE or LoLBench-Preview)
+# P2 — clone the selected benchmark (DeepSWE, LoLBench-Preview, or SWE-bench Pro)
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
@@ -14,6 +14,21 @@ case "${BENCHMARK:-deepswe}" in
     fi
     [ -d "$LOLBENCH_DIR/harbor_tasks" ] || die "missing $LOLBENCH_DIR/harbor_tasks after clone"
     ;;
+  swebenchpro)
+    if [ ! -f "$SWEBENCHPRO_DIR/src/swe_bench_pro_eval.py" ] \
+      && [ ! -f "$SWEBENCHPRO_DIR/swe_bench_pro_eval.py" ]; then
+      mkdir -p "$SWEBENCHPRO_DIR"
+      rm -rf "$SWEBENCHPRO_DIR/src"
+      git clone --depth 1 "$SWEBENCHPRO_GIT_URL" "$SWEBENCHPRO_DIR/src"
+    fi
+    python3 "$PIPELINE_LIB/swebenchpro_tasks.py" \
+      --src-dir "$SWEBENCHPRO_DIR" \
+      --out-dir "$SWEBENCHPRO_DIR/tasks" \
+      --task "${TASK:-}" \
+      --tasks "${TASKS:-}" \
+      --n-tasks "${N_TASKS:-1}"
+    [ -d "$SWEBENCHPRO_DIR/tasks" ] || die "missing $SWEBENCHPRO_DIR/tasks after materialize"
+    ;;
   deepswe | "")
     if [ ! -d "$DEEPSWE_DIR/tasks" ]; then
       rm -rf "$DEEPSWE_DIR"
@@ -22,7 +37,7 @@ case "${BENCHMARK:-deepswe}" in
     [ -d "$DEEPSWE_DIR/tasks" ] || die "missing $DEEPSWE_DIR/tasks after clone"
     ;;
   *)
-    die "unknown BENCHMARK=${BENCHMARK} (use deepswe or lolbench)"
+    die "unknown BENCHMARK=${BENCHMARK} (use deepswe, lolbench, or swebenchpro)"
     ;;
 esac
 

@@ -164,13 +164,29 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
         if let Err(err) = jenkins_job::ensure_deepswe_one_task_from_cluster(
             &tools.kubectl,
             config,
-            credential_ids,
+            credential_ids.clone(),
         )
         .await
         {
             println!(
                 "Warning: could not ensure '{}' ({err}).",
                 jenkins_job::DEEPSWE_ONE_TASK
+            );
+        }
+        println!(
+            "Ensuring Jenkins job '{}'…",
+            jenkins_job::SWEBENCHPRO_ONE_TASK
+        );
+        if let Err(err) = jenkins_job::ensure_swebenchpro_one_task_from_cluster(
+            &tools.kubectl,
+            config,
+            credential_ids,
+        )
+        .await
+        {
+            println!(
+                "Warning: could not ensure '{}' ({err}).",
+                jenkins_job::SWEBENCHPRO_ONE_TASK
             );
         }
     }

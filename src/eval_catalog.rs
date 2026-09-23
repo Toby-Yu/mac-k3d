@@ -1,6 +1,6 @@
 //! Allow-lists for eval YAML / Jenkins parameters.
 //!
-//! v1 runners are `icode` + `deepseek` on `deepswe` | `lolbench`. Chat Completions
+//! v1 runners are `icode` + `deepseek` on `deepswe` | `lolbench` | `swebenchpro`. Chat Completions
 //! ids live in `MODELS` (not `LLMS`). Append here when a new harness, LLM, model,
 //! or benchmark is implemented.
 
@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 
 pub const HARNESSES: &[&str] = &["icode"];
 pub const LLMS: &[&str] = &["deepseek"];
-pub const BENCHMARKS: &[&str] = &["deepswe", "lolbench"];
+pub const BENCHMARKS: &[&str] = &["deepswe", "lolbench", "swebenchpro"];
 /// DeepSeek Chat Completions ids (`DEEPSEEK_MODEL` / `--model`). First is the default.
 /// Append only `data[].id` values from `GET https://api.deepseek.com/models`.
 /// Product name "V4.1 Flash" is API id `deepseek-flash` (not `deepseek-v4.1-flash`).
@@ -273,7 +273,7 @@ mod tests {
     fn preferred_first_orders_choices() {
         assert_eq!(
             choices_preferred_first(BENCHMARKS, "lolbench"),
-            vec!["lolbench", "deepswe"]
+            vec!["lolbench", "deepswe", "swebenchpro"]
         );
         assert_eq!(
             choices_preferred_first(ICODE_CI_MODES, "git"),

@@ -2,6 +2,16 @@
 
 Turn a **new Linux or Mac** into a **Jenkins controller or worker**. Download a GitHub Release binary; it installs Docker and the rest.
 
+## Project goal
+
+This project is a CI path for AI harness evaluation: many short jobs, each in its own sandbox, so one agent cannot read answers online or touch another run.
+
+- **Jenkins** queues one task per build, caps CPU with a lock, and discards the job when it finishes. That is the parallelism and the short lifetime.
+- **Harbor** runs DeepSWE, LoLBench, and SWE-bench Pro. The agent allowlist is the isolation in this tree: the sandbox may reach the DeepSeek API and nothing else.
+- **k3d** already hosts Jenkins on the controller. The next sandbox is a short-lived k3d cluster per build: a default-deny NetworkPolicy (DeepSeek API only), image pulls through a Harbor registry proxy cache, then the cluster is deleted. That cluster, the NetworkPolicy, and the registry cache are **not** in this tree yet. Do not report them as shipped.
+
+Pier is not the eval runner. It keeps a Docker Compose sandbox on the worker host, so it does not give a fresh Kubernetes network, a NetworkPolicy, or a registry cache. One Harbor runner is the path that can move onto that k3d sandbox next. End-to-end story: [docs/workflow.md](docs/workflow.md).
+
 - **Controller** — Docker → k3d → Jenkins UI (`http://localhost:17070`)
 - **Worker** — Docker + Java + Jenkins inbound agent (not a k3d node)
 

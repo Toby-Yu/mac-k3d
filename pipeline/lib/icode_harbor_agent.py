@@ -1,8 +1,8 @@
 """Harbor adapter: official worker iCode drop bind-mounted at /opt/icode-host.
 
-LoLBench's in-repo agents/icode_agent.py clones iCode from gitcode inside the
-sandbox. That repo is not anonymously cloneable, and this lab does not store a
-GitCode PAT on Jenkins. Use the same *-full-* binary DeepSWE/Pier already uses.
+Used for DeepSWE, LoLBench, and SWE-bench Pro. LoLBench's in-repo agent clones
+iCode from gitcode inside the sandbox. That repo is not anonymously cloneable,
+and this lab does not store a GitCode PAT on Jenkins.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ ICODE_HOST = "/opt/icode-host"
 
 
 class ICodeAgent(BaseInstalledAgent):
-    """Run the official iCode binary inside a LoLBench Harbor task."""
+    """Run the official iCode binary inside a Harbor task."""
 
     @staticmethod
     @override
@@ -67,20 +67,30 @@ class ICodeAgent(BaseInstalledAgent):
             environment,
             command=(
                 "set -eu; mkdir -p /logs/agent/icode /logs/agent/icode-project; "
-                f"cat > /tmp/lolbench_task.md <<'LOLBENCH_TASK_EOF'\n{instruction}\nLOLBENCH_TASK_EOF"
+                f"cat > /tmp/icode_task.md <<'ICODE_TASK_EOF'\n{instruction}\nICODE_TASK_EOF"
             ),
         )
+
+        submit = ""
+        if str(env.get("MAC_K3D_BENCHMARK") or "").strip().lower() == "lolbench":
+            submit = 'lolbench-submit "$repo" || true; '
 
         await self.exec_as_agent(
             environment,
             env=env,
             command=(
                 'export PATH="$HOME/.local/bin:$PATH"; '
-                'repo=$(dirname "$(find /workspace -maxdepth 2 -type d -name .git 2>/dev/null | head -1)"); '
-                '[ -n "$repo" ] && [ "$repo" != "." ] || repo=/workspace; cd "$repo"; '
+                'repo=""; '
+                'for root in /workspace /app; do '
+                '  [ -d "$root" ] || continue; '
+                '  hit=$(find "$root" -maxdepth 3 -type d -name .git 2>/dev/null | head -1 || true); '
+                '  if [ -n "$hit" ]; then repo=$(dirname "$hit"); break; fi; '
+                "done; "
+                'if [ -z "$repo" ]; then if [ -d /app ]; then repo=/app; else repo=/workspace; fi; fi; '
+                'cd "$repo"; '
                 "icode -p /logs/agent/icode-project "
-                "run -t /tmp/lolbench_task.md "
+                "run -t /tmp/icode_task.md "
                 '-C "$repo" -a code --json 2>&1 | tee /logs/agent/icode.txt; '
-                'lolbench-submit "$repo" || true'
+                f"{submit}"
             ),
         )

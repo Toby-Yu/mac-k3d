@@ -213,7 +213,7 @@ pub struct JenkinsJobConfig {
     /// DeepSeek Chat Completions id (`mac-k3d set --model`). Catalog: `deepseek-v4-pro`, `deepseek-flash`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_deepseek_model: String,
-    /// Which Jenkins job receives TASK / N_TASKS / TASKS defaults (`deepswe` | `lolbench`).
+    /// Which Jenkins job receives TASK / N_TASKS / TASKS defaults (`deepswe` | `lolbench` | `swebenchpro`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_benchmark: String,
     /// First N sorted questions when `default_task` and `default_tasks` are empty.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score harness vs baseline into one JSON schema for DeepSWE and LoLBench."""
+"""Score harness vs baseline into one JSON schema for DeepSWE, LoLBench, and SWE-bench Pro."""
 
 from __future__ import annotations
 
@@ -107,6 +107,38 @@ def find_harbor_task_dir(harness_dir: Path, tid: str) -> Path | None:
         return newest
 
     return max(candidates, key=_mtime)
+
+
+def find_scale_task_dir(harness_dir: Path, tid: str) -> Path | None:
+    """SWE-bench Pro writes harness/<instance_id>/eval.json (and agent.patch)."""
+    if not harness_dir.is_dir() or not tid:
+        return None
+    direct = harness_dir / tid
+    if direct.is_dir():
+        return direct
+    return None
+
+
+def scale_eval_resolved(d: Path) -> bool | None:
+    if not d.is_dir():
+        return None
+    for name in ("eval.json", "scale_summary.json"):
+        path = d / name
+        data = load_json(path)
+        if isinstance(data, dict) and "resolved" in data:
+            return parse_reward_value(data.get("resolved"))
+        if isinstance(data, list):
+            for obj in data:
+                if isinstance(obj, dict) and obj.get("id") == d.name:
+                    return parse_reward_value(obj.get("resolved"))
+    newest = None
+    for path in d.rglob("eval.json"):
+        newest = path
+    if newest is not None:
+        data = load_json(newest)
+        if isinstance(data, dict) and "resolved" in data:
+            return parse_reward_value(data.get("resolved"))
+    return None
 
 
 def find_pier_task_dir(harness_dir: Path, tid: str) -> Path | None:
@@ -393,7 +425,13 @@ def verifier_rates(d: Path) -> dict:
                 out["p2p_pass"] = num
             if out["p2p_total"] is None:
                 out["p2p_total"] = den
-        if out["f2p"] is not None and out["p2p"] is not None:
+        counts_ready = (
+            out["f2p_pass"] is not None
+            and out["f2p_total"] is not None
+            and out["p2p_pass"] is not None
+            and out["p2p_total"] is not None
+        )
+        if out["f2p"] is not None and out["p2p"] is not None and counts_ready:
             break
     return out
 
@@ -415,7 +453,8 @@ def scan_dir(d: Path) -> dict:
                 pass
     blob = "\n".join(texts)
     reward = harbor_reward_resolved(d)
-    resolved = reward if reward is not None else find_bool_resolved(blob)
+    text_resolved = find_bool_resolved(blob)
+    resolved = reward if reward is not None else text_resolved
     return {"resolved": resolved, "patch_path": patch}
 
 
@@ -435,6 +474,35 @@ def as_minutes(seconds) -> float | None:
     if not isinstance(seconds, (int, float)):
         return None
     return round(float(seconds) / 60.0, 3)
+
+
+def current_reward_resolved(task_dir: Path) -> bool | None:
+    """This run's baseline grade. Only reward.json next to the patch counts."""
+    path = task_dir / "reward.json"
+    if not path.is_file():
+        return None
+    data = load_json(path)
+    if isinstance(data, dict):
+        if "reward" in data:
+            return parse_reward_value(data["reward"])
+        if "resolved" in data:
+            return parse_reward_value(data["resolved"])
+    return parse_reward_value(data)
+
+
+def partial_from_counts(rates: dict) -> float | None:
+    """(f2p passed + p2p passed) / (f2p total + p2p total) when both buckets are known."""
+    keys = ("f2p_pass", "f2p_total", "p2p_pass", "p2p_total")
+    if any(rates.get(key) is None for key in keys):
+        return None
+    try:
+        passed = int(rates["f2p_pass"]) + int(rates["p2p_pass"])
+        total = int(rates["f2p_total"]) + int(rates["p2p_total"])
+    except (TypeError, ValueError):
+        return None
+    if total <= 0:
+        return 0.0
+    return round(passed / total, 4)
 
 
 def reward_float(resolved: bool | None) -> float | None:
@@ -489,6 +557,59 @@ def baseline_object(bmeta: dict, b_resolved: bool | None) -> dict:
     }
 
 
+def requested_rollouts() -> int:
+    raw = (os.environ.get("N_ROLLOUTS") or "1").strip()
+    if not raw.isdigit():
+        return 1
+    return max(int(raw), 1)
+
+
+def reward_files(job_dir: Path | None) -> list[Path]:
+    """Oldest verifier reward.json first. Each file is one attempt."""
+    if job_dir is None or not job_dir.is_dir():
+        return []
+    found: list[tuple[float, str, Path]] = []
+    for path in job_dir.rglob("reward.json"):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        found.append((mtime, str(path), path))
+    found.sort()
+    return [path for _, _, path in found]
+
+
+def trial_dir_for_reward(path: Path) -> Path:
+    if path.parent.name == "verifier":
+        return path.parent.parent
+    return path.parent
+
+
+def rates_for_trial(trial: Path) -> dict:
+    rates = verifier_rates(trial)
+    if rates["partial"] is None:
+        derived = partial_from_counts(rates)
+        if derived is not None:
+            rates["partial"] = derived
+    return rates
+
+
+def _mean_attempts(rows: list[dict], key: str) -> float | None:
+    vals = [row.get(key) for row in rows if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool)]
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return float(vals[0])
+    return round(sum(float(v) for v in vals) / len(vals), 4)
+
+
+def _sum_counts(rows: list[dict], key: str) -> int | None:
+    vals = [row.get(key) for row in rows if isinstance(row.get(key), int)]
+    if not vals:
+        return None
+    return int(sum(vals))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--harness-dir", required=True)
@@ -518,8 +639,9 @@ def main() -> int:
     baseline_by_id = {x["id"]: x for x in baseline_summary if isinstance(x, dict) and "id" in x}
     baseline_meta = load_json(baseline_dir / "meta.json") or {}
     harness_meta = load_json(harness_dir / "meta.json") or {}
-    lolbench = (os.environ.get("BENCHMARK") or "deepswe") == "lolbench"
-    n_rollouts = 1
+    suite = (os.environ.get("BENCHMARK") or "deepswe").strip().lower()
+    lolbench = suite == "lolbench"
+    n_rollouts = requested_rollouts()
     d_h = harness_meta.get("duration_seconds")
     meta_h_in, meta_h_out = usage_pair(harness_meta.get("token_usage"))
     if lolbench:
@@ -532,31 +654,76 @@ def main() -> int:
 
     per_task = []
     for tid in ids:
-        if lolbench:
-            hdir = find_harbor_task_dir(harness_dir, tid)
-            h = scan_dir(hdir) if hdir is not None else scan_dir(harness_dir / tid)
-            if h["resolved"] is None and h["patch_path"] is None:
-                h = scan_dir(harness_dir)
-            rates_root = hdir if hdir is not None else harness_dir
-        else:
-            hdir = find_pier_task_dir(harness_dir, tid)
-            h = scan_dir(hdir) if hdir is not None else scan_dir(harness_dir / tid)
-            if h["resolved"] is None and h["patch_path"] is None:
-                h = scan_dir(harness_dir)
-            rates_root = hdir if hdir is not None else (
-                harness_dir / tid if (harness_dir / tid).is_dir() else harness_dir
-            )
+        hdir = find_harbor_task_dir(harness_dir, tid)
+        h = scan_dir(hdir) if hdir is not None else scan_dir(harness_dir / tid)
+        if h["resolved"] is None and h["patch_path"] is None:
+            h = scan_dir(harness_dir)
+        rates_root = hdir if hdir is not None else harness_dir
         rates = verifier_rates(rates_root)
         if rates["f2p"] is None and rates["p2p"] is None:
             rates = verifier_rates(harness_dir)
-        b = scan_dir(baseline_dir / tid)
+        derived_partial = None
+        if rates["partial"] is None:
+            derived_partial = partial_from_counts(rates)
+            if derived_partial is not None:
+                rates["partial"] = derived_partial
+        b_resolved = current_reward_resolved(baseline_dir / tid)
         bmeta = baseline_by_id.get(tid, {})
-        if b["resolved"] is None and bmeta.get("ok") is True:
-            b["resolved"] = None
-        reward = reward_float(h["resolved"])
-        c = 1 if reward == 1.0 else 0
+        trial_usage = find_icode_usage(hdir) if hdir is not None else None
+        files = reward_files(hdir if hdir is not None else harness_dir / tid)
+        attempts: list[dict] = []
         tok_in = tok_out = None
-        if not lolbench:
+        token_source = "none"
+        for path in files:
+            trial = trial_dir_for_reward(path)
+            data = load_json(path) or {}
+            resolved = None
+            if isinstance(data, dict):
+                if "reward" in data:
+                    resolved = parse_reward_value(data.get("reward"))
+                elif "resolved" in data:
+                    resolved = parse_reward_value(data.get("resolved"))
+            usage = find_icode_usage(trial)
+            row_rates = rates_for_trial(trial)
+            if row_rates["f2p"] is None and row_rates["p2p"] is None and hdir is not None:
+                row_rates = rates_for_trial(hdir)
+            attempts.append(
+                {
+                    "rates": row_rates,
+                    "resolved": resolved is True,
+                    "usage": usage,
+                }
+            )
+        if len(attempts) > n_rollouts:
+            attempts = attempts[:n_rollouts]
+        if attempts:
+            c = sum(1 for row in attempts if row["resolved"])
+            first = attempts[0]["resolved"]
+            reward = pass_at_1(c, n_rollouts)
+            attempt_rates = [row["rates"] for row in attempts]
+            rates = {
+                "f2p": _mean_attempts(attempt_rates, "f2p"),
+                "p2p": _mean_attempts(attempt_rates, "p2p"),
+                "partial": _mean_attempts(attempt_rates, "partial"),
+                "f2p_pass": _sum_counts(attempt_rates, "f2p_pass"),
+                "f2p_total": _sum_counts(attempt_rates, "f2p_total"),
+                "p2p_pass": _sum_counts(attempt_rates, "p2p_pass"),
+                "p2p_total": _sum_counts(attempt_rates, "p2p_total"),
+            }
+            usages = [row["usage"] for row in attempts if row["usage"] is not None]
+            if usages:
+                tok_in = sum(int(item.get("prompt") or 0) for item in usages)
+                tok_out = sum(int(item.get("completion") or 0) for item in usages)
+                token_source = "trial"
+        else:
+            reward = reward_float(h["resolved"])
+            c = 1 if reward == 1.0 else 0
+            first = reward == 1.0
+        if token_source == "none" and trial_usage is not None:
+            tok_in = int(trial_usage.get("prompt") or 0)
+            tok_out = int(trial_usage.get("completion") or 0)
+            token_source = "trial"
+        elif token_source == "none" and not lolbench:
             tok_in, tok_out = meta_h_in, meta_h_out
         dur_s = d_h if isinstance(d_h, (int, float)) else None
         per_task.append(
@@ -565,7 +732,7 @@ def main() -> int:
                 "c": c,
                 "n": n_rollouts,
                 "pass_frac": pass_at_1(c, n_rollouts),
-                "first": reward == 1.0,
+                "first": first,
                 "reward": reward,
                 "f2p": rates["f2p"],
                 "f2p_pass": rates["f2p_pass"],
@@ -578,19 +745,21 @@ def main() -> int:
                 "tok_out": tok_out,
                 "dur_s": dur_s,
                 "dur_min": as_minutes(dur_s),
-                "baseline": baseline_object(bmeta, b["resolved"]),
+                "baseline": baseline_object(bmeta, b_resolved),
             }
         )
 
     n = len(per_task)
-    harness_ok = sum(1 for t in per_task if t["reward"] == 1.0)
     d_b = baseline_meta.get("duration_seconds")
     wall_seconds = None
     if isinstance(d_h, (int, float)) or isinstance(d_b, (int, float)):
         wall_seconds = round(float(d_h or 0) + float(d_b or 0), 3)
 
     tok_in_h = tok_out_h = None
-    if not lolbench:
+    if any(isinstance(t.get("tok_in"), int) or isinstance(t.get("tok_out"), int) for t in per_task):
+        tok_in_h = sum(int(t.get("tok_in") or 0) for t in per_task)
+        tok_out_h = sum(int(t.get("tok_out") or 0) for t in per_task)
+    elif not lolbench:
         tok_in_h, tok_out_h = meta_h_in, meta_h_out
     tok_in_b = tok_out_b = None
     if baseline_meta.get("token_usage"):
@@ -634,7 +803,7 @@ def main() -> int:
         "access_date_utc": access,
         "wall_seconds": wall_seconds,
         "wall_minutes": as_minutes(wall_seconds),
-        "pass_at_1": pass_at_1(harness_ok, n),
+        "pass_at_1": mean_or_none([t["pass_frac"] for t in per_task]) if per_task else 0.0,
         "macro": {
             "f2p": mean_or_none([t["f2p"] for t in per_task]),
             "p2p": mean_or_none([t["p2p"] for t in per_task]),

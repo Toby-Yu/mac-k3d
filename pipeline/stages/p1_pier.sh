@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P1 — ensure the benchmark runner (Pier for DeepSWE, Harbor for LoLBench)
+# P1 — ensure Harbor for DeepSWE, LoLBench, and SWE-bench Pro
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
@@ -11,35 +11,22 @@ ensure_uv() {
   have uv || die "uv still not on PATH after install"
 }
 
-if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
-  progress 15 "P1: ensuring harbor"
-  if ! have harbor; then
-    ensure_uv
-    echo "Installing harbor via uv tool…"
-    uv tool install harbor
-    export PATH="${HOME}/.local/bin:${PATH}"
-  fi
-  have harbor || die "harbor still not on PATH after install. Try: uv tool install harbor"
-  harbor --help >/dev/null || true
-  echo "OK harbor=$(command -v harbor)"
-  progress 20 "P1 complete"
-  exit 0
-fi
+case "${BENCHMARK:-deepswe}" in
+  deepswe | lolbench | swebenchpro | "")
+    ;;
+  *)
+    die "unknown BENCHMARK=${BENCHMARK} (use deepswe, lolbench, or swebenchpro)"
+    ;;
+esac
 
-progress 15 "P1: ensuring pier"
-
-if ! have pier; then
+progress 15 "P1: ensuring harbor"
+if ! have harbor; then
   ensure_uv
-  echo "Installing datacurve-pier via uv tool…"
-  uv tool install datacurve-pier 2>/dev/null \
-    || uv tool install "git+https://github.com/datacurve-ai/pier"
+  echo "Installing harbor via uv tool…"
+  uv tool install harbor
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
-
-have pier || die "pier still not on PATH after install"
-pier --help >/dev/null || pier -h >/dev/null || true
-PIER_RUN_HELP="$(pier run --help 2>&1 || true)"
-echo "$PIER_RUN_HELP" | grep -q -- '--agent-import-path' \
-  || die "this pier has no --agent-import-path; need datacurve-pier 0.3.x (uv tool install datacurve-pier)"
-echo "OK pier=$(command -v pier) (--agent-import-path present)"
+have harbor || die "harbor still not on PATH after install. Try: uv tool install harbor"
+harbor --help >/dev/null || true
+echo "OK harbor=$(command -v harbor)"
 progress 20 "P1 complete"

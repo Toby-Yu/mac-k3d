@@ -137,13 +137,29 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig, config_path: Option<&Pa
                 if let Err(err) = jenkins_job::ensure_deepswe_one_task_from_cluster(
                     &tools.kubectl,
                     &config,
-                    credential_ids,
+                    credential_ids.clone(),
                 )
                 .await
                 {
                     println!(
                         "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
                         jenkins_job::DEEPSWE_ONE_TASK
+                    );
+                }
+                println!(
+                    "Ensuring Jenkins job '{}'…",
+                    jenkins_job::SWEBENCHPRO_ONE_TASK
+                );
+                if let Err(err) = jenkins_job::ensure_swebenchpro_one_task_from_cluster(
+                    &tools.kubectl,
+                    &config,
+                    credential_ids,
+                )
+                .await
+                {
+                    println!(
+                        "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
+                        jenkins_job::SWEBENCHPRO_ONE_TASK
                     );
                 }
             }

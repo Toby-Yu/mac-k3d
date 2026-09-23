@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
-# P4 — Pier agent icode package present
+# P4 — Harbor agent icode imports (no LLM)
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
-progress 45 "P4: Pier agent icode"
+progress 45 "P4: Harbor agent icode"
 
-[ -d "$PIER_AGENT_DIR" ] || die "missing $PIER_AGENT_DIR"
-[ -f "$PIER_AGENT_DIR/install.sh" ] || die "missing install.sh"
-[ -f "$PIER_AGENT_DIR/run.sh" ] || die "missing run.sh"
-[ -f "$PIER_AGENT_DIR/agent.toml" ] || die "missing agent.toml"
-[ -f "$PIPELINE_LIB/icode_pier_agent.py" ] || die "missing pipeline/lib/icode_pier_agent.py"
-chmod +x "$PIER_AGENT_DIR/install.sh" "$PIER_AGENT_DIR/run.sh" 2>/dev/null || true
+[ -f "$PIPELINE_LIB/icode_harbor_agent.py" ] || die "missing $PIPELINE_LIB/icode_harbor_agent.py"
+have harbor || die "harbor not on PATH (run P1)"
 
-PIER_RUN_HELP="$(pier run --help 2>&1 || true)"
-if echo "$PIER_RUN_HELP" | grep -q -- '--agent-import-path'; then
-  echo "OK Pier 0.3.x adapter $PIPELINE_LIB/icode_pier_agent.py (--agent-import-path icode_pier_agent:ICodeAgent)"
-elif pier agents 2>/dev/null | grep -qi icode; then
-  echo "OK pier lists agent icode"
-else
-  echo "OK agent package layout validated at $PIER_AGENT_DIR"
-fi
+py="python3"
+shebang="$(head -n 1 "$(command -v harbor)" 2>/dev/null || true)"
+case "$shebang" in
+  "#!"*)
+    py="${shebang:2}"
+    py="${py#"${py%%[![:space:]]*}"}"
+    ;;
+esac
+PYTHONPATH="$PIPELINE_LIB${PYTHONPATH:+:$PYTHONPATH}" "$py" -c \
+  "from icode_harbor_agent import ICodeAgent; assert ICodeAgent.name() == 'icode'" \
+  || die "icode_harbor_agent:ICodeAgent did not import"
 
-echo "$PIER_AGENT_DIR" >"$WORKDIR/pier_agent_dir.txt"
+echo "OK Harbor adapter $PIPELINE_LIB/icode_harbor_agent.py (icode_harbor_agent:ICodeAgent)"
 progress 50 "P4 complete"

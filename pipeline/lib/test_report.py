@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -18,7 +19,12 @@ sys.path.insert(0, str(LIB))
 from check_report import validate  # noqa: E402
 from openai_compat import missing_model_message, model_in_ids, parse_model_ids  # noqa: E402
 from pier_result import hollow_job_reason  # noqa: E402
-from score_results import harbor_reward_resolved, pass_at_1, verifier_rates  # noqa: E402
+from score_results import (  # noqa: E402
+    harbor_reward_resolved,
+    pass_at_1,
+    scale_eval_resolved,
+    verifier_rates,
+)
 
 
 FIXTURE = LIB / "testdata" / "report-min.json"
@@ -70,6 +76,11 @@ class CheckReportTests(unittest.TestCase):
         doc["suite"] = "humaneval"
         errors = validate(doc)
         self.assertTrue(any("suite should be" in e for e in errors))
+
+    def test_swebenchpro_suite_ok(self):
+        doc = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        doc["suite"] = "swebenchpro"
+        self.assertEqual(validate(doc), [])
 
     def test_f2p_list_rejected(self):
         doc = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -252,14 +263,14 @@ class ScoreResultsTests(unittest.TestCase):
             self.assertTrue(doc["icode_git"]["sha"].startswith("abcdef12"))
             self.assertEqual(doc["icode_git"]["subject"], "fix harness for PR")
 
-    def test_pier_scores_newest_trial_not_older_fail(self):
+    def test_harbor_scores_newest_job_not_older_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tasks = root / "tasks" / "abs-module-cache-flags"
             tasks.mkdir(parents=True)
             harness = root / "harness"
-            old = harness / "2026-09-16__09-54-24" / "abs-module-cache-flags__old"
-            new = harness / "2026-09-16__11-22-34" / "abs-module-cache-flags__new"
+            old = harness / "harbor_runs" / "2026-09-16__09-54-24" / "abs-module-cache-flags"
+            new = harness / "harbor_runs" / "2026-09-16__11-22-34" / "abs-module-cache-flags"
             (old / "verifier").mkdir(parents=True)
             (new / "verifier").mkdir(parents=True)
             (old / "verifier" / "reward.json").write_text(
@@ -330,6 +341,201 @@ class ScoreResultsTests(unittest.TestCase):
             self.assertEqual(doc["tasks"][0]["f2p_pass"], 20)
             self.assertEqual(doc["tokens"]["in"], 111)
             self.assertEqual(doc["tokens"]["out"], 22)
+
+    def test_two_rollouts_count_resolved_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = root / "tasks" / "example-task"
+            tasks.mkdir(parents=True)
+            job = root / "harness" / "harbor_runs" / "jenkins-2" / "example-task"
+            older = job / "attempt-a" / "verifier"
+            newer = job / "attempt-b" / "verifier"
+            older.mkdir(parents=True)
+            newer.mkdir(parents=True)
+            (older / "reward.json").write_text(
+                '{"reward": 1.0, "f2p": 1.0, "p2p": 1.0, "f2p_pass": 1, "f2p_total": 1, "p2p_pass": 1, "p2p_total": 1}\n',
+                encoding="utf-8",
+            )
+            (newer / "reward.json").write_text(
+                '{"reward": 0.0, "f2p": 0.0, "p2p": 1.0, "f2p_pass": 0, "f2p_total": 1, "p2p_pass": 1, "p2p_total": 1}\n',
+                encoding="utf-8",
+            )
+            (job / "attempt-a" / "agent").mkdir()
+            (job / "attempt-b" / "agent").mkdir()
+            (job / "attempt-a" / "agent" / "icode-usage.json").write_text(
+                '{"input_tokens": 10, "output_tokens": 1}\n', encoding="utf-8"
+            )
+            (job / "attempt-b" / "agent" / "icode-usage.json").write_text(
+                '{"input_tokens": 20, "output_tokens": 2}\n', encoding="utf-8"
+            )
+            now = time.time()
+            os.utime(older / "reward.json", (now - 20, now - 20))
+            os.utime(newer / "reward.json", (now, now))
+            harness = root / "harness"
+            (harness / "meta.json").write_text(
+                json.dumps({"duration_seconds": 4, "llm_model_id": "deepseek-flash"}),
+                encoding="utf-8",
+            )
+            baseline = root / "baseline"
+            baseline.mkdir()
+            (baseline / "meta.json").write_text("{}", encoding="utf-8")
+            out = root / "out.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(LIB / "score_results.py"),
+                    "--harness-dir",
+                    str(harness),
+                    "--baseline-dir",
+                    str(baseline),
+                    "--tasks-dir",
+                    str(root / "tasks"),
+                    "--n-tasks",
+                    "1",
+                    "--out",
+                    str(out),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "BENCHMARK": "deepswe",
+                    "DEEPSEEK_MODEL": "deepseek-flash",
+                    "N_ROLLOUTS": "2",
+                },
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            doc = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(validate(doc), [])
+            task = doc["tasks"][0]
+            self.assertEqual(doc["n_rollouts"], 2)
+            self.assertEqual(task["c"], 1)
+            self.assertEqual(task["n"], 2)
+            self.assertEqual(task["pass_frac"], 0.5)
+            self.assertIs(task["first"], True)
+            self.assertEqual(task["reward"], 0.5)
+            self.assertEqual(doc["pass_at_1"], 0.5)
+            self.assertEqual(task["f2p"], 0.5)
+            self.assertEqual(task["p2p"], 1.0)
+            self.assertEqual(task["f2p_pass"], 1)
+            self.assertEqual(task["f2p_total"], 2)
+            self.assertEqual(task["tok_in"], 30)
+            self.assertEqual(task["tok_out"], 3)
+
+    def test_current_run_ignores_leftover_and_fills_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tid = "instance_nodebb"
+            tasks = root / "tasks" / tid
+            tasks.mkdir(parents=True)
+            harness = root / "harness"
+            trial = harness / "harbor_runs" / "jenkins-16" / tid
+            (trial / "verifier").mkdir(parents=True)
+            (trial / "verifier" / "reward.json").write_text(
+                json.dumps(
+                    {
+                        "reward": 1.0,
+                        "resolved": True,
+                        "f2p": 1.0,
+                        "f2p_pass": 3,
+                        "f2p_total": 3,
+                        "p2p": 1.0,
+                        "p2p_pass": 288,
+                        "p2p_total": 288,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "icode-usage.json").write_text(
+                '{"input_tokens": 12743597, "output_tokens": 68171, "total_tokens": 12811768}\n',
+                encoding="utf-8",
+            )
+            (harness / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 1785,
+                        "llm_model_id": "deepseek-flash",
+                        "token_usage": {"prompt": 15581690, "completion": 75133, "total": 15656823},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            baseline = root / "baseline"
+            task_base = baseline / tid
+            task_base.mkdir(parents=True)
+            (task_base / "eval.json").write_text('{"resolved": false}\n', encoding="utf-8")
+            (task_base / "response.txt").write_text("the tests fail\n", encoding="utf-8")
+            (task_base / "agent.patch").write_text("diff --git a b\n", encoding="utf-8")
+            (baseline / "summary.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": tid,
+                            "ok": True,
+                            "patch_path": str(task_base / "agent.patch"),
+                            "token_usage": {"prompt": 1411, "completion": 33828, "total": 35239},
+                            "duration_seconds": 108.497,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (baseline / "meta.json").write_text(
+                json.dumps({"duration_seconds": 108.497, "token_usage": {"prompt": 1411, "completion": 33828}}),
+                encoding="utf-8",
+            )
+            out = root / "out.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(LIB / "score_results.py"),
+                    "--harness-dir",
+                    str(harness),
+                    "--baseline-dir",
+                    str(baseline),
+                    "--tasks-dir",
+                    str(root / "tasks"),
+                    "--n-tasks",
+                    "1",
+                    "--out",
+                    str(out),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "BENCHMARK": "swebenchpro", "DEEPSEEK_MODEL": "deepseek-flash"},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            doc = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(validate(doc), [])
+            self.assertEqual(doc["tasks"][0]["reward"], 1.0)
+            self.assertEqual(doc["tasks"][0]["partial"], 1.0)
+            self.assertEqual(doc["macro"]["partial"], 1.0)
+            self.assertIsNone(doc["tasks"][0]["baseline"]["reward"])
+            self.assertEqual(doc["tokens"]["in"], 12743597)
+            self.assertEqual(doc["tokens"]["out"], 68171)
+            self.assertEqual(doc["tasks"][0]["baseline"]["tok_in"], 1411)
+
+    def test_clear_stale_baseline_grades(self):
+        from baseline_deepseek import clear_stale_grades
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            task = root / "task"
+            task.mkdir()
+            (task / "eval.json").write_text('{"resolved": false}\n', encoding="utf-8")
+            (task / "reward.json").write_text('{"reward": 0}\n', encoding="utf-8")
+            (root / "scale_summary.json").write_text("{}\n", encoding="utf-8")
+            (root / "scale_eval").mkdir()
+            (root / "scale_eval" / "eval_results.json").write_text("{}\n", encoding="utf-8")
+            (task / "agent.patch").write_text("diff\n", encoding="utf-8")
+            clear_stale_grades(root, task)
+            self.assertFalse((task / "eval.json").exists())
+            self.assertFalse((task / "reward.json").exists())
+            self.assertFalse((root / "scale_summary.json").exists())
+            self.assertFalse((root / "scale_eval").exists())
+            self.assertTrue((task / "agent.patch").is_file())
 
     def test_icode_usage_parses_harbor_json_line(self):
         from icode_usage import parse_icode_usage_text
@@ -473,6 +679,115 @@ class ScoreResultsTests(unittest.TestCase):
             self.assertNotIn("f2p_rate", doc["tasks"][0])
             self.assertNotIn("notes", doc)
 
+    def test_lolbench_agent_report_counts_and_trial_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = root / "tasks" / "ruff_1"
+            tasks.mkdir(parents=True)
+            trial = (
+                root
+                / "harness"
+                / "harbor_runs"
+                / "jenkins-15"
+                / "ruff_1"
+                / "ruff_1_icode_union_15"
+                / "ruff_1__qbeDcAQ"
+            )
+            verifier = trial / "verifier"
+            verifier.mkdir(parents=True)
+            (verifier / "reward.json").write_text(
+                json.dumps(
+                    {
+                        "reward": 0.0,
+                        "resolved": 0.0,
+                        "f2p_pass_rate": 0.6842105263157895,
+                        "p2p_pass_rate": 1.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (verifier / "agent_report.json").write_text(
+                json.dumps(
+                    {
+                        "f2p": {"passed": 13, "failed": 6, "total": 19},
+                        "p2p": {"passed": 51, "failed": 0, "total": 51},
+                        "resolved": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "agent").mkdir()
+            (trial / "agent" / "icode.txt").write_text(
+                '{"usage": {"input_tokens": 10092649, "output_tokens": 73292, "total_tokens": 10165941}}\n',
+                encoding="utf-8",
+            )
+            harness = root / "harness"
+            (harness / "meta.json").write_text(
+                json.dumps({"duration_seconds": 954, "token_usage": {"prompt": 1, "completion": 1}}),
+                encoding="utf-8",
+            )
+            baseline = root / "baseline" / "ruff_1"
+            baseline.mkdir(parents=True)
+            (root / "baseline" / "summary.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "ruff_1",
+                            "ok": True,
+                            "token_usage": {"prompt": 663, "completion": 112, "total": 775},
+                            "duration_seconds": 1.087,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (root / "baseline" / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 1.087,
+                        "token_usage": {"prompt": 663, "completion": 112, "total": 775},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out = root / "out.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(LIB / "score_results.py"),
+                    "--harness-dir",
+                    str(harness),
+                    "--baseline-dir",
+                    str(root / "baseline"),
+                    "--tasks-dir",
+                    str(root / "tasks"),
+                    "--n-tasks",
+                    "1",
+                    "--out",
+                    str(out),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "BENCHMARK": "lolbench", "DEEPSEEK_MODEL": "deepseek-flash"},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            doc = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(validate(doc), [])
+            task = doc["tasks"][0]
+            self.assertEqual(task["f2p_pass"], 13)
+            self.assertEqual(task["f2p_total"], 19)
+            self.assertEqual(task["p2p_pass"], 51)
+            self.assertEqual(task["p2p_total"], 51)
+            self.assertEqual(task["partial"], 0.9143)
+            self.assertEqual(doc["macro"]["partial"], 0.9143)
+            self.assertEqual(task["tok_in"], 10092649)
+            self.assertEqual(task["tok_out"], 73292)
+            self.assertEqual(doc["tokens"]["in"], 10092649)
+            self.assertEqual(doc["tokens"]["out"], 73292)
+            self.assertEqual(task["baseline"]["tok_in"], 663)
+            self.assertIsNone(task["baseline"]["reward"])
+
     def test_verifier_rates_nested_mean_and_list_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             nested = Path(tmp) / "nested"
@@ -590,10 +905,13 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
 
     def test_p5_uses_import_path_not_bare_agent_icode(self):
         text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
-        self.assertIn("icode_pier_agent:ICodeAgent", text)
+        self.assertIn("icode_harbor_agent:ICodeAgent", text)
+        self.assertIn("harbor run", text)
+        self.assertIn("CMD+=(-n 1)", text)
+        self.assertIn('CMD+=(-k "$N_ROLLOUTS")', text)
         self.assertIn("No such option", text)
         self.assertIn("selected_tasks", text)
-        self.assertIn("hollow", text)
+        self.assertNotIn("pier run", text)
         self.assertNotIn("--agent icode", text)
         self.assertIn('CMD+=(--ae "ICODE_API_BASE=https://api.deepseek.com")', text)
         self.assertIn('CMD+=(--ae "ICODE_PROVIDER=DeepSeek")', text)
@@ -641,16 +959,29 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
 
     def test_p1_requires_agent_import_path(self):
         text = (ROOT / "pipeline" / "stages" / "p1_pier.sh").read_text(encoding="utf-8")
-        self.assertIn("--agent-import-path", text)
         self.assertIn("uv tool install harbor", text)
-        self.assertIn("uv tool install datacurve-pier", text)
         self.assertIn("lolbench", text)
+        self.assertIn("swebenchpro", text)
+        self.assertIn("ensuring harbor", text)
+        self.assertNotIn("datacurve-pier", text)
 
-    def test_run_all_skips_p4_for_lolbench(self):
+    def test_run_all_runs_p4_for_every_benchmark(self):
         text = (ROOT / "pipeline" / "stages" / "run_all.sh").read_text(encoding="utf-8")
-        self.assertIn("P4 skipped", text)
+        self.assertNotIn("P4 skipped", text)
         self.assertIn("p3_icode.sh", text)
         self.assertIn("p5_harness.sh", text)
+        self.assertIn("p4_agent.sh", text)
+        self.assertNotIn("Scale Docker eval", text)
+
+    def test_p5_swebenchpro_uses_harbor(self):
+        text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        self.assertNotIn("swebenchpro_run.py", text)
+        self.assertNotIn("pier run", text)
+        self.assertIn("harbor run", text)
+        self.assertIn("icode_harbor_agent:ICodeAgent", text)
+        p2 = (ROOT / "pipeline" / "stages" / "p2_deepswe.sh").read_text(encoding="utf-8")
+        self.assertIn("swebenchpro_tasks.py", p2)
+        self.assertIn("swebenchpro", p2)
 
     def test_hollow_pier_result(self):
         hollow = {
@@ -732,6 +1063,8 @@ class TaskSelectTests(unittest.TestCase):
             lb = root / "lolbench" / "harbor_tasks"
             (lb / "ruff_1").mkdir(parents=True)
             (lb / "fastapi_1").mkdir(parents=True)
+            pro = root / "swebenchpro" / "tasks"
+            (pro / "django__forms-1234").mkdir(parents=True)
             script = f"""
 export MAC_K3D_EVAL_WORKDIR={root}
 export BENCHMARK=deepswe
@@ -747,6 +1080,10 @@ unset TASK
 export N_TASKS=1
 write_selected_tasks
 printf 'lolbench-first:%s\\n' "$(tr '\\n' ',' <"$MAC_K3D_EVAL_WORKDIR/selected_tasks.txt")"
+export BENCHMARK=swebenchpro
+export TASK=django__forms-1234
+write_selected_tasks
+printf 'swebenchpro:%s\\n' "$(tr '\\n' ',' <"$MAC_K3D_EVAL_WORKDIR/selected_tasks.txt")"
 """
             proc = subprocess.run(
                 ["bash", "-c", script],
@@ -758,6 +1095,7 @@ printf 'lolbench-first:%s\\n' "$(tr '\\n' ',' <"$MAC_K3D_EVAL_WORKDIR/selected_t
             self.assertIn("deepswe:zzz-last,", proc.stdout)
             self.assertIn("lolbench:ruff_1,", proc.stdout)
             self.assertIn("lolbench-first:fastapi_1,", proc.stdout)
+            self.assertIn("swebenchpro:django__forms-1234,", proc.stdout)
 
     def test_write_selected_tasks_honors_comma_list(self):
         common = ROOT / "pipeline" / "stages" / "_common.sh"
@@ -837,6 +1175,183 @@ class P3IcodeBinaryTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("OK test_icode_input.sh", proc.stdout)
+
+
+class SwebenchproTests(unittest.TestCase):
+    def test_dockerhub_image_matches_scale_helper(self):
+        from swebenchpro_run import dockerhub_image
+
+        meta = {
+            "instance_id": "instance_NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5-vnan",
+            "repo": "NodeBB/NodeBB",
+            "dockerhub_tag": "NodeBB_NodeBB",
+            "dockerhub_username": "jefzda",
+        }
+        self.assertEqual(
+            dockerhub_image(meta),
+            "jefzda/sweap-images:nodebb.nodebb-NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5",
+        )
+        hub = {
+            **meta,
+            "dockerhub_tag": "nodebb.nodebb-NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5",
+        }
+        self.assertEqual(
+            dockerhub_image(hub),
+            "jefzda/sweap-images:nodebb.nodebb-NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5",
+        )
+
+    def test_row_from_obj_maps_uppercase_fail_to_pass(self):
+        from swebenchpro_tasks import row_from_obj
+
+        row = row_from_obj(
+            {
+                "instance_id": "instance_demo",
+                "repo": "NodeBB/NodeBB",
+                "FAIL_TO_PASS": ["test/a.js | new"],
+                "PASS_TO_PASS": '["test/a.js | old"]',
+                "selected_test_files_to_run": ["test/a.js"],
+            }
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row["fail_to_pass"], '["test/a.js | new"]')
+        self.assertEqual(row["pass_to_pass"], '["test/a.js | old"]')
+        self.assertEqual(row["selected_test_files_to_run"], '["test/a.js"]')
+        self.assertEqual(set(eval(row["fail_to_pass"])), {"test/a.js | new"})
+        self.assertEqual(set(eval(row["pass_to_pass"])), {"test/a.js | old"})
+
+    def test_suite_reward_matches_scale_rule(self):
+        from swebenchpro_tasks import suite_reward
+
+        got = suite_reward({"new", "old"}, ["new"], ["old"])
+        self.assertEqual(got["reward"], 1.0)
+        self.assertTrue(got["resolved"])
+        self.assertEqual(got["f2p"], 1.0)
+        self.assertEqual(got["p2p"], 1.0)
+        missed = suite_reward({"old"}, ["new"], ["old"])
+        self.assertEqual(missed["reward"], 0.0)
+        self.assertFalse(missed["resolved"])
+        self.assertEqual(missed["f2p_pass"], 0)
+        self.assertEqual(missed["f2p_total"], 1)
+
+    def test_scale_suite_rates_from_passed_names(self):
+        from swebenchpro_run import scale_suite_rates
+
+        rates = scale_suite_rates(
+            {
+                "fail_to_pass": '["new-test"]',
+                "pass_to_pass": '["old-test"]',
+            },
+            {"new-test", "old-test"},
+        )
+        self.assertEqual(rates["f2p"], 1.0)
+        self.assertEqual(rates["f2p_pass"], 1)
+        self.assertEqual(rates["f2p_total"], 1)
+        self.assertEqual(rates["p2p"], 1.0)
+        self.assertEqual(rates["p2p_pass"], 1)
+        self.assertEqual(rates["p2p_total"], 1)
+
+    def test_parse_eval_results_bool_map(self):
+        from swebenchpro_run import parse_eval_output
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "eval_results.json").write_text(
+                json.dumps({"instance_demo": True, "instance_other": False}),
+                encoding="utf-8",
+            )
+            got = parse_eval_output(out)
+            self.assertEqual(got["instance_demo"], True)
+            self.assertEqual(got["instance_other"], False)
+
+    def test_write_patches_json_is_scale_list(self):
+        from swebenchpro_run import write_patches_json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "patches.json"
+            write_patches_json(path, {"inst-1": "diff --git a b\n"})
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIsInstance(data, list)
+            self.assertEqual(data[0]["instance_id"], "inst-1")
+            self.assertIn("diff --git", data[0]["patch"])
+
+    def test_materialize_jsonl_and_skip_docker(self):
+        from swebenchpro_tasks import materialize
+
+        fixture = LIB / "testdata" / "swebenchpro-mini.jsonl"
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            src.mkdir()
+            (src / "helper_code").mkdir()
+            (src / "helper_code" / "sweap_eval.jsonl").write_text(
+                fixture.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            out = Path(tmp) / "tasks"
+            ids = materialize(src, out, n_tasks=1)
+            self.assertEqual(ids, ["django__forms-1234"])
+            self.assertTrue((out / "django__forms-1234" / "instruction.md").is_file())
+            meta = json.loads((out / "django__forms-1234" / "meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["dockerhub_tag"], "django_django")
+            toml = (out / "django__forms-1234" / "task.toml").read_text(encoding="utf-8")
+            self.assertIn("docker_image", toml)
+            self.assertIn('environment_mode = "shared"', toml)
+            self.assertNotIn('environment_mode = "separate"', toml)
+            self.assertIn("jefzda/sweap-images:", toml)
+            self.assertTrue((out / "django__forms-1234" / "tests" / "test.sh").is_file())
+            self.assertTrue((out / "django__forms-1234" / "tests" / "grade.py").is_file())
+            dockerfile = (out / "django__forms-1234" / "environment" / "Dockerfile").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("ENTRYPOINT []", dockerfile)
+            compose = (
+                out / "django__forms-1234" / "environment" / "docker-compose.yaml"
+            ).read_text(encoding="utf-8")
+            self.assertIn('entrypoint: ["sh", "-c", "sleep infinity"]', compose)
+            verifier_compose = (
+                out / "django__forms-1234" / "tests" / "docker-compose.yaml"
+            ).read_text(encoding="utf-8")
+            self.assertIn('entrypoint: ["sh", "-c", "sleep infinity"]', verifier_compose)
+            ids2 = materialize(src, out, task="flask__views-9")
+            self.assertEqual(ids2, ["flask__views-9"])
+
+            host = Path(tmp) / "icode-host"
+            host.mkdir()
+            (host / "icode").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            harness = Path(tmp) / "harness"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(LIB / "swebenchpro_run.py"),
+                    "--mode",
+                    "harness",
+                    "--tasks-dir",
+                    str(out),
+                    "--out-dir",
+                    str(harness),
+                    "--src-dir",
+                    str(src),
+                    "--n-tasks",
+                    "1",
+                    "--icode-host",
+                    str(host),
+                    "--skip-docker",
+                    "--skip-eval",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            eval_doc = json.loads(
+                (harness / "django__forms-1234" / "eval.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(eval_doc["resolved"], False)
+            self.assertIs(scale_eval_resolved(harness / "django__forms-1234"), False)
+
+    def test_unknown_benchmark_dies_in_p2(self):
+        text = (ROOT / "pipeline" / "stages" / "p2_deepswe.sh").read_text(encoding="utf-8")
+        self.assertIn("use deepswe, lolbench, or swebenchpro", text)
+        common = (ROOT / "pipeline" / "stages" / "_common.sh").read_text(encoding="utf-8")
+        self.assertIn("swebenchpro) echo \"$SWEBENCHPRO_DIR/tasks\"", common)
 
 
 class SecretGuardTests(unittest.TestCase):

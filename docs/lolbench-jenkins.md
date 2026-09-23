@@ -1,9 +1,10 @@
 # LoLBench Jenkins Job Design
 
-**What `config` writes today:** two separate runners, both iCode + DeepSeek catalog model (Jenkins **DEEPSEEK_MODEL** choice: `deepseek-v4-pro` default, or `deepseek-flash`):
+**What `config` writes today:** three separate runners, all iCode + DeepSeek catalog model (Jenkins **DEEPSEEK_MODEL** choice: `deepseek-v4-pro` default, or `deepseek-flash`):
 
-- **`deepswe_one_task`** — DeepSWE only. P5 = `pier run` + `icode_pier_agent` + worker `*-full-*` drop.
-- **`lolbench_one_task`** — LoLBench only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent` + the same `DEEPSEEK_MODEL` catalog. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop (same as DeepSWE). LoLBench's in-repo gitcode clone is not used. First run: `uv tool install harbor` if missing; on x86_64, P5 builds or retags the task image (Hub tags are arm64-only).
+- **`deepswe_one_task`** — DeepSWE only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent` + worker `*-full-*` drop.
+- **`lolbench_one_task`** — LoLBench only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent` + the same `DEEPSEEK_MODEL` catalog. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop. LoLBench's in-repo gitcode clone is not used. First run: `uv tool install harbor` if missing; on x86_64, P5 builds or retags the task image (Hub tags are arm64-only). P5 also runs `lolbench-submit`.
+- **`swebenchpro_one_task`** — SWE-bench Pro only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent`, same as DeepSWE. Each task is a Harbor `task.toml` whose image is `jefzda/sweap-images:…`. The verifier scores official `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are large; use one `TASK` (`instance_id`).
 
 Operator start: [user-guide.md](user-guide.md). Jenkinsfile still only calls `pipeline/stages/run_all.sh` (Harbor stays in P5, not in job XML).
 

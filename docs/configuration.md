@@ -239,7 +239,7 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `default_harness` | *(empty → `icode`)* | Catalog harness (`mac-k3d set --harness`) |
 | `default_llm` | *(empty → `deepseek`)* | Catalog LLM family (`mac-k3d set --llm`) |
 | `default_deepseek_model` | *(empty → `deepseek-v4-pro`)* | Catalog Chat Completions id (`mac-k3d set --model`; also `deepseek-flash`) |
-| `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench`) |
+| `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench` \| `swebenchpro`) |
 
 ## Environment variables
 

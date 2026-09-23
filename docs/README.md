@@ -14,7 +14,7 @@ Do not add a new top-level folder for each feature branch. Update these product 
 | [workflow.md](workflow.md) | End-to-end: new machine → controller/worker → JSON |
 | [export-import.md](export-import.md) | Worker vs controller YAML; `--force` vs `--skip-secrets` |
 | [secrets.md](secrets.md) | Jenkins credentials on the controller; local `.env` for `--local` |
-| [lolbench-jenkins.md](lolbench-jenkins.md) | `lolbench_one_task` (Harbor) and `deepswe_one_task` (Pier) |
+| [lolbench-jenkins.md](lolbench-jenkins.md) | `deepswe_one_task`, `lolbench_one_task`, and `swebenchpro_one_task` (all Harbor) |
 
 ## Lab runbooks (this team, not the user start-here)
 
@@ -45,7 +45,7 @@ Current install is the GitHub Release binary on **Users** above. This table is t
 
 | Version | What it implemented | Where to read |
 |---------|---------------------|---------------|
-| v0.5.2 (this tree) | Jenkins iCode **git** (`branch` / `tag` / `commit`) or **release** file upload; leftover clone wipe | [user-guide.md](user-guide.md), [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) |
+| v0.5.2 (this tree) | Jenkins iCode **git** (`branch` / `tag` / `commit`) or **release** file upload; leftover clone wipe; SWE-bench Pro third job | [user-guide.md](user-guide.md), [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) |
 | binary-initializer (v0.4+) | Download `mac-k3d-{os}-{arch}`; `setup` installs Docker; controller vs worker | [new-machine.md](new-machine.md), [binary-initializer/README.md](binary-initializer/README.md) |
 | v0.3.0 | `cargo install` + `prepare`; user installs Docker first | **Historical** below (not the product path) |
 
@@ -64,7 +64,7 @@ Each folder is **only** `README.md` (what that git branch shipped) and `testing.
 
 | Document | Description |
 |----------|-------------|
-| [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) | Git kinds, Jenkins upload, leftover wipe |
+| [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) | Git or release iCode input; Harbor on DeepSWE, LoLBench, and SWE-bench Pro |
 | [binary-initializer/README.md](binary-initializer/README.md) | Release `setup` + Docker install |
 
 ## Goals

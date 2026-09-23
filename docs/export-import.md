@@ -98,7 +98,7 @@ Export/import still requires: OS, mac-k3d CLI, Docker (worker) or Docker+k3d+Jen
 | `cluster.name` / `cluster.ports` | k3d cluster + host port remap |
 | `jenkins_job.default_task` | Jenkins **TASK** default |
 | `jenkins_job.default_n_tasks` / `default_tasks` | first-N or explicit ids |
-| `jenkins_job.default_benchmark` | which job gets question defaults (`deepswe` / `lolbench`) |
+| `jenkins_job.default_benchmark` | which job gets question defaults (`deepswe` / `lolbench` / `swebenchpro`) |
 | `jenkins_job.default_harness` | `icode` |
 | `jenkins_job.default_llm` | family `deepseek` |
 | `jenkins_job.default_deepseek_model` | **DEEPSEEK_MODEL** first choice (`deepseek-v4-pro` / `deepseek-flash`) |
@@ -175,7 +175,7 @@ Pick **2a** or **2b**, not both.
 
 Use `mac-k3d set` on the controller YAML (not `sed`). Question flags are mutually exclusive: `--task` / `--n-tasks` / `--tasks`.
 
-Empty `TASK` + empty `TASKS` + `N_TASKS=1` selects the **first** DeepSWE directory after `sort`. `default_benchmark` selects which job receives TASK defaults. Both jobs still get catalog HARNESS / LLM / `DEEPSEEK_MODEL` choices.
+Empty `TASK` + empty `TASKS` + `N_TASKS=1` selects the **first** DeepSWE directory after `sort`. `default_benchmark` selects which job receives TASK defaults. All three jobs still get catalog HARNESS / LLM / `DEEPSEEK_MODEL` choices.
 
 Do **not** send `deepseek-v4.1-flash`. That is the product name. API ids are `deepseek-flash` and `deepseek-v4-pro`.
 

@@ -15,6 +15,8 @@ export OUTPUT_DIR="${MAC_K3D_EVAL_OUTPUT:-$WORKDIR/reports}"
 export DEEPSWE_DIR="${DEEPSWE_DIR:-$WORKDIR/deep-swe}"
 export LOLBENCH_DIR="${LOLBENCH_DIR:-$WORKDIR/lolbench}"
 export LOLBENCH_GIT_URL="${LOLBENCH_GIT_URL:-https://github.com/MichaelLing83/LoLBench-Preview.git}"
+export SWEBENCHPRO_DIR="${SWEBENCHPRO_DIR:-$WORKDIR/swebenchpro}"
+export SWEBENCHPRO_GIT_URL="${SWEBENCHPRO_GIT_URL:-https://github.com/scaleapi/SWE-bench_Pro-os}"
 export ICODE_MODE="${ICODE_MODE:-binary}"
 export ICODE_RELEASE="${ICODE_RELEASE:-}"
 export ICODE_GIT_URL="${ICODE_GIT_URL:-}"
@@ -53,7 +55,7 @@ missing_deepseek_key_hint() {
   if [ -n "${JENKINS_URL:-}" ] || [ -n "${BUILD_ID:-}" ] || [ -n "${WORKSPACE:-}" ]; then
     echo "DEEPSEEK_API_KEY missing. On the Jenkins controller store credential id deepseek-api-key (mac-k3d setup / config). Workers do not use a local .env."
   else
-    echo "DEEPSEEK_API_KEY missing. Developer local run: copy .env.example to .env (gitignored), chmod 600. Workers: use Jenkins job deepswe_one_task or lolbench_one_task (controller credential). Do not export the key or paste it into chat."
+    echo "DEEPSEEK_API_KEY missing. Developer local run: copy .env.example to .env (gitignored), chmod 600. Workers: use Jenkins job deepswe_one_task, lolbench_one_task, or swebenchpro_one_task (controller credential). Do not export the key or paste it into chat."
   fi
 }
 
@@ -286,11 +288,13 @@ export ICODE_RELEASE_UPLOADED="${ICODE_RELEASE_UPLOADED:-}"
 
 # DeepSWE: eval-runs/deep-swe/tasks/<id>
 # LoLBench: eval-runs/lolbench/harbor_tasks/<id>
+# SWE-bench Pro: eval-runs/swebenchpro/tasks/<instance_id>
 benchmark_tasks_dir() {
   case "${BENCHMARK:-deepswe}" in
     lolbench) echo "$LOLBENCH_DIR/harbor_tasks" ;;
+    swebenchpro) echo "$SWEBENCHPRO_DIR/tasks" ;;
     deepswe | "") echo "$DEEPSWE_DIR/tasks" ;;
-    *) die "unknown BENCHMARK=${BENCHMARK} (use deepswe or lolbench)" ;;
+    *) die "unknown BENCHMARK=${BENCHMARK} (use deepswe, lolbench, or swebenchpro)" ;;
   esac
 }
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -109,6 +110,17 @@ def chat_deepseek(prompt: str, api_key: str, model: str) -> dict:
     }
 
 
+def clear_stale_grades(out_dir: Path, task_out: Path) -> None:
+    """Drop grades left by an older runner so this baseline stands alone."""
+    for name in ("eval.json", "scale_summary.json", "reward.json"):
+        for path in (task_out / name, out_dir / name):
+            if path.is_file():
+                path.unlink()
+    scale = out_dir / "scale_eval"
+    if scale.is_dir():
+        shutil.rmtree(scale)
+
+
 def extract_patch(text: str) -> str:
     if "```" in text:
         parts = text.split("```")
@@ -164,6 +176,7 @@ def main() -> int:
             patch = extract_patch(result["content"])
             task_out = out_dir / tid
             task_out.mkdir(parents=True, exist_ok=True)
+            clear_stale_grades(out_dir, task_out)
             (task_out / "response.txt").write_text(result["content"], encoding="utf-8")
             (task_out / "agent.patch").write_text(patch, encoding="utf-8")
             (task_out / "usage.json").write_text(

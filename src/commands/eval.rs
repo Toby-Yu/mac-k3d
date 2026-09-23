@@ -22,11 +22,11 @@ pub struct EvalArgs {
     #[arg(long, default_value_t = 1)]
     pub n_tasks: u32,
 
-    /// Benchmark: deepswe | lolbench
+    /// Benchmark: deepswe | lolbench | swebenchpro
     #[arg(long)]
     pub benchmark: Option<String>,
 
-    /// One question id (DeepSWE task dir or LoLBench harbor_tasks id, e.g. ruff_1)
+    /// One question id (DeepSWE/SWE-bench Pro task dir or LoLBench harbor_tasks id)
     #[arg(long)]
     pub task: Option<String>,
 
@@ -62,10 +62,19 @@ pub struct EvalArgs {
     /// Skip interactive prompts (use flags / env only)
     #[arg(long)]
     pub yes: bool,
+
+    /// Extract embedded pipeline/ into ~/.local/share/mac-k3d and exit (Jenkins Prepare).
+    #[arg(long)]
+    pub sync_pipeline: bool,
 }
 
 /// Interactive or staged iCode / DeepSeek / DeepSWE evaluation.
 pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
+    if args.sync_pipeline {
+        let share = crate::prepare::eval_assets::ensure_share_pipeline()?;
+        println!("Extracted pipeline to {}", share.join("pipeline").display());
+        return Ok(());
+    }
     if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
         println!("Warning: could not extract pipeline ({err}).");
     }
@@ -77,7 +86,7 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             .as_deref()
             .or(env_bench.as_deref())
             .unwrap_or("deepswe"),
-    );
+    )?;
     let mut task = inherit_eval_task(
         args.task.clone(),
         args.benchmark.as_deref(),
@@ -179,22 +188,23 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             .default(0)
             .interact()
             .map_err(|_| Error::Cancelled)?;
+        let benches: Vec<&str> = eval_catalog::BENCHMARKS.to_vec();
+        let default_b = benches
+            .iter()
+            .position(|b| *b == benchmark.as_str())
+            .unwrap_or(0);
         let b_idx = Select::with_theme(&theme)
             .with_prompt("Benchmark")
-            .items(&["deepswe", "lolbench"])
-            .default(if benchmark == "lolbench" { 1 } else { 0 })
+            .items(&benches)
+            .default(default_b)
             .interact()
             .map_err(|_| Error::Cancelled)?;
-        benchmark = if b_idx == 1 {
-            "lolbench".into()
-        } else {
-            "deepswe".into()
-        };
+        benchmark = benches[b_idx].to_string();
         if benchmark == "lolbench" && task.is_empty() {
             task = "ruff_1".into();
         }
         task = Input::with_theme(&theme)
-            .with_prompt("TASK (one question id; empty DeepSWE = first alphabetical)")
+            .with_prompt("TASK (one question id; empty DeepSWE/SWE-bench Pro = first alphabetical)")
             .default(task)
             .allow_empty(true)
             .interact_text()
@@ -607,19 +617,15 @@ fn inherit_eval_task(
         .unwrap_or_default()
 }
 
-fn normalize_benchmark(s: &str) -> String {
-    if s.eq_ignore_ascii_case("lolbench") {
-        "lolbench".into()
-    } else {
-        "deepswe".into()
-    }
+fn normalize_benchmark(s: &str) -> Result<String> {
+    eval_catalog::require_benchmark(s)
 }
 
 fn eval_job_name(benchmark: &str) -> &'static str {
-    if benchmark == "lolbench" {
-        "lolbench_one_task"
-    } else {
-        "deepswe_one_task"
+    match benchmark {
+        "lolbench" => "lolbench_one_task",
+        "swebenchpro" => "swebenchpro_one_task",
+        _ => "deepswe_one_task",
     }
 }
 
@@ -959,16 +965,18 @@ mod tests {
 
     #[test]
     fn normalize_benchmark_accepts_lolbench() {
-        assert_eq!(normalize_benchmark("lolbench"), "lolbench");
-        assert_eq!(normalize_benchmark("LOLBENCH"), "lolbench");
-        assert_eq!(normalize_benchmark("deepswe"), "deepswe");
-        assert_eq!(normalize_benchmark("other"), "deepswe");
+        assert_eq!(normalize_benchmark("lolbench").unwrap(), "lolbench");
+        assert_eq!(normalize_benchmark("LOLBENCH").unwrap(), "lolbench");
+        assert_eq!(normalize_benchmark("deepswe").unwrap(), "deepswe");
+        assert_eq!(normalize_benchmark("swebenchpro").unwrap(), "swebenchpro");
+        assert!(normalize_benchmark("other").is_err());
     }
 
     #[test]
     fn eval_job_name_matches_benchmark() {
         assert_eq!(eval_job_name("lolbench"), "lolbench_one_task");
         assert_eq!(eval_job_name("deepswe"), "deepswe_one_task");
+        assert_eq!(eval_job_name("swebenchpro"), "swebenchpro_one_task");
     }
 
     #[test]

@@ -25,9 +25,11 @@ EOF
 }
 
 run_p3() {
+  # Ignore the worker's saved release in ~/.config/mac-k3d/icode-paths.yaml.
   env \
     MAC_K3D_EVAL_WORKDIR="$1" \
     MAC_K3D_SHARE="$2" \
+    MAC_K3D_ICODE_PATHS="$TMP/no-saved-icode-paths.yaml" \
     ICODE_MODE=binary \
     ICODE_RELEASE="${3-}" \
     bash "$STAGES/p3_icode.sh"

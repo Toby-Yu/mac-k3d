@@ -2,7 +2,7 @@
 
 Workers are CI agents. Developers push iCode to GitHub or GitCode; eval never uses a developer checkout on the worker.
 
-DeepSWE (Pier) and LoLBench (Harbor) both accept the same two **iCode inputs**. P3 calls exactly one function:
+DeepSWE, LoLBench, and SWE-bench Pro (all Harbor) accept the same two **iCode inputs**. P3 calls exactly one function:
 
 | `ICODE_MODE` | Function | What you provide |
 |--------------|----------|------------------|
@@ -29,7 +29,7 @@ flowchart TD
   cm --> p5
 ```
 
-Both Jenkins jobs (`deepswe_one_task` and `lolbench_one_task`) offer both modes.
+All three Jenkins jobs (`deepswe_one_task`, `lolbench_one_task`, `swebenchpro_one_task`) offer both modes.
 
 ## Persist file (local `--stage` / `--local` only)
 
@@ -90,7 +90,7 @@ mac-k3d eval --local --stage p3 --icode-mode git \
 
 P3 writes `icode_git.json` (`url`, `kind`, `ref`, resolved `sha`, `subject`). P7/P8 copy it into the report as `icode_git`. Console: `OK iCode git kind=…`. Private repos: gitignored `.env` (`GITCODE_TOKEN` / `GITHUB_TOKEN`) or Jenkins credentials `gitcode-pat` / `github-pat`.
 
-The clone lives under the eval workdir (`eval-runs/icode-src`), not a permanent developer tree on the worker. A later git eval wipes that tree first. If Pier/Harbor left root/nobody files in `.venv`, P3 deletes it with Docker (`removing leftover … via docker`) — do not `sudo rm` by hand. Git-mode Jenkins also deletes a leftover `ICODE_RELEASE_FILE` and does not treat it as an upload.
+The clone lives under the eval workdir (`eval-runs/icode-src`), not a permanent developer tree on the worker. A later git eval wipes that tree first. If Harbor left root/nobody files in `.venv`, P3 deletes it with Docker (`removing leftover … via docker`) — do not `sudo rm` by hand. Git-mode Jenkins also deletes a leftover `ICODE_RELEASE_FILE` and does not treat it as an upload.
 
 ## Jenkins Build with Parameters
 

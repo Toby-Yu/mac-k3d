@@ -191,6 +191,14 @@ mod tests {
             PIPELINE.get_file("lib/icode_input.sh").is_some(),
             "pipeline/lib/icode_input.sh must be embedded"
         );
+        assert!(
+            PIPELINE.get_file("lib/swebenchpro_run.py").is_some(),
+            "pipeline/lib/swebenchpro_run.py must be embedded"
+        );
+        assert!(
+            PIPELINE.get_file("lib/swebenchpro_tasks.py").is_some(),
+            "pipeline/lib/swebenchpro_tasks.py must be embedded"
+        );
     }
 
     #[test]

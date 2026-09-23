@@ -31,7 +31,7 @@ pub struct SetArgs {
     #[arg(long)]
     pub model: Option<String>,
 
-    /// Benchmark (`deepswe` or `lolbench`)
+    /// Benchmark (`deepswe`, `lolbench`, or `swebenchpro`)
     #[arg(long)]
     pub benchmark: Option<String>,
 

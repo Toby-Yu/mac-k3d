@@ -72,8 +72,8 @@ def validate(doc: object) -> list[str]:
             errors.append(f"missing {key}")
     if doc.get("harness") not in (None, "icode"):
         errors.append("harness should be icode")
-    if doc.get("suite") not in (None, "deepswe", "lolbench"):
-        errors.append("suite should be deepswe or lolbench")
+    if doc.get("suite") not in (None, "deepswe", "lolbench", "swebenchpro"):
+        errors.append("suite should be deepswe, lolbench, or swebenchpro")
     icode_git = doc.get("icode_git")
     if icode_git is not None:
         if not isinstance(icode_git, dict):
@@ -86,8 +86,10 @@ def validate(doc: object) -> list[str]:
             if kind is not None and kind not in ("branch", "tag", "commit"):
                 errors.append("icode_git.kind should be branch, tag, or commit")
     n_rollouts = doc.get("n_rollouts")
-    if n_rollouts is not None and n_rollouts != 1:
-        errors.append("n_rollouts must be 1 for *_one_task reports")
+    if n_rollouts is not None and (
+        isinstance(n_rollouts, bool) or not isinstance(n_rollouts, int) or n_rollouts < 1
+    ):
+        errors.append("n_rollouts must be an integer >= 1")
     err = _rate_error("pass_at_1", doc.get("pass_at_1"))
     if err:
         errors.append(err)
@@ -148,6 +150,12 @@ def validate(doc: object) -> list[str]:
                 errors.append(err)
         if "first" in task and task["first"] not in (True, False):
             errors.append(f"tasks[{i}].first must be a boolean")
+        if (
+            isinstance(n_rollouts, int)
+            and not isinstance(n_rollouts, bool)
+            and task.get("n") != n_rollouts
+        ):
+            errors.append(f"tasks[{i}].n must match n_rollouts")
         for key in ("tok_in", "tok_out", "dur_s", "dur_min"):
             if key not in task:
                 continue

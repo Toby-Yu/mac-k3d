@@ -15,6 +15,48 @@ const DESC_ICODE_GIT_URL: &str = "Git: https URL on github.com or gitcode.com. R
 const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, or commit SHA (match KIND). Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
 const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, or commit (no auto). Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
 
+fn benchmark_label(job_benchmark: &str) -> &'static str {
+    match job_benchmark {
+        "lolbench" => "LoLBench",
+        "deepswe" => "DeepSWE",
+        "swebenchpro" => "SWE-bench Pro",
+        _ => "this benchmark",
+    }
+}
+
+/// Jenkins job blurb. Same eval goal on every suite: iCode harness plus an LLM call.
+fn job_description(job_benchmark: &str) -> String {
+    let label = benchmark_label(job_benchmark);
+    let extra = if job_benchmark == "swebenchpro" {
+        " The task image is large; use one TASK."
+    } else {
+        ""
+    };
+    format!(
+        "Evaluate the iCode harness with an LLM call on one {label} task. Harbor runs iCode plus the DeepSeek catalog model, then the same model with no harness.{extra} See docs/user-guide.md."
+    )
+}
+
+fn task_param_description(job_benchmark: &str) -> String {
+    match job_benchmark {
+        "lolbench" => {
+            "One LoLBench question id (empty + N_TASKS = first N sorted). Example: ruff_1".into()
+        }
+        "deepswe" => "One DeepSWE question id (empty + N_TASKS = first N sorted).".into(),
+        "swebenchpro" => {
+            "One SWE-bench Pro instance id (empty + N_TASKS = first N sorted). The image is large; use one TASK.".into()
+        }
+        _ => "One question id (empty + N_TASKS = first N sorted).".into(),
+    }
+}
+
+fn benchmark_param_description(job_benchmark: &str) -> String {
+    format!(
+        "This job uses {} to evaluate the iCode harness with an LLM call. Do not change it.",
+        benchmark_label(job_benchmark)
+    )
+}
+
 /// Options used when rendering / updating `lolbench_one_task`.
 #[derive(Debug, Clone)]
 pub struct JobOpts {
@@ -445,11 +487,7 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
 }
 
 fn job_config_xml(opts: &JobOpts) -> String {
-    one_task_job_xml(
-        "lolbench",
-        "iCode vs DeepSeek baseline on one LoLBench task (Harbor + iCode + DeepSeek catalog model). DeepSWE stays on Pier. See docs/lolbench-jenkins.md and docs/user-guide.md.",
-        opts,
-    )
+    one_task_job_xml("lolbench", &job_description("lolbench"), opts)
 }
 
 fn xml_escape(s: &str) -> String {
@@ -534,6 +572,8 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     let icode_git_ref_kind_choices =
         eval_catalog::choices_preferred_first(eval_catalog::ICODE_GIT_REF_KINDS, "branch");
     let icode_git_ref_kind_g = groovy_quoted_list(&icode_git_ref_kind_choices);
+    let task_desc_g = groovy_escape(&task_param_description(job_benchmark));
+    let bench_desc_g = groovy_escape(&benchmark_param_description(job_benchmark));
     let icode_mode_desc_g = groovy_escape(DESC_ICODE_MODE);
     let icode_release_file_desc_g = groovy_escape(DESC_ICODE_RELEASE_FILE);
     let icode_git_url_desc_g = groovy_escape(DESC_ICODE_GIT_URL);
@@ -550,10 +590,11 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
   parameters {{
     choice(name: 'HARNESS', choices: [{harness_g}], description: 'Eval harness (catalog; v1: icode)')
     choice(name: 'LLM', choices: [{llm_g}], description: 'LLM family (catalog; v1: deepseek)')
-    choice(name: 'BENCHMARK', choices: ['{bench}'], description: 'This job is one benchmark')
-    string(name: 'TASK', defaultValue: '{task}', description: 'One question id (empty + N_TASKS = first N sorted). LoLBench example: ruff_1')
+    choice(name: 'BENCHMARK', choices: ['{bench}'], description: '{bench_desc_g}')
+    string(name: 'TASK', defaultValue: '{task}', description: '{task_desc_g}')
     string(name: 'TASKS', defaultValue: '{tasks}', description: 'Comma-separated question ids (overrides TASK and first-N)')
     string(name: 'N_TASKS', defaultValue: '{n_tasks}', description: 'First N sorted questions when TASK and TASKS are empty. N>1 is slower/costlier.')
+    string(name: 'N_ROLLOUTS', defaultValue: '1', description: 'Number of iCode attempts for the selected question. Default 1. Each extra attempt is another full agent run.')
     choice(name: 'ICODE_MODE', choices: [{icode_mode_g}], description: '{icode_mode_desc_g}')
     stashedFile(name: 'ICODE_RELEASE_FILE', description: '{icode_release_file_desc_g}')
     string(name: 'ICODE_GIT_URL', defaultValue: '{icode_git_url_g}', description: '{icode_git_url_desc_g}')
@@ -583,6 +624,13 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             command -v docker >/dev/null
             docker info >/dev/null
             SHARE="${{XDG_DATA_HOME:-$HOME/.local/share}}/mac-k3d"
+            export SHARE
+            if command -v mac-k3d >/dev/null 2>&1; then
+              echo "PROGRESS 6% sync pipeline from installed mac-k3d"
+              if ! mac-k3d eval --sync-pipeline; then
+                echo "WARNING: mac-k3d eval --sync-pipeline failed; using existing share pipeline"
+              fi
+            fi
             ROOT="${{MAC_K3D_ROOT:-}}"
             if [ -z "$ROOT" ] || [ ! -f "$ROOT/pipeline/stages/run_all.sh" ]; then
               if [ -f "${{WORKSPACE}}/pipeline/stages/run_all.sh" ]; then
@@ -597,6 +645,17 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             export MAC_K3D_ROOT="$ROOT"
             export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
             export N_TASKS="${{N_TASKS:-1}}"
+            export N_ROLLOUTS="${{N_ROLLOUTS:-1}}"
+            case "$N_ROLLOUTS" in
+              ""|*[!0-9]*)
+                echo "N_ROLLOUTS must be an integer >= 1" >&2
+                exit 1
+                ;;
+            esac
+            if [ "$N_ROLLOUTS" -lt 1 ]; then
+              echo "N_ROLLOUTS must be an integer >= 1" >&2
+              exit 1
+            fi
             export TASK="${{TASK:-}}"
             export TASKS="${{TASKS:-}}"
             export ICODE_MODE="${{ICODE_MODE:-{icode_mode_fb}}}"
@@ -629,6 +688,14 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
               fi
             fi
             echo "PROGRESS 10% running pipeline/stages"
+            echo "MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK ICODE_MODE=$ICODE_MODE"
+            if [ ! -f "$MAC_K3D_ROOT/pipeline/lib/swebenchpro_run.py" ]; then
+              echo "pipeline missing swebenchpro_run.py under $MAC_K3D_ROOT (stale share extract)"
+            fi
+            if [ "${{BENCHMARK}}" = "swebenchpro" ] && [ ! -f "$MAC_K3D_ROOT/pipeline/lib/swebenchpro_run.py" ]; then
+              echo "ERROR: this worker pipeline is too old for swebenchpro. On the worker: mac-k3d config -c ~/.config/mac-k3d/worker.yaml after installing the CLI that embeds swebenchpro, or set MAC_K3D_ROOT to the git checkout." >&2
+              exit 1
+            fi
             bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
             echo "PROGRESS 100% done"
             if [ -f "$MAC_K3D_EVAL_WORKDIR/last_output.txt" ]; then
@@ -664,6 +731,8 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
         icode_git_url_g = icode_git_url_g,
         icode_git_ref_g = icode_git_ref_g,
         icode_git_ref_kind_g = icode_git_ref_kind_g,
+        task_desc_g = task_desc_g,
+        bench_desc_g = bench_desc_g,
         icode_mode_desc_g = icode_mode_desc_g,
         icode_release_file_desc_g = icode_release_file_desc_g,
         icode_git_url_desc_g = icode_git_url_desc_g,
@@ -679,6 +748,8 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
     let task_xml = xml_escape(&task);
     let tasks_xml = xml_escape(&tasks);
     let desc_xml = xml_escape(description);
+    let task_desc_xml = xml_escape(&task_param_description(job_benchmark));
+    let bench_desc_xml = xml_escape(&benchmark_param_description(job_benchmark));
     let harness_choices =
         eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness);
     let llm_choices = eval_catalog::choices_preferred_first(eval_catalog::LLMS, &opts.default_llm);
@@ -728,6 +799,7 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         </hudson.model.ChoiceParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
           <name>BENCHMARK</name>
+          <description>{bench_desc_xml}</description>
           <choices class="java.util.Arrays$ArrayList">
             <a class="string-array">
               <string>{bench_xml}</string>
@@ -736,6 +808,7 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         </hudson.model.ChoiceParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>TASK</name>
+          <description>{task_desc_xml}</description>
           <defaultValue>{task_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
@@ -747,6 +820,12 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         <hudson.model.StringParameterDefinition>
           <name>N_TASKS</name>
           <defaultValue>{n_tasks}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>N_ROLLOUTS</name>
+          <description>Number of iCode attempts for the selected question. Default 1. Each extra attempt is another full agent run.</description>
+          <defaultValue>1</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
@@ -906,37 +985,36 @@ fn urlencoding_simple(s: &str) -> String {
 }
 
 pub const DEEPSWE_ONE_TASK: &str = "deepswe_one_task";
+pub const SWEBENCHPRO_ONE_TASK: &str = "swebenchpro_one_task";
 
-/// Ensure Pipeline job `deepswe_one_task` (Pier + DeepSWE + iCode vs DeepSeek baseline).
-pub fn ensure_deepswe_one_task(
+fn ensure_named_one_task_xml(
+    job_name: &str,
+    xml: &str,
     jenkins_url: &str,
     api_user: &str,
     api_token_or_password: &str,
-    opts: &JobOpts,
 ) -> Result<()> {
     let base = jenkins_url.trim_end_matches('/');
     let auth = format!("{api_user}:{api_token_or_password}");
 
     wait_for_jenkins(base, &auth, Duration::from_secs(90))?;
 
-    let cookie_file = tempfile_path("mac-k3d-deepswe-one-task-cookies")?;
+    let cookie_file = tempfile_path(&format!("mac-k3d-{job_name}-cookies"))?;
     let crumb = fetch_crumb(base, &auth, &cookie_file);
 
     let exists = curl_status(
         base,
         &auth,
-        &format!("/job/{DEEPSWE_ONE_TASK}/api/json"),
+        &format!("/job/{job_name}/api/json"),
         &crumb,
         &cookie_file,
     )
     .map(|c| c == 200)
     .unwrap_or(false);
 
-    let xml = deepswe_one_task_job_xml(opts);
-
     if exists {
-        println!("Updating Jenkins job '{DEEPSWE_ONE_TASK}'…");
-        let post_url = format!("{base}/job/{DEEPSWE_ONE_TASK}/config.xml");
+        println!("Updating Jenkins job '{job_name}'…");
+        let post_url = format!("{base}/job/{job_name}/config.xml");
         let mut cmd = Command::new("curl");
         cmd.args([
             "-sS",
@@ -952,7 +1030,7 @@ pub fn ensure_deepswe_one_task(
             "POST",
             &post_url,
             "--data-binary",
-            &xml,
+            xml,
             "-w",
             "\n%{http_code}",
         ]);
@@ -960,25 +1038,22 @@ pub fn ensure_deepswe_one_task(
             cmd.args(["-H", &format!("{field}: {value}")]);
         }
         let output = cmd.output().map_err(|e| Error::CommandFailed {
-            cmd: "curl config.xml deepswe_one_task".into(),
+            cmd: format!("curl config.xml {job_name}"),
             source: e.into(),
         })?;
         let _ = std::fs::remove_file(&cookie_file);
         let raw = String::from_utf8_lossy(&output.stdout);
         let code = raw.lines().last().unwrap_or("").trim().to_string();
         if code != "200" && code != "201" {
-            println!("Warning: failed to update '{DEEPSWE_ONE_TASK}' (HTTP {code}).");
+            println!("Warning: failed to update '{job_name}' (HTTP {code}).");
         } else {
-            println!("Updated job '{DEEPSWE_ONE_TASK}'.");
+            println!("Updated job '{job_name}'.");
         }
         return Ok(());
     }
 
-    let create_url = format!(
-        "{base}/createItem?name={}",
-        urlencoding_simple(DEEPSWE_ONE_TASK)
-    );
-    println!("Creating Jenkins job '{DEEPSWE_ONE_TASK}' on {base} …");
+    let create_url = format!("{base}/createItem?name={}", urlencoding_simple(job_name));
+    println!("Creating Jenkins job '{job_name}' on {base} …");
     let mut cmd = Command::new("curl");
     cmd.args([
         "-sS",
@@ -994,7 +1069,7 @@ pub fn ensure_deepswe_one_task(
         "POST",
         &create_url,
         "--data-binary",
-        &xml,
+        xml,
         "-w",
         "\n%{http_code}",
     ]);
@@ -1002,21 +1077,55 @@ pub fn ensure_deepswe_one_task(
         cmd.args(["-H", &format!("{field}: {value}")]);
     }
     let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: "curl createItem deepswe_one_task".into(),
+        cmd: format!("curl createItem {job_name}"),
         source: e.into(),
     })?;
     let _ = std::fs::remove_file(&cookie_file);
     let raw = String::from_utf8_lossy(&output.stdout);
     let code = raw.lines().last().unwrap_or("").trim().to_string();
     if code != "200" && code != "201" && code != "302" && code != "303" {
-        println!("Warning: failed to create '{DEEPSWE_ONE_TASK}' (HTTP {code}).");
+        println!("Warning: failed to create '{job_name}' (HTTP {code}).");
         return Ok(());
     }
     println!(
-        "Created job '{DEEPSWE_ONE_TASK}'.\n\
-         Trigger: {base}/job/{DEEPSWE_ONE_TASK}/buildWithParameters  (or: mac-k3d eval)"
+        "Created job '{job_name}'.\n\
+         Trigger: {base}/job/{job_name}/buildWithParameters  (or: mac-k3d eval)"
     );
     Ok(())
+}
+
+/// Ensure Pipeline job `deepswe_one_task` (DeepSWE evaluates the iCode harness with an LLM call).
+pub fn ensure_deepswe_one_task(
+    jenkins_url: &str,
+    api_user: &str,
+    api_token_or_password: &str,
+    opts: &JobOpts,
+) -> Result<()> {
+    let xml = deepswe_one_task_job_xml(opts);
+    ensure_named_one_task_xml(
+        DEEPSWE_ONE_TASK,
+        &xml,
+        jenkins_url,
+        api_user,
+        api_token_or_password,
+    )
+}
+
+/// Ensure Pipeline job `swebenchpro_one_task` (SWE-bench Pro evaluates the iCode harness with an LLM call).
+pub fn ensure_swebenchpro_one_task(
+    jenkins_url: &str,
+    api_user: &str,
+    api_token_or_password: &str,
+    opts: &JobOpts,
+) -> Result<()> {
+    let xml = swebenchpro_one_task_job_xml(opts);
+    ensure_named_one_task_xml(
+        SWEBENCHPRO_ONE_TASK,
+        &xml,
+        jenkins_url,
+        api_user,
+        api_token_or_password,
+    )
 }
 
 pub async fn ensure_deepswe_one_task_from_cluster(
@@ -1041,12 +1150,34 @@ pub async fn ensure_deepswe_one_task_from_cluster(
     ensure_deepswe_one_task(&url, "admin", &password, &opts)
 }
 
+pub async fn ensure_swebenchpro_one_task_from_cluster(
+    kubectl: &Path,
+    config: &crate::config::MacK3dConfig,
+    credential_ids: Vec<String>,
+) -> Result<()> {
+    if !config.jenkins.enabled {
+        return Ok(());
+    }
+    let url = crate::runtime::jenkins::ui_url(config);
+    let password = match crate::runtime::jenkins::admin_password(kubectl, config).await {
+        Ok(p) if !p.is_empty() => p,
+        Ok(_) | Err(_) => {
+            println!(
+                "Skipping '{SWEBENCHPRO_ONE_TASK}' create — could not read Jenkins admin password yet."
+            );
+            return Ok(());
+        }
+    };
+    let opts = JobOpts::from_config(config, credential_ids);
+    ensure_swebenchpro_one_task(&url, "admin", &password, &opts)
+}
+
 fn deepswe_one_task_job_xml(opts: &JobOpts) -> String {
-    one_task_job_xml(
-        "deepswe",
-        "iCode vs DeepSeek baseline on one DeepSWE task (Pier + iCode + DeepSeek catalog model). Arm A = iCode + LLM; Arm B = the same LLM without iCode. See docs/user-guide.md.",
-        opts,
-    )
+    one_task_job_xml("deepswe", &job_description("deepswe"), opts)
+}
+
+fn swebenchpro_one_task_job_xml(opts: &JobOpts) -> String {
+    one_task_job_xml("swebenchpro", &job_description("swebenchpro"), opts)
 }
 
 #[cfg(test)]
@@ -1108,6 +1239,7 @@ mod tests {
         assert!(!jf.contains("string(name: 'ICODE_RELEASE'"));
         assert!(jf.contains("ICODE_RELEASE_FILE"));
         assert!(jf.contains("ICODE_RELEASE_UPLOADED"));
+        assert!(jf.contains("--sync-pipeline"));
         assert!(jf.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"));
         assert!(jf.contains("unstash 'ICODE_RELEASE_FILE'"));
         assert!(jf.contains("--force-rm"));
@@ -1225,6 +1357,8 @@ mod tests {
         assert!(xml.contains("withCredentials"));
         assert!(xml.contains("ParametersDefinitionProperty"));
         assert!(xml.contains("<name>N_TASKS</name>"));
+        assert!(xml.contains("<name>N_ROLLOUTS</name>"));
+        assert!(xml.contains("<defaultValue>1</defaultValue>"));
         assert!(xml.contains("<name>TASK</name>"));
         assert!(xml.contains("mac-k3d config -c worker.yaml"));
         assert!(xml.contains("eval --stage p0"));
@@ -1258,18 +1392,33 @@ mod tests {
     fn both_jobs_share_run_all_and_differ_by_benchmark() {
         let deepswe = deepswe_one_task_job_xml(&deepswe_opts(vec!["deepseek-api-key".into()]));
         let lolbench = job_config_xml(&sample_opts());
+        let swebenchpro =
+            swebenchpro_one_task_job_xml(&deepswe_opts(vec!["deepseek-api-key".into()]));
         assert!(deepswe.contains("<string>deepswe</string>"));
         assert!(lolbench.contains("<string>lolbench</string>"));
+        assert!(swebenchpro.contains("<string>swebenchpro</string>"));
         assert!(deepswe.contains("run_all.sh"));
         assert!(lolbench.contains("run_all.sh"));
-        assert!(lolbench.contains("Harbor + iCode"));
-        assert!(deepswe.contains("Pier + iCode"));
+        assert!(swebenchpro.contains("run_all.sh"));
+        assert!(lolbench.contains("Evaluate the iCode harness with an LLM call on one LoLBench task"));
+        assert!(deepswe.contains("Evaluate the iCode harness with an LLM call on one DeepSWE task"));
+        assert!(swebenchpro.contains(
+            "Evaluate the iCode harness with an LLM call on one SWE-bench Pro task"
+        ));
+        assert!(lolbench.contains("One LoLBench question id"));
+        assert!(deepswe.contains("One DeepSWE question id"));
+        assert!(swebenchpro.contains("One SWE-bench Pro instance id"));
+        assert!(!lolbench.contains("stays on Pier"));
+        assert!(!deepswe.contains("stays on Pier"));
+        assert!(!swebenchpro.contains("stays on Pier"));
         assert!(!deepswe.contains("harbor run"));
         assert!(!lolbench.contains("harbor run"));
         assert!(deepswe.contains("StashedFileParameterDefinition"));
         assert!(lolbench.contains("StashedFileParameterDefinition"));
+        assert!(swebenchpro.contains("StashedFileParameterDefinition"));
         assert!(!deepswe.contains("<name>ICODE_RELEASE</name>"));
         assert!(!lolbench.contains("<name>ICODE_RELEASE</name>"));
+        assert!(!swebenchpro.contains("<name>ICODE_RELEASE</name>"));
     }
 
     #[test]
@@ -1281,10 +1430,21 @@ mod tests {
         opts.default_tasks.clear();
         let deepswe = deepswe_one_task_job_xml(&opts);
         let lolbench = job_config_xml(&opts);
+        let swebenchpro = swebenchpro_one_task_job_xml(&opts);
         assert!(deepswe.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
         assert!(deepswe.contains("<name>N_TASKS</name>"));
+        assert!(deepswe.contains("<name>N_ROLLOUTS</name>"));
+        assert!(deepswe.contains("<defaultValue>1</defaultValue>"));
         assert!(deepswe.contains("<defaultValue>2</defaultValue>"));
         assert!(lolbench.contains("<defaultValue>ruff_1</defaultValue>"));
+        let (task, n, tasks) = question_defaults_for_job(&opts, "swebenchpro");
+        assert!(task.is_empty());
+        assert_eq!(n, 1);
+        assert!(tasks.is_empty());
+        assert!(swebenchpro.contains("<name>N_TASKS</name>"));
+        assert!(swebenchpro.contains("<name>N_ROLLOUTS</name>"));
+        assert!(swebenchpro.contains("<defaultValue>1</defaultValue>"));
+        assert!(lolbench.contains("<name>N_ROLLOUTS</name>"));
         assert!(lolbench.contains("<name>HARNESS</name>"));
         assert!(lolbench.contains("<string>icode</string>"));
         assert!(lolbench.contains("<name>LLM</name>"));
@@ -1347,5 +1507,45 @@ mod tests {
         let cfg = crate::config::MacK3dConfig::default();
         let opts = JobOpts::from_config(&cfg, Vec::new());
         assert_eq!(opts.default_deepseek_model, eval_catalog::default_model());
+    }
+
+    #[test]
+    fn dump_swebenchpro_job_xml_when_env_set() {
+        let Ok(path) = std::env::var("DUMP_SWEBENCHPRO_JOB_XML") else {
+            return;
+        };
+        if path.trim().is_empty() {
+            return;
+        }
+        let mut opts = sample_opts();
+        opts.default_icode_git_url = String::new();
+        opts.default_benchmark = "swebenchpro".into();
+        opts.default_task = String::new();
+        opts.default_n_tasks = 1;
+        opts.default_deepseek_model = "deepseek-flash".into();
+        std::fs::write(&path, swebenchpro_one_task_job_xml(&opts)).expect("write xml");
+        if let Ok(dir) = std::env::var("DUMP_ALL_ONE_TASK_XML_DIR") {
+            if !dir.trim().is_empty() {
+                let _ = std::fs::create_dir_all(&dir);
+                let mut lol = sample_opts();
+                lol.default_icode_git_url = String::new();
+                lol.default_deepseek_model = "deepseek-flash".into();
+                std::fs::write(
+                    format!("{dir}/lolbench_one_task.xml"),
+                    job_config_xml(&lol),
+                )
+                .expect("write lolbench xml");
+                let mut ds = deepswe_opts(vec![
+                    "deepseek-api-key".into(),
+                    "gitcode-pat".into(),
+                ]);
+                ds.default_deepseek_model = "deepseek-flash".into();
+                std::fs::write(
+                    format!("{dir}/deepswe_one_task.xml"),
+                    deepswe_one_task_job_xml(&ds),
+                )
+                .expect("write deepswe xml");
+            }
+        }
     }
 }

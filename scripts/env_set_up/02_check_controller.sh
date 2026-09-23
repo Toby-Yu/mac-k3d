@@ -24,5 +24,7 @@ job_exists lolbench_one_task || die "job lolbench_one_task not found at ${JENKIN
 pass "job lolbench_one_task present"
 job_exists deepswe_one_task || die "job deepswe_one_task not found at ${JENKINS_URL}"
 pass "job deepswe_one_task present"
+job_exists swebenchpro_one_task || die "job swebenchpro_one_task not found at ${JENKINS_URL}"
+pass "job swebenchpro_one_task present"
 
 pass "02_check_controller complete"

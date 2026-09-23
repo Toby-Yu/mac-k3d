@@ -40,7 +40,7 @@ Global `-c / --config` is honored.
 
 If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
 
-Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **`deepswe_one_task`** and **`lolbench_one_task`** (same P0–P8 pipeline; pick the job or `--benchmark`).
+Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **`deepswe_one_task`**, **`lolbench_one_task`**, and **`swebenchpro_one_task`** (same P0–P8 pipeline; pick the job or `--benchmark`).
 
 ---
 
@@ -58,6 +58,7 @@ mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode git \
 mac-k3d eval --local --benchmark deepswe --n-tasks 1 --model deepseek-flash
 mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git \
   --icode-git-url https://github.com/org/icode.git --icode-git-ref main --yes
+mac-k3d eval --local --benchmark swebenchpro --n-tasks 1 --icode-mode release
 mac-k3d eval                         # interactive → local or Jenkins *_one_task
 # Jenkins release: open UI and upload ICODE_RELEASE_FILE (--yes cannot attach a file)
 ```
@@ -69,8 +70,8 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 | `--stage p0..p8` | Run one stage script under `pipeline/stages/` |
 | `--local` | Full local `run_all.sh` (no Jenkins) |
 | `--n-tasks N` | Number of tasks when `--task` is empty (default 1) |
-| `--benchmark deepswe\|lolbench` | Suite (default `deepswe`; Jenkins job follows this) |
-| `--task ID` | One question id (empty DeepSWE = first alphabetical; LoLBench example `ruff_1`) |
+| `--benchmark deepswe\|lolbench\|swebenchpro` | Suite (default `deepswe`; Jenkins job follows this) |
+| `--task ID` | One question id (empty DeepSWE/SWE-bench Pro = first alphabetical; LoLBench example `ruff_1`) |
 | `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref). See [icode-harness-inputs.md](icode-harness-inputs.md) |
 | `--icode-release PATH\|URL` | `release` mode for `--local` / `--stage`; empty = persist file then `~/.local/share/mac-k3d/icode-*-full-*` or `icode`. Jenkins release uses UI upload `ICODE_RELEASE_FILE` (`--yes` does not attach a file) |
 | `--icode-git-url URL` | `git` mode: `https://` on github.com or gitcode.com (no tokens in the URL) |
@@ -291,7 +292,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--llm <ID>` | Catalog LLM family (v1: `deepseek`) |
 | `--model <ID>` | DeepSeek Chat Completions id (`deepseek-v4-pro` default, or `deepseek-flash`) |
 | `--check-models` | Optional live `GET /models` against `.env` key; fail if YAML/`--model` id is not a provider id |
-| `--benchmark <ID>` | `deepswe` or `lolbench` (which job receives TASK / N_TASKS / TASKS defaults) |
+| `--benchmark <ID>` | `deepswe`, `lolbench`, or `swebenchpro` (which job receives TASK / N_TASKS / TASKS defaults) |
 | `--task <ID>` | One question id |
 | `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |
 | `--tasks a,b` | Explicit comma-separated ids |
