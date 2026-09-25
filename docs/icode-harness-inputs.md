@@ -7,7 +7,7 @@ DeepSWE, LoLBench, and SWE-bench Pro (all Harbor) accept the same two **iCode in
 | `ICODE_MODE` | Function | What you provide |
 |--------------|----------|------------------|
 | `release` (`binary` is an alias) | `get_release_icode` | Jenkins: **upload** `ICODE_RELEASE_FILE`. Local `--stage` / `--local`: `--icode-release PATH` or persist/discover |
-| `git` | `get_bin_icode` | Allow-listed `https://` URL + **branch / tag / commit** |
+| `git` | `get_bin_icode` | Allow-listed `https://` URL + **branch / tag / commit / pr** |
 
 A GitHub/GitCode **Release page** is not a git clone. Do **not** clone the iCode repo and then hunt for zip assets. `ICODE_MODE=git` with `ICODE_GIT_REF_KIND=tag` checks out that **tag in git**. `ICODE_MODE=release` uses the binary drop you upload (Jenkins) or already downloaded (local).
 
@@ -22,11 +22,13 @@ flowchart TD
   kinds -->|branch| br[Branch tip]
   kinds -->|tag| tg[Detached tag]
   kinds -->|commit| cm[Detached SHA]
+  kinds -->|pr| prn[Detached PR tip]
   jenkinsUp --> p5[P5 bind /opt/icode-host]
   localR --> p5
   br --> p5
   tg --> p5
   cm --> p5
+  prn --> p5
 ```
 
 All three Jenkins jobs (`deepswe_one_task`, `lolbench_one_task`, `swebenchpro_one_task`) offer both modes.
@@ -79,6 +81,7 @@ Clone `https://github.com/…` or `https://gitcode.com/…` (no tokens in the UR
 | `branch` | Tip of that branch (Jenkins/CLI default) |
 | `tag` | Detached tag (this is a “git release”, not GitHub Release assets) |
 | `commit` | Detached SHA, including a PR commit before merge |
+| `pr` | Pull-request number in `ICODE_GIT_REF`. GitHub fetches `refs/pull/<n>/head`. GitCode fetches `refs/merge-requests/<n>/head` (then `refs/pull/<n>/head`). The recorded SHA is that tip, which is the full PR tree |
 
 Leftover `auto` (old queued builds) still maps: 7–40 hex → commit, else branch. Do not pick it on the Jenkins form.
 
@@ -100,7 +103,7 @@ Same fields on **both** jobs. Unused fields stay on the form: leave those contro
 |-------|---------|-----|
 | `ICODE_MODE` | `release` | `git` |
 | `ICODE_RELEASE_FILE` | **required upload** | leave this control as it is |
-| `ICODE_GIT_URL` / `REF` / `KIND` | leave these controls as they are | required (`KIND` is `branch`, `tag`, or `commit`) |
+| `ICODE_GIT_URL` / `REF` / `KIND` | leave these controls as they are | required (`KIND` is `branch`, `tag`, `commit`, or `pr`; for `pr`, `REF` is the pull-request number) |
 
 Vice versa: if you chose git, ignore the file picker; if you chose release, ignore URL / ref / kind.
 

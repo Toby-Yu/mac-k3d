@@ -75,15 +75,15 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 | `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref). See [icode-harness-inputs.md](icode-harness-inputs.md) |
 | `--icode-release PATH\|URL` | `release` mode for `--local` / `--stage`; empty = persist file then `~/.local/share/mac-k3d/icode-*-full-*` or `icode`. Jenkins release uses UI upload `ICODE_RELEASE_FILE` (`--yes` does not attach a file) |
 | `--icode-git-url URL` | `git` mode: `https://` on github.com or gitcode.com (no tokens in the URL) |
-| `--icode-git-ref REF` | `git` mode: branch name, tag, or commit SHA (PR commit to score before merge). Default `main` |
-| `--icode-git-ref-kind KIND` | `branch` (default), `tag`, or `commit` (PR SHA). Leftover `auto` still maps: 7–40 hex → commit, else branch |
+| `--icode-git-ref REF` | `git` mode: branch name, tag, commit SHA, or pull-request number when kind is `pr`. Default `main` |
+| `--icode-git-ref-kind KIND` | `branch` (default), `tag`, `commit` (PR SHA), or `pr` (pull-request number). Leftover `auto` still maps: 7–40 hex → commit, else branch |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
-| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-v4-pro` (default) or `deepseek-flash`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted |
+| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-v4-pro` (default) or `deepseek-flash`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=OpenAI` and `ICODE_API_BASE=https://api.deepseek.com/v1`; the HTTP model id stays this catalog id |
 | `--yes` | Skip prompts: Jenkins `deepswe_one_task` or `lolbench_one_task` unless `--local`. Git `--yes` queues the job. Release `--yes` prints UI upload instructions (cannot attach `ICODE_RELEASE_FILE`). Also skips the git PAT prompt |
 
 Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.
 
-v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-v4-pro` (default) and `deepseek-flash`. Benchmark is `deepswe` or `lolbench`. Output: `eval-runs/reports/eval-icode-deepseek-{benchmark}-n{N}-{utc}.json`.
+v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-v4-pro` (default) and `deepseek-flash`. Benchmark is `deepswe`, `lolbench`, or `swebenchpro`. Output: `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, with `summary.md` and `report.html` in that folder, and a checkout backup at `output/<benchmark>/<same run folder>.tar.gz`. Field glossary: [evaluation.md](evaluation.md). Slot packing: [optimization.md](optimization.md).
 
 ---
 
@@ -300,7 +300,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.
 
-`--check-models` is optional and does **not** rewrite Chat Completions. It `GET`s `{ICODE_API_BASE or https://api.deepseek.com}/models` (OpenAI list JSON, `data[].id`) using `DEEPSEEK_API_KEY` from the environment or `.env`. Fail if the YAML / `--model` id is missing from that list. Cloud `set` on YAML often has **no** key — run this on a **worker / local** machine with `.env`, not as a hard requirement of controller `set`. P0 does the same check when the key is present (before paid P5/P6).
+`--check-models` is optional and does **not** rewrite Chat Completions. It `GET`s `https://api.deepseek.com/models` (a trailing `/v1` on `ICODE_API_BASE` is stripped; OpenAI list JSON, `data[].id`) using `DEEPSEEK_API_KEY` from the environment or `.env`. Fail if the YAML / `--model` id is missing from that list. The catalog id is not `openai/deepseek-flash`; that prefix is only the artifact label. Cloud `set` on YAML often has **no** key — run this on a **worker / local** machine with `.env`, not as a hard requirement of controller `set`. P0 does the same check when the key is present (before paid P5). A full eval does not run P6.
 
 ```bash
 # this PC / worker (has .env)

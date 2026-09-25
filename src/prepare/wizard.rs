@@ -788,7 +788,7 @@ fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
 
     let mode_options = [
         "release (downloaded *-full-* binary on the worker)",
-        "git (clone branch / tag / commit from github.com or gitcode.com)",
+        "git (clone branch / tag / commit / pull request from github.com or gitcode.com)",
     ];
     let mode_idx = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Default ICODE_MODE")
@@ -825,7 +825,7 @@ fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
         .map_err(|_| Error::Cancelled)?;
 
     let default_icode_git_ref: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Default ICODE_GIT_REF (git: branch, tag, or commit SHA)")
+        .with_prompt("Default ICODE_GIT_REF (git: branch, tag, commit SHA, or PR number)")
         .default("main".into())
         .allow_empty(true)
         .interact_text()

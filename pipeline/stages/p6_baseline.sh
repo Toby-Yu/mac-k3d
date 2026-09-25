@@ -19,4 +19,6 @@ python3 "$PIPELINE_LIB/baseline_deepseek.py" \
   --model "${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
   | tee "$BASELINE_DIR/baseline.log"
 
+bash "$(dirname "$0")/p6_grade_baseline.sh"
+
 progress 85 "P6 complete"

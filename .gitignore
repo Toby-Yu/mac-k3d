@@ -15,6 +15,7 @@ __pycache__/
 eval-runs/
 eval-runs-*/
 eval-work/
+/output/
 iCode/
 
 # P5 writes these in the eval workdir; they contain DEEPSEEK_API_KEY.

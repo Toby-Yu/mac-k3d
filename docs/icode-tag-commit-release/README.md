@@ -4,7 +4,7 @@ This folder is **branch process and re-test notes**, not the user start-here. Us
 
 ## What changed on this branch
 
-1. **Git kinds** — Jenkins/CLI pick `branch` / `tag` / `commit` (default `branch`). Leftover `auto` still maps (7–40 hex → commit, else branch). P3 records `icode_git.json`; reports copy `icode_git`.
+1. **Git kinds** — Jenkins/CLI pick `branch` / `tag` / `commit` / `pr` (default `branch`). Kind `pr` takes the pull-request number and checks out that tip. Leftover `auto` still maps (7–40 hex → commit, else branch). P3 records `icode_git.json`; reports copy `icode_git`.
 2. **No local source mode** — workers do not hold a developer checkout. `ICODE_MODE=source` is rejected. Inputs are git clone or a downloaded `*-full-*` / `icode` drop.
 3. **Jenkins release = upload** — job XML has File Parameter `ICODE_RELEASE_FILE` (not a string worker path). **Release** mode exports `ICODE_RELEASE` + `ICODE_RELEASE_UPLOADED=1` when that file is non-empty. **Git** mode `--force-rm`s a leftover upload and ignores it. P3 unpacks gzip/tar by magic, else copies as `icode`. Empty release upload fails with a clear message.
 4. **Git leftover clone** — P3 wipes `eval-runs/icode-src` before clone. Root/nobody files from a prior Pier/Harbor bind-mount are removed with Docker (no `sudo rm`). P5 chowns the bind-mount back to the agent user.

@@ -441,7 +441,7 @@ launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>&1 | head -20
 
 ### Task 9 — eval pipeline P1–P8
 
-Purpose: check Process 2 (Pier, DeepSWE, iCode vs DeepSeek). **P0 is already covered in Task 4.** Details: [testing-eval-pipeline.md](testing-eval-pipeline.md). LLM stages need Jenkins credential **`deepseek-api-key`**.
+Purpose: check Process 2 (Pier, DeepSWE, iCode). **P0 is already covered in Task 4.** A full eval does not run P6. Details: [testing-eval-pipeline.md](testing-eval-pipeline.md). LLM stages need Jenkins credential **`deepseek-api-key`**.
 
 command:
 
@@ -454,7 +454,6 @@ mac-k3d eval --stage p2
 mac-k3d eval --stage p3
 mac-k3d eval --stage p4
 mac-k3d eval --stage p5 --n-tasks 1
-mac-k3d eval --stage p6 --n-tasks 1
 mac-k3d eval --stage p7
 mac-k3d eval --stage p8 --n-tasks 1
 ```
@@ -473,10 +472,10 @@ expected results:
 - **P3:** `icode --help` succeeds (`ICODE_MODE=release` drop or `ICODE_MODE=git` clone).
 - **P4:** Pier agent `icode` install script is executable.
 - **P5:** `PROGRESS` lines; one DeepSWE task through iCode (`--n-tasks 1`). Clear pier/docker errors still count as “stage ran”.
-- **P6:** DeepSeek API baseline on the same `instruction.md`.
+- **P6:** not part of a full eval. A hand `mac-k3d eval --stage p6` still exists and is not published.
 - **P7:** temp JSON with `reward` / `f2p` / `p2p` rates / `pass_at_1`.
-- **P8:** `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` (Jenkins: workspace `eval-runs/reports/`).
-- Full runner: Jenkins job `deepswe_one_task` (or `--local`) runs both arms and archives JSON.
+- **P8:** `eval-runs/output/<benchmark>/<run>/artifact.json`, `summary.md`, and `report.html`.
+- Full runner: Jenkins job `deepswe_one_task` (or `--local`) runs the harness and archives that folder.
 
 P5+ costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **private** iCode clone or tarball.
 

@@ -64,11 +64,15 @@ icode_looks_like_commit() {
   [[ "${1:-}" =~ ^[0-9a-fA-F]{7,40}$ ]]
 }
 
+icode_looks_like_pr_number() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
+}
+
 icode_normalize_ref_kind() {
   local k="${1:-auto}" ref="${2:-}"
   k="$(printf '%s' "$k" | tr 'A-Z' 'a-z')"
   case "$k" in
-    branch | tag | commit)
+    branch | tag | commit | pr)
       printf '%s\n' "$k"
       ;;
     auto | "")
@@ -79,7 +83,7 @@ icode_normalize_ref_kind() {
       fi
       ;;
     *)
-      die "ICODE_GIT_REF_KIND must be branch, tag, or commit (got ${k})"
+      die "ICODE_GIT_REF_KIND must be branch, tag, commit, or pr (got ${k})"
       ;;
   esac
 }
@@ -89,6 +93,26 @@ icode_validate_ref_for_kind() {
   case "$kind" in
     commit)
       icode_looks_like_commit "$ref" || die "ICODE_GIT_REF_KIND=commit requires a git SHA (7–40 hex chars), not a branch name. Use kind=branch for '${ref}'."
+      ;;
+    pr)
+      icode_looks_like_pr_number "$ref" || die "ICODE_GIT_REF_KIND=pr requires a pull-request number (positive integer), not '${ref}'."
+      ;;
+  esac
+}
+
+# GitHub: refs/pull/N/head. GitCode (and a local test remote): merge-requests, then pull.
+icode_git_pr_refs() {
+  local url="$1" number="$2" host
+  host="${url#https://}"
+  host="${host%%/*}"
+  host="${host%%:*}"
+  case "$host" in
+    github.com | www.github.com)
+      printf '%s\n' "refs/pull/${number}/head"
+      ;;
+    *)
+      printf '%s\n' "refs/merge-requests/${number}/head"
+      printf '%s\n' "refs/pull/${number}/head"
       ;;
   esac
 }
@@ -161,7 +185,7 @@ icode_reclaim_host_tree() {
 }
 
 icode_git_checkout() {
-  local dest="$1" url="$2" ref="$3" kind="$4" tok fetched
+  local dest="$1" url="$2" ref="$3" kind="$4" tok fetched spec
   local -a git_cmd
   tok="${MAC_K3D_GIT_TOKEN:-}"
   git_cmd=(git -c core.hooksPath=/dev/null -c init.defaultBranch=main -c advice.defaultBranchName=false -c credential.helper= -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30)
@@ -175,6 +199,19 @@ icode_git_checkout() {
   icode_git "${git_cmd[@]}" init "$dest" >/dev/null || icode_git_clone_fail "$url" "$ref" "$tok"
   icode_git "${git_cmd[@]}" -C "$dest" remote add origin "$url" || icode_git_clone_fail "$url" "$ref" "$tok"
   case "$kind" in
+    pr)
+      icode_validate_ref_for_kind pr "$ref"
+      fetched=0
+      while IFS= read -r spec; do
+        [ -n "$spec" ] || continue
+        if icode_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "$spec"; then
+          fetched=1
+          break
+        fi
+      done < <(icode_git_pr_refs "$url" "$ref")
+      [ "$fetched" -eq 1 ] || icode_git_clone_fail "$url" "$ref" "$tok"
+      icode_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD || icode_git_clone_fail "$url" "$ref" "$tok"
+      ;;
     commit)
       fetched=0
       if icode_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "$ref" >/dev/null 2>&1 \

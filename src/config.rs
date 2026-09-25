@@ -189,7 +189,7 @@ pub struct JenkinsJobConfig {
     pub default_icode_release: String,
     /// iCode git URL for `ICODE_MODE=git` (private GitCode clone uses `gitcode-pat`).
     pub default_icode_git_url: String,
-    /// Git ref for git mode (branch, tag, or commit). Empty becomes `main`.
+    /// Git ref for git mode (branch, tag, commit, or PR number). Empty becomes `main`.
     pub default_icode_git_ref: String,
     pub default_icode_args: String,
     /// Deprecated; ignored if `default_icode_release` is set.

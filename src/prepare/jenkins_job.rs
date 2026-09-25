@@ -12,8 +12,9 @@ pub const LOLBENCH_ONE_TASK: &str = "lolbench_one_task";
 const DESC_ICODE_MODE: &str = "Choose release (upload a drop) or git (clone URL + ref). Fill only the fields for that choice; leave the other group as it is.";
 const DESC_ICODE_RELEASE_FILE: &str = "Release: choose the icode / icode-*-full-* drop here. Git: do not choose a file; leave this control as it is. Vice versa: if you chose git, ignore this; if you chose release, this is the file you upload.";
 const DESC_ICODE_GIT_URL: &str = "Git: https URL on github.com or gitcode.com. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
-const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, or commit SHA (match KIND). Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
-const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, or commit (no auto). Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
+const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-request number when KIND is pr. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
+const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, commit, or pr (no auto). For pr, REF is the pull-request number. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
+const DESC_TASKS: &str = "Comma-separated question ids. This field wins over TASK and N_TASKS. Example: ruff_1,fastapi_1. Leave empty to use TASK or N_TASKS.";
 
 fn benchmark_label(job_benchmark: &str) -> &'static str {
     match job_benchmark {
@@ -37,17 +38,36 @@ fn job_description(job_benchmark: &str) -> String {
     )
 }
 
+fn full_suite_size(job_benchmark: &str) -> u32 {
+    match job_benchmark {
+        "deepswe" => 113,
+        "lolbench" => 20,
+        "swebenchpro" => 731,
+        _ => 1,
+    }
+}
+
 fn task_param_description(job_benchmark: &str) -> String {
     match job_benchmark {
         "lolbench" => {
-            "One LoLBench question id (empty + N_TASKS = first N sorted). Example: ruff_1".into()
+            "One LoLBench question id. A non-empty TASKS list replaces this. Leave empty to use N_TASKS. Example: ruff_1".into()
         }
-        "deepswe" => "One DeepSWE question id (empty + N_TASKS = first N sorted).".into(),
+        "deepswe" => {
+            "One DeepSWE question id. A non-empty TASKS list replaces this. Leave empty to use N_TASKS.".into()
+        }
         "swebenchpro" => {
-            "One SWE-bench Pro instance id (empty + N_TASKS = first N sorted). The image is large; use one TASK.".into()
+            "One SWE-bench Pro instance id. A non-empty TASKS list replaces this. Leave empty to use N_TASKS. The image is large.".into()
         }
-        _ => "One question id (empty + N_TASKS = first N sorted).".into(),
+        _ => "One question id. A non-empty TASKS list replaces this. Leave empty to use N_TASKS.".into(),
     }
+}
+
+fn n_tasks_param_description(job_benchmark: &str) -> String {
+    format!(
+        "Used only when TASK and TASKS are empty: the first N sorted question ids. Full suite is {}. Set {} with TASK and TASKS empty to run every question.",
+        full_suite_size(job_benchmark),
+        full_suite_size(job_benchmark)
+    )
 }
 
 fn benchmark_param_description(job_benchmark: &str) -> String {
@@ -579,12 +599,14 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     let icode_git_url_desc_g = groovy_escape(DESC_ICODE_GIT_URL);
     let icode_git_ref_desc_g = groovy_escape(DESC_ICODE_GIT_REF);
     let icode_git_ref_kind_desc_g = groovy_escape(DESC_ICODE_GIT_REF_KIND);
+    let tasks_desc_g = groovy_escape(DESC_TASKS);
+    let n_tasks_desc_g = groovy_escape(&n_tasks_param_description(job_benchmark));
     format!(
         r#"pipeline {{
   agent {{ label params.AGENT_LABEL }}
 
   options {{
-    timeout(time: 12, unit: 'HOURS')
+    timeout(time: 120, unit: 'HOURS')
   }}
 
   parameters {{
@@ -592,8 +614,8 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     choice(name: 'LLM', choices: [{llm_g}], description: 'LLM family (catalog; v1: deepseek)')
     choice(name: 'BENCHMARK', choices: ['{bench}'], description: '{bench_desc_g}')
     string(name: 'TASK', defaultValue: '{task}', description: '{task_desc_g}')
-    string(name: 'TASKS', defaultValue: '{tasks}', description: 'Comma-separated question ids (overrides TASK and first-N)')
-    string(name: 'N_TASKS', defaultValue: '{n_tasks}', description: 'First N sorted questions when TASK and TASKS are empty. N>1 is slower/costlier.')
+    string(name: 'TASKS', defaultValue: '{tasks}', description: '{tasks_desc_g}')
+    string(name: 'N_TASKS', defaultValue: '{n_tasks}', description: '{n_tasks_desc_g}')
     string(name: 'N_ROLLOUTS', defaultValue: '1', description: 'Number of iCode attempts for the selected question. Default 1. Each extra attempt is another full agent run.')
     choice(name: 'ICODE_MODE', choices: [{icode_mode_g}], description: '{icode_mode_desc_g}')
     stashedFile(name: 'ICODE_RELEASE_FILE', description: '{icode_release_file_desc_g}')
@@ -601,7 +623,7 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     string(name: 'ICODE_GIT_REF', defaultValue: '{icode_git_ref_g}', description: '{icode_git_ref_desc_g}')
     choice(name: 'ICODE_GIT_REF_KIND', choices: [{icode_git_ref_kind_g}], description: '{icode_git_ref_kind_desc_g}')
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
-    string(name: 'CPU_LOCK_QTY', defaultValue: '4')
+    string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'CPU cores reserved for this build. One question uses that many containers for its rollouts; the next question starts after they exit. A question that does not fit in free RAM is skipped.')
     string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Dir with pipeline/stages/run_all.sh (optional)')
     choice(name: 'DEEPSEEK_MODEL', choices: [{model_g}], description: 'DeepSeek Chat Completions model id (catalog)')
   }}
@@ -654,6 +676,17 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             esac
             if [ "$N_ROLLOUTS" -lt 1 ]; then
               echo "N_ROLLOUTS must be an integer >= 1" >&2
+              exit 1
+            fi
+            export CPU_LOCK_QTY="${{CPU_LOCK_QTY:-4}}"
+            case "$CPU_LOCK_QTY" in
+              ""|*[!0-9]*)
+                echo "CPU_LOCK_QTY must be an integer >= 1" >&2
+                exit 1
+                ;;
+            esac
+            if [ "$CPU_LOCK_QTY" -lt 1 ]; then
+              echo "CPU_LOCK_QTY must be an integer >= 1" >&2
               exit 1
             fi
             export TASK="${{TASK:-}}"
@@ -709,7 +742,14 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
 
   post {{
     always {{
-      archiveArtifacts artifacts: 'eval-runs/reports/**/*.json', allowEmptyArchive: true
+      script {{
+        if (fileExists('eval-runs/last_output.txt')) {{
+          def pattern = readFile('eval-runs/last_output.txt').trim()
+          if (pattern) {{
+            archiveArtifacts artifacts: pattern, allowEmptyArchive: true
+          }}
+        }}
+      }}
     }}
   }}
 }}
@@ -738,6 +778,8 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
         icode_git_url_desc_g = icode_git_url_desc_g,
         icode_git_ref_desc_g = icode_git_ref_desc_g,
         icode_git_ref_kind_desc_g = icode_git_ref_kind_desc_g,
+        tasks_desc_g = tasks_desc_g,
+        n_tasks_desc_g = n_tasks_desc_g,
     )
 }
 
@@ -773,6 +815,8 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
     let icode_git_url_desc_xml = xml_escape(DESC_ICODE_GIT_URL);
     let icode_git_ref_desc_xml = xml_escape(DESC_ICODE_GIT_REF);
     let icode_git_ref_kind_desc_xml = xml_escape(DESC_ICODE_GIT_REF_KIND);
+    let tasks_desc_xml = xml_escape(DESC_TASKS);
+    let n_tasks_desc_xml = xml_escape(&n_tasks_param_description(job_benchmark));
     format!(
         r#"<?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
@@ -814,11 +858,13 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>TASKS</name>
+          <description>{tasks_desc_xml}</description>
           <defaultValue>{tasks_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>N_TASKS</name>
+          <description>{n_tasks_desc_xml}</description>
           <defaultValue>{n_tasks}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
@@ -869,6 +915,7 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>CPU_LOCK_QTY</name>
+          <description>CPU cores reserved for this build. One question uses that many containers for its rollouts; the next question starts after they exit. A question that does not fit in free RAM is skipped.</description>
           <defaultValue>4</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
@@ -1285,10 +1332,13 @@ mod tests {
         assert!(xml.contains("<string>branch</string>"));
         assert!(xml.contains("<string>tag</string>"));
         assert!(xml.contains("<string>commit</string>"));
+        assert!(xml.contains("<string>pr</string>"));
         assert!(
             !xml.contains("<string>auto</string>"),
-            "Jenkins KIND list is branch/tag/commit only"
+            "Jenkins KIND list is branch/tag/commit/pr only"
         );
+        assert!(xml.contains("Full suite is 20"));
+        assert!(xml.contains("wins over TASK and N_TASKS"));
         assert!(
             !xml.contains('\u{2013}'),
             "en-dash breaks Jenkins XML 1.1 POST"
@@ -1433,6 +1483,8 @@ mod tests {
         let swebenchpro = swebenchpro_one_task_job_xml(&opts);
         assert!(deepswe.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
         assert!(deepswe.contains("<name>N_TASKS</name>"));
+        assert!(deepswe.contains("Full suite is 113"));
+        assert!(swebenchpro.contains("Full suite is 731"));
         assert!(deepswe.contains("<name>N_ROLLOUTS</name>"));
         assert!(deepswe.contains("<defaultValue>1</defaultValue>"));
         assert!(deepswe.contains("<defaultValue>2</defaultValue>"));

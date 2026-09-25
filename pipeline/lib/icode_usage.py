@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Any
 
 
+def _first_present(usage: dict, keys: tuple[str, ...], extra: Any = None) -> Any:
+    """First defined value, including 0. A missing key is not the same as zero."""
+    for key in keys:
+        if key in usage and usage[key] is not None:
+            return usage[key]
+    return extra
+
+
 def usage_from_obj(obj: Any) -> dict[str, Any] | None:
     if not isinstance(obj, dict):
         return None
@@ -36,11 +44,23 @@ def usage_from_obj(obj: Any) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         total = prompt + completion
     model = obj.get("model") or obj.get("llm_model_id")
+    details = usage.get("prompt_tokens_details")
+    nested_cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    cache = _first_present(
+        usage,
+        ("prompt_cache_hit_tokens", "cache_hit_tokens", "cached_tokens", "cache"),
+        nested_cached,
+    )
+    try:
+        cache_hit = int(cache) if cache is not None else None
+    except (TypeError, ValueError):
+        cache_hit = None
     return {
         "prompt": prompt,
         "completion": completion,
         "total": total,
         "model": model if isinstance(model, str) else None,
+        "cache_hit": cache_hit,
     }
 
 

@@ -85,15 +85,15 @@ class ICodeAgent(BaseInstalledAgent):
             or self._get_env("DEEPSEEK_MODEL")
             or "deepseek-v4-pro"
         )
-        # Same DeepSeek wiring Harbor uses. Empty strings would block run.sh defaults.
+        # Same OpenAI-compatible client Harbor uses. Empty strings would block run.sh defaults.
         env = {
             "INSTRUCTION_FILE": INSTRUCTION_FILE,
             "DEEPSEEK_API_KEY": self._get_env("DEEPSEEK_API_KEY") or "",
             "DEEPSEEK_MODEL": model,
             "ICODE_BIN": self._get_env("ICODE_BIN") or "icode",
             "AGENT_OUTPUT_DIR": "/logs/agent",
-            "ICODE_API_BASE": self._get_env("ICODE_API_BASE") or "https://api.deepseek.com",
-            "ICODE_PROVIDER": self._get_env("ICODE_PROVIDER") or "DeepSeek",
+            "ICODE_API_BASE": self._get_env("ICODE_API_BASE") or "https://api.deepseek.com/v1",
+            "ICODE_PROVIDER": self._get_env("ICODE_PROVIDER") or "OpenAI",
             "ICODE_MODEL": self._get_env("ICODE_MODEL") or model,
         }
         await self.exec_as_agent(

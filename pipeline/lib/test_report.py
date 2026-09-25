@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import unittest
@@ -17,7 +18,7 @@ LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
 from check_report import validate  # noqa: E402
-from openai_compat import missing_model_message, model_in_ids, parse_model_ids  # noqa: E402
+from openai_compat import missing_model_message, model_in_ids, models_base, parse_model_ids  # noqa: E402
 from pier_result import hollow_job_reason  # noqa: E402
 from score_results import (  # noqa: E402
     harbor_reward_resolved,
@@ -46,6 +47,10 @@ class OpenAICompatTests(unittest.TestCase):
         msg = missing_model_message("deepseek-v4.1-flash", ids)
         self.assertIn("is not returned by GET /models", msg)
         self.assertIn("deepseek-flash", msg)
+
+    def test_models_list_strips_chat_v1(self):
+        self.assertEqual(models_base("https://api.deepseek.com/v1"), "https://api.deepseek.com")
+        self.assertEqual(models_base("https://api.deepseek.com"), "https://api.deepseek.com")
 
 
 class PassAt1Tests(unittest.TestCase):
@@ -548,6 +553,14 @@ class ScoreResultsTests(unittest.TestCase):
         self.assertEqual(got["prompt"], 50)
         self.assertEqual(got["completion"], 7)
         self.assertEqual(got["total"], 57)
+        from icode_usage import usage_from_obj
+
+        zero = usage_from_obj({"usage": {"prompt_tokens": 10, "completion_tokens": 1, "prompt_cache_hit_tokens": 0}})
+        self.assertEqual(zero["cache_hit"], 0)
+        nested = usage_from_obj(
+            {"usage": {"prompt_tokens": 10, "completion_tokens": 1, "prompt_tokens_details": {"cached_tokens": 4}}}
+        )
+        self.assertEqual(nested["cache_hit"], 4)
 
     def test_harbor_reward_json_sets_resolved(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -907,14 +920,17 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
         text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertIn("icode_harbor_agent:ICodeAgent", text)
         self.assertIn("harbor run", text)
-        self.assertIn("CMD+=(-n 1)", text)
-        self.assertIn('CMD+=(-k "$N_ROLLOUTS")', text)
+        self.assertIn("cmd+=(-n 1)", text)
+        self.assertIn("cmd+=(-k 1)", text)
+        self.assertIn('cmd+=(--override-cpus "$EVAL_CPUS_EACH")', text)
+        self.assertNotIn('TASK_ID="$tid"\n  break', text)
         self.assertIn("No such option", text)
         self.assertIn("selected_tasks", text)
         self.assertNotIn("pier run", text)
         self.assertNotIn("--agent icode", text)
-        self.assertIn('CMD+=(--ae "ICODE_API_BASE=https://api.deepseek.com")', text)
-        self.assertIn('CMD+=(--ae "ICODE_PROVIDER=DeepSeek")', text)
+        self.assertIn('cmd+=(--ae "ICODE_API_BASE=https://api.deepseek.com/v1")', text)
+        self.assertIn('cmd+=(--ae "ICODE_PROVIDER=OpenAI")', text)
+        self.assertIn('printf \'ICODE_MODEL=%s\\n\' "${ICODE_MODEL}"', text)
         run_sh = (ROOT / "pipeline" / "lib" / "pier-agent-icode" / "run.sh").read_text(
             encoding="utf-8"
         )
@@ -925,8 +941,54 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
         adapter = (ROOT / "pipeline" / "lib" / "icode_pier_agent.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("https://api.deepseek.com", adapter)
-        self.assertIn("DeepSeek", adapter)
+        self.assertIn("https://api.deepseek.com/v1", adapter)
+        self.assertIn("OpenAI", adapter)
+
+    def test_icode_nonzero_exit_does_not_fail_harbor_shell(self):
+        agent = (ROOT / "pipeline" / "lib" / "icode_harbor_agent.py").read_text(encoding="utf-8")
+        self.assertIn("set +o pipefail", agent)
+        self.assertIn("icode-exit.txt", agent)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "icode.txt"
+            status_path = Path(tmp) / "icode-exit.txt"
+            script = f"""
+set -o pipefail
+set +o pipefail
+(exit 1) | tee {log} >/dev/null
+printf '%s\\n' "${{PIPESTATUS[0]}}" > {status_path}
+exit 0
+"""
+            proc = subprocess.run(["bash", "-c", script], check=False, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(status_path.read_text(encoding="utf-8").strip(), "1")
+
+    def test_long_task_lists_scroll(self):
+        from report_html import report_html
+
+        tasks = [{"id": f"t{i}", "c": 0 if i < 13 else 1, "n": 1, "best": i >= 13, "pass_frac": 0.0 if i < 13 else 1.0} for i in range(26)]
+        page = report_html(
+            {
+                "suite": "deepswe",
+                "n_tasks": 26,
+                "n_rollouts": 1,
+                "icode": {"tasks": tasks, "macro_pass@1": 0.5, "any_pass": 0.5},
+            }
+        )
+        self.assertGreaterEqual(page.count('class="scroll"'), 2)
+        self.assertIn("Lowest pass fraction", page)
+
+    def test_shared_harbor_command_for_every_benchmark(self):
+        agent = (ROOT / "pipeline" / "lib" / "icode_harbor_agent.py").read_text(encoding="utf-8")
+        self.assertIn("set +o pipefail", agent)
+        self.assertIn("icode-exit.txt", agent)
+        self.assertIn('ICODE_PROVIDER", "OpenAI"', agent)
+        self.assertIn("https://api.deepseek.com/v1", agent)
+        stage = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        self.assertGreaterEqual(stage.count("icode_harbor_agent:ICodeAgent"), 2)
+        self.assertIn('cmd+=(--ae "ICODE_PROVIDER=OpenAI")', stage)
+        self.assertIn('cmd+=(--ae "ICODE_API_BASE=https://api.deepseek.com/v1")', stage)
+        self.assertIn('BENCHMARK:-deepswe}" = "lolbench"', stage)
+        self.assertLess(stage.find("= \"lolbench\""), stage.find("cmd=(harbor run)"))
 
     def test_p5_lolbench_uses_harbor_agent(self):
         text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
@@ -937,7 +999,8 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
         self.assertIn("reward.json", text)
         self.assertIn("docker build --progress=plain", text)
         self.assertIn("--mounts", text)
-        self.assertIn("P5 harbor heartbeat", text)
+        self.assertIn("eval_progress.py", text)
+        self.assertIn("heartbeat", text)
         self.assertNotIn("CMD+=(--force-build)", text)
         src = (ROOT / "pipeline" / "lib" / "icode_harbor_agent.py").read_text(encoding="utf-8")
         compile(src, "icode_harbor_agent.py", "exec")
@@ -1385,6 +1448,649 @@ class SecretGuardTests(unittest.TestCase):
         self.assertIn("**/.harbor-env", gi)
         self.assertIn("eval-runs-*/", gi)
         self.assertIn(".cursor/debug-*.log", gi)
+
+
+class EvalReportTests(unittest.TestCase):
+    def test_parallel_degree_four_lock_is_four_slots(self):
+        script = ROOT / "pipeline" / "lib" / "parallel_degree.sh"
+        proc = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{script}" && eval_parallel_degree && echo "$EVAL_SLOTS $EVAL_CPUS_EACH"',
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "N_ROLLOUTS": "4", "CPU_LOCK_QTY": "4", "EVAL_RESOURCE_CAP": "0"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "4 1")
+        from eval_slots import eval_slots, parallel_report_line
+
+        from eval_slots import budget_gb, max_icode_mem_gb, memory_limit_mb
+
+        low_ram_kb = int(4.5 * 1024 * 1024)
+        now_kb = int(9.8 * 1024 * 1024)
+        self.assertEqual(eval_slots(4, "deepswe", mem_kb=low_ram_kb), (4, 1))
+        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=0.4), (4, 1))
+        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=2.0), (4, 1))
+        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=8.0), (4, 1))
+        self.assertEqual(memory_limit_mb(now_kb, 4, 8.0), 0)
+        self.assertEqual(memory_limit_mb(now_kb, 4, None), 0)
+        self.assertAlmostEqual(budget_gb("deepswe", 0.4), 0.6)
+        sample = (
+            "k3d-server\t2.0GiB / 16GiB\n"
+            "q1_icode_1_a01\t400MiB / 16GiB\n"
+            "abs-module-cache-flags__BB2vSAk__env-main-1\t800MiB / 16GiB\n"
+            "abs-module-cache-flags__BB2vSAk__env-harbor-docker-egress-control-sidecar-1\t4GiB / 16GiB\n"
+        )
+        self.assertAlmostEqual(max_icode_mem_gb(sample), 800 / 1024)
+        ids = ["a", "b", "c", "d"]
+        low_line = parallel_report_line(ids, 4, 2, now_kb, 2.0, 3.0)
+        high_line = parallel_report_line(ids, 4, 4, now_kb, 0.4, 0.6)
+        self.assertIn("questions=4 ids=a,b,c,d", low_line)
+        self.assertIn("four_containers=no", low_line)
+        self.assertIn("container_gb=unmeasured", parallel_report_line(ids, 4, 4, now_kb))
+        self.assertIn("four_containers=yes", high_line)
+        self.assertIn("budget_gb=0.60", high_line)
+        p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        self.assertIn("eval_slots.py", p5)
+        self.assertIn("report", p5)
+        self.assertIn("cmd+=(-n 1)", p5)
+        self.assertIn("cmd+=(-k 1)", p5)
+        self.assertNotIn("--override-memory-mb", p5)
+        self.assertNotIn("--override-memory ", p5)
+        self.assertIn("out of memory", p5)
+        self.assertIn("skip question=", p5)
+        self.assertIn('echo "OK unit=$spec"', p5)
+
+    def test_pass_at_ladder_and_demo_report(self):
+        from eval_metrics import pass_at_ladder, summarize_arm
+        from render_report import demo_artifact, summary_markdown
+        from report_html import CANDIDATE, report_html
+
+        flags = [[True, False], [False, True]]
+        ladder = pass_at_ladder(flags, 2)
+        self.assertEqual(set(ladder), {"pass@1", "pass@2"})
+        self.assertAlmostEqual(ladder["pass@1"], 0.5)
+        self.assertAlmostEqual(ladder["pass@2"], 1.0)
+        arm = summarize_arm(
+            [
+                (
+                    "q",
+                    [
+                        {"resolved": True, "f2p": 1.0, "f2p_pass": 1, "f2p_total": 1, "p2p": 1.0, "p2p_pass": 1, "p2p_total": 1, "partial": 1.0, "tok_in": 10, "tok_out": 1, "dur_s": 3},
+                        {"resolved": False, "f2p": 0.0, "f2p_pass": 0, "f2p_total": 1, "p2p": 1.0, "p2p_pass": 1, "p2p_total": 1, "partial": 0.5, "tok_in": 20, "tok_out": 2, "dur_s": 4},
+                    ],
+                )
+            ],
+            2,
+            2,
+        )
+        self.assertEqual(arm["tasks"][0]["c"], 1)
+        self.assertEqual(arm["tasks"][0]["n"], 2)
+        self.assertAlmostEqual(arm["tasks"][0]["pass_frac"], 0.5)
+        self.assertTrue(arm["tasks"][0]["first"])
+        self.assertEqual(arm["tasks"][0]["reward"], 1.0)
+        self.assertEqual(arm["pass@1"], 1.0)
+        self.assertEqual(arm["pass@2"], 1.0)
+        self.assertNotIn("n_tasks", arm)
+        self.assertNotIn("n_rollouts", arm)
+        self.assertNotIn("concurrency", arm)
+        self.assertNotIn("pass_at", arm)
+        self.assertNotIn("first_wilson_low", arm)
+        self.assertNotIn("first_wilson_high", arm)
+        self.assertNotIn("any_pass_hits", arm)
+        self.assertNotIn("best_attempt_pass", arm)
+        self.assertIn("any_pass", arm)
+        self.assertIn("total", arm["tokens"])
+        self.assertIn("partial_pass", arm["micro"])
+        self.assertIn("rollouts", arm["tasks"][0])
+        self.assertEqual(len(arm["tasks"][0]["rollouts"]), 2)
+        doc = demo_artifact()
+        self.assertEqual({f"pass@{i}" for i in range(1, 5)} <= set(doc["icode"]), True)
+        self.assertNotIn("llm", doc)
+        self.assertNotIn("n_tasks", doc["icode"])
+        text = summary_markdown(doc)
+        self.assertIn("Run: `deepswe-25`", text)
+        self.assertIn("Pass@1..k (padded, missing=fail)", text)
+        self.assertIn("Pass@1..k (scored-only, missing omitted)", text)
+        self.assertIn("Pass@1 **33.3%**", text)
+        self.assertIn("Pass@2 **66.7%**", text)
+        self.assertIn("macro Pass@1 (padded, mean of c/n)", text)
+        self.assertIn("macro Pass@1 (scored-only, mean of c_scored/n_scored)", text)
+        self.assertIn("c_scored/n_scored", text)
+        self.assertIn("unscored rollouts: 0", text)
+        self.assertIn("first-rollout", text)
+        self.assertIn("avg total/task", text)
+        self.assertIn("best_attempt_hits", doc["icode"])
+        self.assertIn("infra_excluded", doc["icode"])
+        self.assertIn("avg_total_per_task", doc["icode"]["tokens"])
+        self.assertNotIn("LLM only", text)
+        page = report_html(doc)
+        self.assertTrue(page.startswith("<!DOCTYPE html>"))
+        self.assertIn("icode + deepseek-flash", page)
+        self.assertNotIn("deepseek-v4.1-flash", page)
+        self.assertIn("macro_pass@1_sd", doc["icode"])
+        self.assertNotIn("macro_pass@1_se", doc["icode"])
+        self.assertIn("(SD)", text)
+        self.assertIn("33.3%", page)
+        self.assertIn("Pass@1..k (padded, missing=fail)", page)
+        self.assertIn("Pass@1..k (scored-only, missing omitted)", page)
+        self.assertIn("(SD)", page)
+        self.assertIn("Lowest pass fraction", page)
+        self.assertNotIn("Highest pass fraction", page)
+        self.assertIn("Solved", page)
+        self.assertIn("Unsolved", page)
+        self.assertIn('class="donut"', page)
+        self.assertIn("% of 3", page)
+        self.assertIn('class="pair"', page)
+        self.assertIn("Latency (best-attempt duration)", page)
+        self.assertIn("Tokens &amp; wall clock", page)
+        self.assertNotIn("~$", text)
+        self.assertNotIn("cost \u03a3", text)
+        self.assertNotIn("cost", doc["icode"]["tokens"])
+        self.assertIn("avg_total_per_task", doc["icode"]["tokens"])
+        self.assertNotIn("min-height: 360px", page)
+        self.assertNotIn('class="outcome-body"', page)
+        self.assertNotIn('class="scroll"', page)
+        self.assertNotIn("LLM only", page)
+        self.assertNotIn("<script", page)
+        blocks = []
+        current = []
+        for line in text.splitlines():
+            if line.startswith("|"):
+                current.append(line)
+            elif current:
+                blocks.append(current)
+                current = []
+        if current:
+            blocks.append(current)
+        self.assertGreaterEqual(len(blocks), 1)
+        for block in blocks:
+            self.assertEqual(len(set(len(line) for line in block)), 1)
+
+    def test_work_unit_finishes_one_question_before_the_next(self):
+        from eval_slots import next_unit
+
+        many = [f"t{i:03d}" for i in range(113)]
+        assigned: list[tuple[str, int]] = []
+        inflight: list[tuple[str, int]] = []
+        first = []
+        for _ in range(4):
+            unit = next_unit(many, 4, assigned, inflight)
+            first.append(unit)
+            assigned.append(unit)
+            inflight.append(unit)
+        self.assertEqual(first, [("t000", 1), ("t000", 2), ("t000", 3), ("t000", 4)])
+        inflight = inflight[1:]
+        self.assertIsNone(next_unit(many, 4, assigned, inflight))
+        self.assertEqual(next_unit(many, 4, assigned, []), ("t001", 1))
+
+        three = ["a", "b", "c"]
+        assigned = []
+        inflight = []
+        got = []
+        for _ in range(4):
+            unit = next_unit(three, 4, assigned, inflight)
+            got.append(unit)
+            assigned.append(unit)
+            inflight.append(unit)
+        self.assertEqual(got, [("a", 1), ("a", 2), ("a", 3), ("a", 4)])
+
+        assigned = []
+        inflight = []
+        got = []
+        for _ in range(4):
+            unit = next_unit(["only"], 4, assigned, inflight)
+            got.append(unit)
+            assigned.append(unit)
+            inflight.append(unit)
+        self.assertEqual(got, [("only", 1), ("only", 2), ("only", 3), ("only", 4)])
+
+    def test_question_memory_record_covers_every_benchmark(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from eval_slots import eval_slots, flush_question, memory_limit_mb, observe_question
+        from render_report import copy_memory_sidecars, memory_sidecar
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            observe_question(root, "q1", 1.0, 4, 1536, "deepswe")
+            observe_question(root, "q1", 1.2, 4, 1843, "deepswe")
+            flush_question(root, "q1", 4, 1843, "deepswe")
+            observe_question(root, "q2", 0.4, 4, 614, "deepswe")
+            flush_question(root, "q2", 4, 614, "deepswe")
+            rows = [
+                json.loads(line)
+                for line in (root / "harness" / "container_mem.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([row["question"] for row in rows], ["q1", "q2"])
+            self.assertAlmostEqual(rows[0]["peak_gb"], 1.2)
+            mem_kb = int(6 * 1024 * 1024)
+            self.assertEqual(eval_slots(4, "lolbench", mem_kb=mem_kb, container_gb=1.2), (4, 1))
+            self.assertEqual(eval_slots(4, "swebenchpro", mem_kb=mem_kb, container_gb=1.2), (4, 1))
+            self.assertEqual(memory_limit_mb(mem_kb, 4, 1.2), 0)
+            (root / "harness" / "skipped_questions.txt").write_text("q9\n", encoding="utf-8")
+            out = root / "out"
+            out.mkdir()
+            copy_memory_sidecars(root / "harness", out)
+            self.assertTrue((out / "container_mem.jsonl").is_file())
+            self.assertEqual((out / "skipped_questions.txt").read_text(encoding="utf-8"), "q9\n")
+            peak, skipped = memory_sidecar(root / "harness")
+            self.assertAlmostEqual(peak, 1.2)
+            self.assertEqual(skipped, ["q9"])
+        run_all = (ROOT / "pipeline" / "stages" / "run_all.sh").read_text(encoding="utf-8")
+        common = (ROOT / "pipeline" / "stages" / "_common.sh").read_text(encoding="utf-8")
+        self.assertGreater(run_all.index('bash "$DIR/p5_harness.sh"'), run_all.index("esac"))
+        for name in ("deepswe", "lolbench", "swebenchpro"):
+            self.assertIn(name, common)
+        p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        self.assertIn("eval_slots.py\" flush", p5)
+        self.assertNotIn("--override-memory-mb", p5)
+        self.assertIn("out of memory", p5)
+        self.assertIn("skipped_questions.txt", p5)
+
+    def test_compact_rollouts_only_when_every_attempt_is_perfect(self):
+        from eval_metrics import summarize_arm
+
+        perfect = {
+            "resolved": True,
+            "f2p": 1.0,
+            "p2p": 1.0,
+            "f2p_pass": 1,
+            "f2p_total": 1,
+            "p2p_pass": 1,
+            "p2p_total": 1,
+            "partial": 1.0,
+            "tok_in": 7_500_000,
+            "tok_out": 82_100,
+            "dur_s": 382.2,
+        }
+        arm = summarize_arm([("ok", [dict(perfect), dict(perfect)])], 2, 1)
+        self.assertNotIn("rollouts", arm["tasks"][0])
+        self.assertEqual(arm["tasks"][0]["reward"], 1.0)
+        miss = dict(perfect)
+        miss["f2p"] = 0.5
+        miss["resolved"] = False
+        kept = summarize_arm([("miss", [dict(perfect), miss])], 2, 1)
+        self.assertEqual(len(kept["tasks"][0]["rollouts"]), 2)
+        from render_report import summary_markdown
+
+        doc = {
+            "suite": "deepswe",
+            "model": "deepseek-flash",
+            "api_base": "https://api.deepseek.com",
+            "run_id": "local-test",
+            "n_tasks": 1,
+            "n_rollouts": 2,
+            "concurrency": 1,
+            "cpus_each": 1,
+            "icode": arm,
+            "llm": arm,
+        }
+        text = summary_markdown(doc)
+        self.assertIn("15M", text)
+        self.assertIn("164.2k", text)
+        self.assertIn("| 382 ", text)
+        self.assertNotIn("-s", text)
+
+    def test_duration_uses_agent_execution_then_trial_then_usage(self):
+        from render_report import _attempt_from_trial
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trial = Path(tmp)
+            (trial / "verifier").mkdir()
+            (trial / "verifier" / "reward.json").write_text('{"reward": 1}\n', encoding="utf-8")
+            (trial / "usage.json").write_text('{"duration_seconds": 1.5, "usage": {"prompt": 3, "completion": 1}}\n', encoding="utf-8")
+            (trial / "result.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 9,
+                        "started_at": "2026-09-23T02:27:19.693803Z",
+                        "finished_at": "2026-09-23T02:30:32.293097Z",
+                        "agent_execution": {
+                            "started_at": "2026-09-23T02:27:19.693803Z",
+                            "finished_at": "2026-09-23T02:33:41.933783Z",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            row = _attempt_from_trial(trial, trial / "verifier" / "reward.json")
+            self.assertAlmostEqual(row["dur_s"], 382.23998, places=2)
+            result = json.loads((trial / "result.json").read_text(encoding="utf-8"))
+            del result["agent_execution"]
+            (trial / "result.json").write_text(json.dumps(result), encoding="utf-8")
+            row = _attempt_from_trial(trial, trial / "verifier" / "reward.json")
+            self.assertAlmostEqual(row["dur_s"], 192.599294, places=2)
+            (trial / "result.json").write_text('{"duration_seconds": 9}\n', encoding="utf-8")
+            row = _attempt_from_trial(trial, trial / "verifier" / "reward.json")
+            self.assertAlmostEqual(row["dur_s"], 1.5)
+
+    def test_wall_seconds_spans_attempt_timestamps(self):
+        from eval_metrics import summarize_arm
+
+        arm = summarize_arm(
+            [
+                (
+                    "q",
+                    [
+                        {
+                            "resolved": True,
+                            "f2p": 0.5,
+                            "p2p": 1.0,
+                            "dur_s": 10,
+                            "started_at": "2026-09-23T02:27:19Z",
+                            "finished_at": "2026-09-23T02:27:29Z",
+                        },
+                        {
+                            "resolved": False,
+                            "f2p": 0.0,
+                            "p2p": 1.0,
+                            "dur_s": 20,
+                            "started_at": "2026-09-23T02:27:19Z",
+                            "finished_at": "2026-09-23T02:28:19Z",
+                        },
+                    ],
+                )
+            ],
+            2,
+            1,
+        )
+        self.assertAlmostEqual(arm["timing"]["wall_seconds"], 60.0)
+
+    def test_padded_vs_scored_ladder_two_of_four_missing(self):
+        from eval_metrics import pass_at_ladder, pass_at_ladder_scored, summarize_arm
+        from render_report import summary_markdown
+        from report_html import report_html
+
+        scored = [
+            {"resolved": True, "f2p": 1.0, "f2p_pass": 1, "f2p_total": 1, "p2p": 1.0, "p2p_pass": 1, "p2p_total": 1},
+            {"resolved": False, "f2p": 0.0, "f2p_pass": 0, "f2p_total": 1, "p2p": 1.0, "p2p_pass": 1, "p2p_total": 1},
+        ]
+        clean = [
+            {"resolved": False, "f2p": 0.0, "f2p_pass": 0, "f2p_total": 1, "p2p": 1.0, "p2p_pass": 1, "p2p_total": 1}
+            for _ in range(4)
+        ]
+        padded = pass_at_ladder([[True, False], [False, False, False, False]], 4)
+        self.assertAlmostEqual(padded["pass@1"], 0.5)
+        self.assertAlmostEqual(padded["pass@4"], 0.5)
+        scored_ladder = pass_at_ladder_scored([[True, False], [False, False, False, False], []], 4)
+        self.assertAlmostEqual(scored_ladder["pass@1_scored"], 0.5)
+        self.assertAlmostEqual(scored_ladder["pass@4_scored"], 0.5)
+        self.assertEqual(set(scored_ladder), {f"pass@{i}_scored" for i in range(1, 5)})
+
+        arm = summarize_arm(
+            [
+                ("gap", scored),
+                ("clean", clean),
+                ("empty", []),
+            ],
+            4,
+            1,
+        )
+        gap = next(row for row in arm["tasks"] if row["id"] == "gap")
+        clean_row = next(row for row in arm["tasks"] if row["id"] == "clean")
+        empty = next(row for row in arm["tasks"] if row["id"] == "empty")
+        self.assertEqual(gap["c"], 1)
+        self.assertEqual(gap["n"], 4)
+        self.assertEqual(gap["c_scored"], 1)
+        self.assertEqual(gap["n_scored"], 2)
+        self.assertAlmostEqual(gap["pass_frac"], 0.25)
+        self.assertAlmostEqual(gap["pass_frac_scored"], 0.5)
+        self.assertEqual(gap["unscored"], 2)
+        self.assertAlmostEqual(gap["unscored_frac"], 0.5)
+        self.assertEqual(clean_row["unscored"], 0)
+        self.assertEqual(empty["unscored"], 4)
+        self.assertEqual(empty["n_scored"], 0)
+        self.assertAlmostEqual(arm["pass@1"], 1 / 3)
+        self.assertAlmostEqual(arm["macro_pass@1"], (0.25 + 0.0 + 0.0) / 3)
+        self.assertAlmostEqual(arm["pass@1_scored"], 0.5)
+        self.assertAlmostEqual(arm["macro_pass@1_scored"], (0.5 + 0.0) / 2)
+        self.assertEqual(arm["unscored_rollouts"], 6)
+        ids = [row["id"] for row in arm["unscored_tasks"]]
+        self.assertEqual(ids, ["empty", "gap"])
+        self.assertNotIn("clean", ids)
+        self.assertEqual(arm["pass_methods"]["padded"], "missing attempt counts as not resolved; n is N_ROLLOUTS")
+        self.assertEqual(
+            arm["pass_methods"]["scored"],
+            "only attempts with reward.json; missing omitted from the denominator",
+        )
+
+        doc = {
+            "suite": "deepswe",
+            "model": "openai/deepseek-flash",
+            "api_base": "https://api.deepseek.com/v1",
+            "run_id": "local-test",
+            "n_tasks": 3,
+            "n_rollouts": 4,
+            "concurrency": 1,
+            "cpus_each": 1,
+            "icode": arm,
+        }
+        self.assertEqual(validate(doc), [])
+        text = summary_markdown(doc)
+        self.assertIn("Pass@1..k (padded, missing=fail): Pass@1 **33.3%**", text)
+        self.assertIn("Pass@1..k (scored-only, missing omitted): Pass@1 **50.0%**", text)
+        self.assertIn("macro Pass@1 (padded, mean of c/n): **8.3%**", text)
+        self.assertIn("c_scored/n_scored", text)
+        self.assertIn("## Unscored / no-response", text)
+        self.assertIn("| empty", text)
+        self.assertIn("| gap", text)
+        self.assertNotIn("| clean", text.split("## Unscored")[-1])
+        page = report_html(doc)
+        self.assertIn("Unscored / no-response (not in Pass@k as a scored fail)", page)
+        self.assertIn("empty", page)
+        self.assertIn("2/4", page)
+        self.assertIn("Pass@1..k (padded, missing=fail)", page)
+        self.assertIn("Pass@1..k (scored-only, missing omitted)", page)
+
+    def test_unscored_list_omits_clean_tasks(self):
+        from eval_metrics import summarize_arm
+        from report_html import report_html
+
+        ok = {
+            "resolved": True,
+            "f2p": 1.0,
+            "f2p_pass": 1,
+            "f2p_total": 1,
+            "p2p": 1.0,
+            "p2p_pass": 1,
+            "p2p_total": 1,
+        }
+        miss = {"notes": "missing reward.json", "has_reward": False}
+        arm = summarize_arm(
+            [
+                ("ok", [dict(ok), dict(ok)]),
+                ("gap", [dict(ok), miss]),
+            ],
+            2,
+            1,
+        )
+        self.assertEqual([row["id"] for row in arm["unscored_tasks"]], ["gap"])
+        self.assertEqual(arm["unscored_tasks"][0]["unscored"], 1)
+        page = report_html(
+            {
+                "suite": "deepswe",
+                "n_tasks": 2,
+                "n_rollouts": 2,
+                "icode": arm,
+            }
+        )
+        self.assertIn("gap", page)
+        tail = page.split("Unscored / no-response")[-1]
+        self.assertNotIn(">ok<", tail.replace(" ", ""))
+
+    def test_heartbeat_line_format(self):
+        from eval_progress import ETA_FORMULA, heartbeat_text, progress_doc
+
+        doc = progress_doc(
+            done=12,
+            needed=452,
+            inflight=4,
+            slots=4,
+            mean_rollout_s=18 * 60,
+            started_at="2026-09-24T00:00:00Z",
+        )
+        self.assertAlmostEqual(doc["eta_s"], (452 - 12) * 18 * 60 / 4)
+        self.assertEqual(doc["eta_note"], ETA_FORMULA)
+        text = heartbeat_text(doc, elapsed_s=3600)
+        self.assertIn("P5 harbor heartbeat 3600s 12/452 (2.7%)", text)
+        self.assertIn("inflight=4 slots=4", text)
+        self.assertNotIn("ETA", text)
+        self.assertIn("PROGRESS", text)
+        self.assertIn("12/452 rollouts", text)
+        sample = progress_doc(
+            done=12,
+            needed=52,
+            inflight=4,
+            slots=4,
+            mean_rollout_s=20 * 60,
+            started_at="2026-09-24T00:00:00Z",
+        )
+        self.assertNotIn("ETA", heartbeat_text(sample, elapsed_s=3600))
+        early = progress_doc(
+            done=0,
+            needed=452,
+            inflight=4,
+            slots=4,
+            mean_rollout_s=None,
+            started_at="2026-09-24T00:00:00Z",
+        )
+        self.assertIsNone(early["eta_s"])
+        self.assertNotIn("ETA", heartbeat_text(early, elapsed_s=60))
+        p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        self.assertIn("progress.json", p5)
+        self.assertIn("eval_progress.py", p5)
+        self.assertNotIn("ETA ≈ remaining", p5)
+        self.assertIn("time=$span", p5)
+        self.assertIn('rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"', p5)
+        self.assertIn('set +e\n    wait "$pid"', p5)
+
+    def test_attempt_index_keeps_a_missing_slot(self):
+        from render_report import harness_task_attempts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "harness" / "harbor_runs" / "jenkins-9" / "alpha"
+            late = root / "alpha_icode_9_a02" / "trial"
+            (late / "verifier").mkdir(parents=True)
+            (late / "verifier" / "reward.json").write_text('{"reward": 1}\n', encoding="utf-8")
+            (late / "result.json").write_text("{}\n", encoding="utf-8")
+            early = root / "alpha_icode_9_a01" / "trial"
+            early.mkdir(parents=True)
+            (early / "result.json").write_text("{}\n", encoding="utf-8")
+            now = time.time()
+            os.utime(late / "verifier" / "reward.json", (now - 50, now - 50))
+            os.utime(early / "result.json", (now, now))
+            rows = harness_task_attempts(Path(tmp) / "harness", "alpha", 4)
+        self.assertEqual(len(rows), 4)
+        self.assertFalse(rows[0]["has_reward"])
+        self.assertTrue(rows[1]["resolved"])
+        self.assertFalse(rows[2]["has_reward"])
+        self.assertFalse(rows[3]["has_reward"])
+
+    def test_p8_backs_up_outside_the_workspace(self):
+        from render_report import run_folder_name
+
+        p8 = (ROOT / "pipeline" / "stages" / "p8_output.sh").read_text(encoding="utf-8")
+        self.assertNotIn("score_results.py", p8)
+        self.assertIn("MAC_K3D_OUTPUT_ROOT", p8)
+        self.assertEqual(run_folder_name("20260923T023527Z", ["abs-module-cache-flags"]), "20260923T023527Z-abs-module-cache-flags")
+        self.assertEqual(run_folder_name("20260923T023527Z", ["a", "b"]), "20260923T023527Z-n2")
+        self.assertEqual(run_folder_name("20260923T023527Z", ["a", "b"], "23"), "jenkins-23-20260923T023527Z")
+        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("\n/output/\n", gitignore)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = root / "eval-runs"
+            trial = work / "harness" / "harbor_runs" / "jenkins-1" / "alpha" / "alpha__trial"
+            (trial / "verifier").mkdir(parents=True)
+            (trial / "verifier" / "reward.json").write_text('{"reward": 1}\n', encoding="utf-8")
+            (trial / "result.json").write_text(
+                json.dumps(
+                    {
+                        "agent_execution": {
+                            "started_at": "2026-09-23T02:27:19.693803Z",
+                            "finished_at": "2026-09-23T02:33:41.933783Z",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "agent.patch").write_text("diff\n", encoding="utf-8")
+            missed = work / "harness" / "harbor_runs" / "jenkins-1" / "alpha" / "alpha__missed"
+            missed.mkdir()
+            (missed / "result.json").write_text("{}\n", encoding="utf-8")
+            (trial / ".harbor-env").write_text("DEEPSEEK_API_KEY=secret\n", encoding="utf-8")
+            (work / "selected_tasks.txt").write_text("alpha\n", encoding="utf-8")
+            attempt = work / "baseline" / "alpha" / "attempt-01"
+            (attempt / "verifier").mkdir(parents=True)
+            (attempt / "verifier" / "reward.json").write_text('{"reward": 0}\n', encoding="utf-8")
+            (attempt / ".harbor-env").write_text("DEEPSEEK_API_KEY=secret\n", encoding="utf-8")
+            (attempt / "agent.patch").write_text("patch\n", encoding="utf-8")
+            backup = root / "backup"
+            env = os.environ.copy()
+            env.pop("BUILD_NUMBER", None)
+            env.update(
+                {
+                    "MAC_K3D_EVAL_WORKDIR": str(work),
+                    "MAC_K3D_OUTPUT_ROOT": str(backup),
+                    "HOME": str(root / "home"),
+                    "BENCHMARK": "deepswe",
+                    "N_TASKS": "1",
+                    "N_ROLLOUTS": "1",
+                    "CPU_LOCK_QTY": "1",
+                    "HARNESS": "icode",
+                    "LLM": "deepseek",
+                    "DEEPSEEK_MODEL": "deepseek-flash",
+                }
+            )
+            proc = subprocess.run(
+                ["bash", str(ROOT / "pipeline" / "stages" / "p8_output.sh")],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            runs = list((backup / "deepswe").iterdir())
+            self.assertEqual(len(runs), 1)
+            archive = runs[0]
+            self.assertTrue(archive.name.endswith("-alpha.tar.gz"), archive.name)
+            folder = archive.name[: -len(".tar.gz")]
+            with tarfile.open(archive, "r:gz") as tar:
+                names = tar.getnames()
+                self.assertIn(f"{folder}/artifact.json", names)
+                self.assertIn(f"{folder}/summary.md", names)
+                self.assertIn(f"{folder}/report.html", names)
+                self.assertIn(f"{folder}/icode/alpha/attempt-01/result.json", names)
+                self.assertIn(f"{folder}/icode/alpha/attempt-02/result.json", names)
+                self.assertIn(f"{folder}/icode/alpha/attempt-01/agent.patch", names)
+                self.assertFalse(any(".harbor-env" in name or name.endswith(".pdf") for name in names))
+                self.assertFalse(any("eval-icode-deepseek-" in name for name in names))
+                written = json.loads(tar.extractfile(f"{folder}/artifact.json").read().decode("utf-8"))
+                html_report = tar.extractfile(f"{folder}/report.html").read().decode("utf-8")
+            self.assertTrue(written["run_dir"].endswith(f"{folder}.tar.gz"))
+            self.assertNotIn("llm", written)
+            self.assertEqual(written["model"], "openai/deepseek-flash")
+            self.assertEqual(written["api_base"], "https://api.deepseek.com/v1")
+            self.assertTrue(html_report.startswith("<!DOCTYPE html>"))
+            self.assertIn("icode + deepseek-flash", html_report)
+            self.assertNotIn("deepseek-v4.1-flash", html_report)
+            self.assertAlmostEqual(written["icode"]["tasks"][0]["dur_s"], 382.23998, places=2)
+            self.assertEqual(validate(written), [])
+            workspace_run = work / "output" / "deepswe" / folder
+            self.assertTrue((workspace_run / "artifact.json").is_file())
+            self.assertTrue((workspace_run / "summary.md").is_file())
+            self.assertTrue((workspace_run / "report.html").is_file())
+            self.assertFalse((workspace_run / "report.pdf").exists())
+            last = (work / "last_output.txt").read_text(encoding="utf-8").strip()
+            self.assertTrue(last.endswith(f"{folder}/**"), last)
+            self.assertFalse(any((work / "reports").glob("eval-*.json")))
 
 
 if __name__ == "__main__":

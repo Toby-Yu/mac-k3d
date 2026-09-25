@@ -2,7 +2,7 @@
 
 Lab runbook (this team), not the user start-here. **Users:** [user-guide.md](../user-guide.md). This lab’s IPs: [cloud-eval-runbook.md](cloud-eval-runbook.md).
 
-Per-stage CLI checks for Process 2 (Harbor + iCode vs DeepSeek V4 Pro baseline).  
+Per-stage CLI checks for Process 2 (Harbor + iCode). A full eval does not run P6. `mac-k3d eval --stage p6` still exists and is not a published result.  
 Machine bootstrap first: [testing-binary-initializer.md](testing-binary-initializer.md) and [workflow.md](../workflow.md).  
 **This lab (cloud root + this PC):** copy-paste phases and flowcharts in [cloud-eval-runbook.md](cloud-eval-runbook.md). **Users:** [user-guide.md](../user-guide.md).
 
@@ -20,7 +20,7 @@ mac-k3d eval                        # interactive → Jenkins job deepswe_one_ta
 ```
 
 Default workdir: `./eval-runs` (override with `MAC_K3D_EVAL_WORKDIR`).  
-Default iCode for CI: `ICODE_MODE=release` (alias `binary`) and `~/.local/share/mac-k3d/icode` or `icode-*-full-*`, or `ICODE_MODE=git` (clone URL + ref). See [icode-harness-inputs.md](../icode-harness-inputs.md). `ICODE_MODE=git` clones an allow-listed `https://` URL at `ICODE_GIT_REF` using `ICODE_GIT_REF_KIND` (`branch` / `tag` / `commit`, including a PR SHA) then bind-mounts a wrapper at `/opt/icode-host`. The eval JSON records `icode_git` (url, kind, ref, resolved sha, subject). Private clones need `GITCODE_TOKEN` / `GITHUB_TOKEN` in gitignored `.env` (TTY PAT prompt) or Jenkins `gitcode-pat` / `github-pat`.  
+Default iCode for CI: `ICODE_MODE=release` (alias `binary`) and `~/.local/share/mac-k3d/icode` or `icode-*-full-*`, or `ICODE_MODE=git` (clone URL + ref). See [icode-harness-inputs.md](../icode-harness-inputs.md). `ICODE_MODE=git` clones an allow-listed `https://` URL at `ICODE_GIT_REF` using `ICODE_GIT_REF_KIND` (`branch` / `tag` / `commit`, including a PR SHA, or `pr` for a pull-request number) then bind-mounts a wrapper at `/opt/icode-host`. The eval JSON records `icode_git` (url, kind, ref, resolved sha, subject). Private clones need `GITCODE_TOKEN` / `GITHUB_TOKEN` in gitignored `.env` (TTY PAT prompt) or Jenkins `gitcode-pat` / `github-pat`.  
 Default model: `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`). Catalog also allows `deepseek-flash` (`mac-k3d eval --model deepseek-flash`, Jenkins **DEEPSEEK_MODEL** choice, or `mac-k3d set --model`). API `model` in the response is stored as `model_served`.
 
 ---
@@ -76,8 +76,8 @@ Copy-paste commands. Use `--n-tasks 1` until E4–E6 are green.
 | **E2** P0–P4 (no LLM) | See commands below | Existing P0–P4 OK lines; Harbor agent `icode` imports | | Fast |
 | **E3** Report schema (no LLM) | `./pipeline/stages/check_report.sh pipeline/lib/testdata/report-min.json` | `OK report schema` | | Instant |
 | **E4** P5 n=1 harness (paid) | `mac-k3d eval --stage p5 --n-tasks 1` with gitignored `.env` (or Jenkins bind `deepseek-api-key`) | `PROGRESS` P5; minutes of Harbor/Docker/LLM; `reward.json`. CLI usage errors fail the stage | | |
-| **E5** P6 baseline | `DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage p6 --n-tasks 1` | `baseline/<task>/agent.patch`; `baseline/summary.json` includes usage/time/model | | |
-| **E6** P7/P8 report fields | `mac-k3d eval --stage p7` then `--stage p8 --n-tasks 1`; then `./pipeline/stages/check_report.sh` | `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` with `suite`, `pass_at_1`, `macro.f2p`/`p2p`/`reward`, `tokens`, `wall_seconds`/`wall_minutes`, `model` | | |
+| **E5** P6 manual only | `DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage p6 --n-tasks 1` | Not part of `run_all`. A hand run still writes `baseline/<task>/agent.patch` and `baseline/summary.json`. That output is not published | | |
+| **E6** P7/P8 report fields | `mac-k3d eval --stage p7` then `--stage p8 --n-tasks 1`; then `./pipeline/stages/check_report.sh` | `eval-runs/output/deepswe/<run>/artifact.json` with `icode`, plus `summary.md` and `report.html` | | |
 | **E7** Jenkins `deepswe_one_task` | UI **Build with Parameters**: `ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`. Git: same UI with `ICODE_MODE=git` (or `mac-k3d eval --icode-mode git … --yes` without `--local`). Release `--yes` cannot attach a file | Build on **this** node; archived JSON; same schema | | |
 | **E8** optional N>1 | Same as E6/E7 with `--n-tasks` > 1 | Same schema; `n_tasks` matches N | | After E6 green |
 
@@ -117,7 +117,7 @@ mac-k3d eval --stage p3 --icode-mode git \
 
 Expected: `Saved GITCODE_TOKEN to .env (mode 600)` on first run (or `Using GITCODE_TOKEN from env or .env`); clone finishes (or fails within 90s with a PAT hint); `eval-runs/icode_bin_path.txt`, `icode_host_root.txt`, and `icode_git.json` exist; console prints `OK iCode git kind=branch ref=main sha=…`. A leftover clone may print `removing leftover …/icode-src via docker` then continue — that is expected, not a failure.
 
-Jenkins (after local P3 works): on the **controller**, `mac-k3d config --update-secrets` and enter the GitCode PAT into `gitcode-pat`. Then UI **Build with Parameters**: `ICODE_MODE=git`, the same URL/ref, `ICODE_GIT_REF_KIND=branch` (or `tag` / `commit` for a PR SHA), no PAT in those fields. Worker job param `MAC_K3D_ROOT` empty for a user-like run (or this checkout to test unreleased pipeline).
+Jenkins (after local P3 works): on the **controller**, `mac-k3d config --update-secrets` and enter the GitCode PAT into `gitcode-pat`. Then UI **Build with Parameters**: `ICODE_MODE=git`, the same URL/ref, `ICODE_GIT_REF_KIND=branch` (or `tag` / `commit` for a PR SHA, or `pr` with the pull-request number in `ICODE_GIT_REF`), no PAT in those fields. Worker job param `MAC_K3D_ROOT` empty for a user-like run (or this checkout to test unreleased pipeline).
 
 ---
 
@@ -132,7 +132,7 @@ Jenkins runs `~/.local/share/mac-k3d/pipeline` unless you set job param **`MAC_K
 | **L2** P0–P4 (no LLM) | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p0` then `p1` `p2` `p3` `p4` | P0–P4 OK; P4 prints `icode_harbor_agent:ICodeAgent` | | Fast |
 | **L3** Schema | `./pipeline/stages/check_report.sh pipeline/lib/testdata/report-min.json` and `python3 pipeline/lib/test_report.py` | `OK report schema`; unit tests include nested Harbor `ruff_1` rates | | Instant |
 | **L4** P5 n=1 Harbor (paid) | `mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode binary --stage p5` | `PROGRESS` P5; `harbor_runs/…/reward.json`; local image or docker build. Missing `reward.json` fails; reward `0.0` is a score | | |
-| **L5** P6 | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p6` | `baseline/ruff_1/agent.patch`; summary usage/time/model | | |
+| **L5** P6 manual only | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p6` | Not part of `run_all`. A hand run still writes `baseline/ruff_1/agent.patch`. That output is not published | | |
 | **L6** P7/P8 | `mac-k3d eval --benchmark lolbench --task ruff_1 --stage p7` then `--stage p8`; `./pipeline/stages/check_report.sh` | Same schema as DeepSWE (`suite=lolbench`); `f2p` / `p2p` rates from Harbor; `reward` from reward.json; `wall_minutes` | | |
 | **L7** Jenkins `lolbench_one_task` | UI **Build with Parameters**: `TASK=ruff_1`, `ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`. Git: same UI or `mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git … --yes` without `--local`. Release `--yes` cannot attach a file | Build on **this** node (not a k3d agent); P5 is `harbor run`; archived JSON; SUCCESS ≠ resolved | | |
 
@@ -171,17 +171,17 @@ Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py
 | `suite`, `harness`, `n_tasks`, `n_rollouts` | `deepswe`, `lolbench`, or `swebenchpro`; `icode`; N questions; **1** attempt per question |
 | `model` / `model_served` / `api_base` | Requested catalog id (default `deepseek-v4-pro`), API-served id, endpoint |
 | `access_date_utc` | When the run was recorded (UTC) |
-| `wall_seconds` / `wall_minutes` | P5 harness + P6 baseline wall clock |
+| `wall_seconds` / `wall_minutes` | P5 harness wall clock on the P7 scratch JSON |
 | `pass_at_1` | Mean of `c_t/n_t` (resolved attempts; n=1 → 0 or 1 per task) |
 | `macro.f2p` / `p2p` / `partial` / `reward` | Mean per-task rates (`null` if the verifier has no value) |
-| `tokens.in` / `out` / `total` | API prompt/completion (harness if known, else baseline). Missing → `null` |
+| `tokens.in` / `out` / `total` | Harness API prompt/completion. Missing → `null` |
 | `tasks[].id` | Question dir name |
 | `tasks[].c` / `n` / `pass_frac` / `first` | Resolved rollouts, attempts, `c/n`, first-rollout resolved |
 | `tasks[].reward` | 1.0 resolved, 0.0 not (Harbor `reward.json`) |
 | `tasks[].f2p` / `p2p` | FAIL_TO_PASS / PASS_TO_PASS **rates** in `[0,1]`, never test-name lists |
 | `tasks[].f2p_pass` / `f2p_total` | Optional counts when the verifier exposes them |
 | `tasks[].tok_in` / `tok_out` / `dur_s` / `dur_min` | Harness API tokens and time for this question (`null` if unknown) |
-| `tasks[].baseline` | Same question, DeepSeek without iCode (`reward`, tokens, `dur_s`/`dur_min`) |
+| `tasks[].baseline` | Only on the P7 scratch JSON. Empty unless P6 was run by hand. The published `artifact.json` has no second arm |
 
 ---
 
@@ -218,7 +218,7 @@ mac-k3d eval --stage p2
 
 ## P3 — iCode release binary or git clone
 
-**Why:** Arm A must invoke the harness under test.
+**Why:** The harness run must invoke iCode.
 
 ```bash
 # release / binary drop
@@ -249,21 +249,21 @@ mac-k3d eval --stage p4
 mac-k3d eval --stage p5 --n-tasks 1
 ```
 
-**Expected:** `PROGRESS` lines; `harbor run` for one task (**minutes of iCode**). The agent runs `icode -p … run -t <instruction> -C <repo> -a code --json`, plus `ICODE_API_BASE` / `ICODE_PROVIDER` / `ICODE_MODEL`. Allowlist is `api.deepseek.com` and `api.deepseek.ai`. Missing `reward.json` fails the stage; reward `0.0` is a score. `harness/meta.json` (timing/model/tokens). `No such option` / usage errors **fail** the stage. Jenkins `mac-k3d eval --yes` embeds `pipeline/` from the **installed binary** — rebuild (`cargo build --release` and copy to `~/.local/bin/mac-k3d`) after changing the Harbor agent.
+**Expected:** `PROGRESS` lines; `harbor run` work units (`-n 1 -k 1`) under the `CPU_LOCK_QTY` slot pool ([optimization.md](../optimization.md)). The agent runs `icode -p … run -t <instruction> -C <repo> -a code --json`, plus `ICODE_API_BASE` / `ICODE_PROVIDER` / `ICODE_MODEL`. Allowlist is `api.deepseek.com` and `api.deepseek.ai`. A missing `reward.json` on one unit is a scored miss; reward `0.0` is a score. `harness/meta.json` (timing/model/tokens). `No such option` / usage errors **fail** the stage. Jenkins `mac-k3d eval --yes` embeds `pipeline/` from the **installed binary** — rebuild (`cargo build --release` and copy to `~/.local/bin/mac-k3d`) after changing the Harbor agent.
 
-## P6 — Same task via DeepSeek API only
+## P6 — Manual only, not part of a full eval
 
-**Why:** Baseline without iCode scaffolding.
+**Why:** The no-harness chat arm is not published. `run_all` does not call this stage. A later comparison harness can replace it.
 
 ```bash
 mac-k3d eval --stage p6 --n-tasks 1
 ```
 
-**Expected:** `instruction.md` posted to DeepSeek (catalog default `deepseek-v4-pro`); `.patch` under `baseline/`; `summary.json` / `meta.json` include usage, wall time, and served model.
+**Expected:** A hand run posts `instruction.md` to DeepSeek and writes `.patch` under `baseline/`. That folder is not copied into `output/` and is not the Jenkins artifact.
 
 ## P7 — Score f2p / p2p into temp JSON
 
-**Why:** Compare harness vs baseline using verifier signals.
+**Why:** Scratch score for the harness. This file is not the published report.
 
 ```bash
 mac-k3d eval --stage p7
@@ -271,16 +271,16 @@ mac-k3d eval --stage p7
 
 **Expected:** temp JSON with per-task `reward`, `f2p`/`p2p` rates, `pass_at_1`, tokens, `wall_minutes`, and `model` (rates may be `null` if the verifier only exposes resolved).
 
-## P8 — Named file under `eval-runs/reports/`
+## P8 — Run folder with JSON, summary, and HTML
 
-**Why:** Stable identification of which eval ran.
+**Why:** One folder names which eval ran.
 
 ```bash
 mac-k3d eval --stage p8 --n-tasks 1
 ./pipeline/stages/check_report.sh
 ```
 
-**Expected:** `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` with the fields in **JSON report fields**. `check_report.sh` prints `OK report schema`.
+**Expected:** `eval-runs/output/<benchmark>/<run>/artifact.json`, `summary.md`, and `report.html`. The harness arm is `icode`. `check_report.sh` prints `OK report schema`.
 
 ---
 
@@ -295,7 +295,7 @@ mac-k3d eval --local --n-tasks 1 --model deepseek-v4-pro
 mac-k3d eval --n-tasks 1 --icode-mode release --model deepseek-v4-pro
 ```
 
-**Expected:** Jenkins `deepswe_one_task` (or local) runs both arms, prints progress, archives JSON that passes `check_report.sh`.
+**Expected:** Jenkins `deepswe_one_task` (or local) runs the harness, prints progress, and archives `artifact.json`, `summary.md`, and `report.html`. `check_report.sh` passes.
 
 ---
 

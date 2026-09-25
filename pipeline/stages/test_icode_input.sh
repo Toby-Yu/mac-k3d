@@ -54,7 +54,10 @@ bash "$IN" --normalize-ref-kind auto 0123456789abcdef0123456789abcdef01234567 | 
 bash "$IN" --normalize-ref-kind TAG v0.1.41 | grep -qx tag || fail "TAG → tag"
 must_ok "commit kind + sha" --validate-ref-kind commit deadbee
 must_fail "commit kind + branch" --validate-ref-kind commit main
+must_ok "pr kind + number" --validate-ref-kind pr 7
+must_fail "pr kind + branch" --validate-ref-kind pr main
 must_fail "bad kind" --normalize-ref-kind sha main
+bash "$IN" --normalize-ref-kind pr 7 | grep -qx pr || fail "pr kind"
 ok "ref kind auto/tag/commit"
 
 # Local git checkout by kind (no network). protocol.file is blocked unless this flag.
@@ -86,6 +89,12 @@ icode_git_checkout "$KIND_TMP/c-tag" "$ORIGIN" v9.9.9 tag
 [ "$(git -C "$KIND_TMP/c-tag" rev-parse HEAD)" = "$BASE_SHA" ] || fail "tag checkout sha"
 icode_git_checkout "$KIND_TMP/c-commit" "$ORIGIN" "$FEAT_SHA" commit
 [ "$(git -C "$KIND_TMP/c-commit" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "commit checkout sha"
+git -C "$ORIGIN" update-ref refs/merge-requests/7/head "$FEAT_SHA"
+icode_git_checkout "$KIND_TMP/c-pr" "$ORIGIN" 7 pr 2>"$KIND_TMP/pr.err"
+[ "$(git -C "$KIND_TMP/c-pr" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "pr checkout sha"
+grep -q 'DEBUG icode pr' "$KIND_TMP/pr.err" && fail "pr debug line still present"
+icode_git_pr_refs "https://github.com/org/icode.git" 12 | grep -qx 'refs/pull/12/head' || fail "github pr ref"
+icode_git_pr_refs "https://gitcode.com/org/icode.git" 12 | head -n 1 | grep -qx 'refs/merge-requests/12/head' || fail "gitcode pr ref"
 SHORT="$(git -C "$ORIGIN" rev-parse --short=8 "$FEAT_SHA")"
 icode_git_checkout "$KIND_TMP/c-abbr" "$ORIGIN" "$SHORT" commit
 [ "$(git -C "$KIND_TMP/c-abbr" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "abbrev commit checkout sha"

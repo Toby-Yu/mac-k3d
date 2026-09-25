@@ -32,10 +32,10 @@ mkdir -p "$OUT_DIR" "$OUT_DIR/icode-project" /logs/artifacts 2>/dev/null || mkdi
 export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}"
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
 if [ -z "${ICODE_API_BASE:-}" ]; then
-  export ICODE_API_BASE="https://api.deepseek.com"
+  export ICODE_API_BASE="https://api.deepseek.com/v1"
 fi
 if [ -z "${ICODE_PROVIDER:-}" ]; then
-  export ICODE_PROVIDER="DeepSeek"
+  export ICODE_PROVIDER="OpenAI"
 fi
 if [ -z "${ICODE_MODEL:-}" ]; then
   export ICODE_MODEL="$DEEPSEEK_MODEL"

@@ -17,8 +17,8 @@ pub const MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-flash"];
 pub const ICODE_CI_MODES: &[&str] = &["release", "git"];
 /// https hosts allowed for `ICODE_GIT_URL` / `get_bin_icode`.
 pub const ICODE_GIT_HOSTS: &[&str] = &["github.com", "www.github.com", "gitcode.com"];
-/// How `ICODE_GIT_REF` is checked out. Jenkins/CLI pick branch, tag, or commit (`auto` is leftover).
-pub const ICODE_GIT_REF_KINDS: &[&str] = &["branch", "tag", "commit"];
+/// How `ICODE_GIT_REF` is checked out. Jenkins/CLI pick branch, tag, commit, or pr (`auto` is leftover).
+pub const ICODE_GIT_REF_KINDS: &[&str] = &["branch", "tag", "commit", "pr"];
 
 pub fn join_allowed(items: &[&str]) -> String {
     items.join(", ")
@@ -117,11 +117,21 @@ pub fn looks_like_git_commit(value: &str) -> bool {
     (7..=40).contains(&r.len()) && r.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Pull-request number: positive decimal integer, no leading zero.
+pub fn looks_like_pr_number(value: &str) -> bool {
+    let r = value.trim();
+    let mut chars = r.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_digit() && c != '0' => chars.all(|c| c.is_ascii_digit()),
+        _ => false,
+    }
+}
+
 /// Normalize `ICODE_GIT_REF_KIND`. `auto` infers commit vs branch from the ref.
 pub fn normalize_icode_git_ref_kind(kind: &str, git_ref: &str) -> Result<String> {
     let k = kind.trim().to_ascii_lowercase();
     match k.as_str() {
-        "branch" | "tag" | "commit" => Ok(k),
+        "branch" | "tag" | "commit" | "pr" => Ok(k),
         "auto" | "" => {
             if looks_like_git_commit(git_ref) {
                 Ok("commit".into())
@@ -142,6 +152,11 @@ pub fn require_icode_git_ref_for_kind(kind: &str, git_ref: &str) -> Result<(Stri
     if kind == "commit" && !looks_like_git_commit(&git_ref) {
         return Err(Error::Config(format!(
             "ICODE_GIT_REF_KIND=commit requires a git SHA (7–40 hex chars), not '{git_ref}'. Use --icode-git-ref-kind branch or tag."
+        )));
+    }
+    if kind == "pr" && !looks_like_pr_number(&git_ref) {
+        return Err(Error::Config(format!(
+            "ICODE_GIT_REF_KIND=pr requires a pull-request number (positive integer), not '{git_ref}'."
         )));
     }
     Ok((kind, git_ref))
@@ -320,9 +335,15 @@ mod tests {
         assert_eq!(k, "commit");
         assert_eq!(r, "deadbee");
         assert!(normalize_icode_git_ref_kind("sha", "main").is_err());
+        let (k, r) = require_icode_git_ref_for_kind("pr", "123").unwrap();
+        assert_eq!(k, "pr");
+        assert_eq!(r, "123");
+        assert!(require_icode_git_ref_for_kind("pr", "main").is_err());
+        assert!(require_icode_git_ref_for_kind("pr", "deadbee").is_err());
+        assert!(require_icode_git_ref_for_kind("pr", "0").is_err());
         assert!(
             !ICODE_GIT_REF_KINDS.contains(&"auto"),
-            "Jenkins/CLI catalog is branch, tag, commit"
+            "Jenkins/CLI catalog is branch, tag, commit, pr"
         );
     }
 

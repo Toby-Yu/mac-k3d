@@ -161,51 +161,79 @@ def main() -> int:
         raw = Path(args.task_file).read_text(encoding="utf-8")
         names = [ln.strip() for ln in raw.splitlines() if ln.strip()]
     tasks = list_tasks(tasks_dir, args.n_tasks, names)
+    n_rollouts = int(os.environ.get("N_ROLLOUTS") or "1")
+    if n_rollouts < 1:
+        print("N_ROLLOUTS must be an integer >= 1", file=sys.stderr)
+        return 1
     summary = []
     wall0 = time.perf_counter()
     served = None
     version = None
     for task in tasks:
         tid = task.name
-        print(f"baseline task={tid} model={args.model}")
+        print(f"baseline task={tid} model={args.model} rollouts={n_rollouts}")
         prompt = read_instruction(task)
-        try:
-            result = chat_deepseek(prompt, api_key, args.model)
-            served = result.get("model_served") or served
-            version = result.get("llm_version") or version
-            patch = extract_patch(result["content"])
-            task_out = out_dir / tid
-            task_out.mkdir(parents=True, exist_ok=True)
-            clear_stale_grades(out_dir, task_out)
-            (task_out / "response.txt").write_text(result["content"], encoding="utf-8")
-            (task_out / "agent.patch").write_text(patch, encoding="utf-8")
-            (task_out / "usage.json").write_text(
-                json.dumps(
-                    {
-                        "usage": result["usage"],
-                        "duration_seconds": result["duration_seconds"],
-                        "model_served": result.get("model_served"),
-                        "llm_version": result.get("llm_version"),
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            summary.append(
-                {
-                    "id": tid,
-                    "ok": True,
-                    "patch_path": str(task_out / "agent.patch"),
-                    "token_usage": result["usage"],
-                    "duration_seconds": result["duration_seconds"],
-                    "llm_model_served": result.get("model_served"),
-                    "llm_version": result.get("llm_version"),
-                }
-            )
-            print(f"  wrote {task_out / 'agent.patch'}")
-        except (urllib.error.URLError, urllib.error.HTTPError, KeyError, TimeoutError) as e:
-            summary.append({"id": tid, "ok": False, "error": str(e)})
-            print(f"  ERROR {e}", file=sys.stderr)
+        task_out = out_dir / tid
+        task_out.mkdir(parents=True, exist_ok=True)
+        clear_stale_grades(out_dir, task_out)
+        for old in task_out.glob("attempt-*"):
+            if old.is_dir():
+                shutil.rmtree(old)
+        prompt_tokens = completion_tokens = total_tokens = 0
+        duration = 0.0
+        wrote = 0
+        for i in range(1, n_rollouts + 1):
+            dest = task_out / f"attempt-{i:02d}"
+            dest.mkdir(parents=True, exist_ok=True)
+            try:
+                result = chat_deepseek(prompt, api_key, args.model)
+                served = result.get("model_served") or served
+                version = result.get("llm_version") or version
+                patch = extract_patch(result["content"])
+                (dest / "response.txt").write_text(result["content"], encoding="utf-8")
+                (dest / "agent.patch").write_text(patch, encoding="utf-8")
+                (dest / "usage.json").write_text(
+                    json.dumps(
+                        {
+                            "usage": result["usage"],
+                            "duration_seconds": result["duration_seconds"],
+                            "model_served": result.get("model_served"),
+                            "llm_version": result.get("llm_version"),
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                usage = result["usage"]
+                prompt_tokens += int(usage.get("prompt") or 0)
+                completion_tokens += int(usage.get("completion") or 0)
+                total_tokens += int(usage.get("total") or 0)
+                duration += float(result["duration_seconds"] or 0)
+                wrote += 1
+                print(f"  wrote {dest / 'agent.patch'}")
+            except (urllib.error.URLError, urllib.error.HTTPError, KeyError, TimeoutError) as e:
+                (dest / "agent.patch").write_text("", encoding="utf-8")
+                (dest / "notes.txt").write_text(str(e), encoding="utf-8")
+                print(f"  ERROR attempt {i}: {e}", file=sys.stderr)
+        first = task_out / "attempt-01" / "agent.patch"
+        if first.is_file():
+            shutil.copyfile(first, task_out / "agent.patch")
+        summary.append(
+            {
+                "id": tid,
+                "ok": wrote > 0,
+                "patch_path": str(task_out / "agent.patch"),
+                "n_rollouts": n_rollouts,
+                "token_usage": {
+                    "prompt": prompt_tokens,
+                    "completion": completion_tokens,
+                    "total": total_tokens,
+                },
+                "duration_seconds": round(duration, 3),
+                "llm_model_served": served,
+                "llm_version": version,
+            }
+        )
 
     wall = round(time.perf_counter() - wall0, 3)
     meta = {

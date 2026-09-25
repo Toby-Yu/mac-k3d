@@ -15,6 +15,8 @@ Do not add a new top-level folder for each feature branch. Update these product 
 | [export-import.md](export-import.md) | Worker vs controller YAML; `--force` vs `--skip-secrets` |
 | [secrets.md](secrets.md) | Jenkins credentials on the controller; local `.env` for `--local` |
 | [lolbench-jenkins.md](lolbench-jenkins.md) | `deepswe_one_task`, `lolbench_one_task`, and `swebenchpro_one_task` (all Harbor) |
+| [evaluation.md](evaluation.md) | What a run stores and what the fields mean |
+| [optimization.md](optimization.md) | CPU slot pool, RAM/disk gates, what this tree optimized |
 
 ## Lab runbooks (this team, not the user start-here)
 
@@ -27,6 +29,7 @@ Copy-paste checklists with this lab’s IPs live under [testing/](testing/).
 | [testing/cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | This cloud VM + this PC |
 | [testing/testing-binary-initializer.md](testing/testing-binary-initializer.md) | Bootstrap sign-off |
 | [testing/clean-machine-binary-test.md](testing/clean-machine-binary-test.md) | Wipe or new PC → eval-ready |
+| [testing/question-coverage.md](testing/question-coverage.md) | Questions run on this worker, and Docker memory per question |
 
 ## Developers
 
@@ -66,6 +69,7 @@ Each folder is **only** `README.md` (what that git branch shipped) and `testing.
 |----------|-------------|
 | [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) | Git or release iCode input; Harbor on DeepSWE, LoLBench, and SWE-bench Pro |
 | [binary-initializer/README.md](binary-initializer/README.md) | Release `setup` + Docker install |
+| [eval-comparison-report/README.md](eval-comparison-report/README.md) | Comparison report, same-question slots, RAM ceiling, and per-question container memory |
 
 ## Goals
 

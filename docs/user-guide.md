@@ -9,7 +9,7 @@ Two different downloads:
 
 Prefer **v0.5.2** Latest (or this checkout’s `cargo build --release`). **v0.5.1** DeepSWE Pier used the wrong iCode CLI and often exited in ~20s. **v0.5.0** still has the old P3: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1+.
 
-Eval jobs are three benchmarks, all Harbor + iCode + DeepSeek catalog model (default `deepseek-v4-pro`; also `deepseek-flash`), one `TASK` per build. P1 installs `harbor` if it is missing.
+Eval jobs are three benchmarks, all Harbor + iCode + DeepSeek catalog model (default `deepseek-v4-pro`; also `deepseek-flash`), one `TASK` per build. P1 installs `harbor` if it is missing. Release and git mount that iCode the same way and run `icode run` with `ICODE_PROVIDER=OpenAI` and `ICODE_API_BASE=https://api.deepseek.com/v1`. The Jenkins model choice stays the catalog id. The report labels it `openai/<id>`.
 
 - **`deepswe_one_task`** — DeepSWE via **Harbor** (`icode_harbor_agent:ICodeAgent`). Same worker `icode-*-full-*` bind-mount and the same iCode CLI (`run -t … -C … -a code --json`).
 - **`lolbench_one_task`** — LoLBench via **Harbor** (same agent; bind-mounts the same worker drop). Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, P5 builds or retags a local image (do not use Harbor `--force-build`).
@@ -30,7 +30,7 @@ The worker wizard has a default Jenkins URL (press Enter to keep it). Type `http
 
 Developer checkout + `.env` is optional (appendix). Users run eval through Jenkins.
 
-iCode is an **agent harness**. The job measures whether the harness helps an LLM: **Arm A** = iCode + LLM (DeepSeek); **Arm B** = the same LLM **without** iCode (baseline). DeepSWE, LoLBench, and SWE-bench Pro all run Arm A through Harbor. Compare pass@1 / resolved / tokens / time in the archived JSON. The agent may reach the DeepSeek API and nothing else (`--allow-agent-host`).
+iCode is an **agent harness**. The job scores iCode with DeepSeek on DeepSWE, LoLBench, or SWE-bench Pro, all through Harbor. Read pass@1, resolved, tokens, and time in `artifact.json` and `report.html`. The agent may reach the DeepSeek API and nothing else (`--allow-agent-host`).
 
 ---
 
@@ -128,7 +128,7 @@ In Jenkins: **Manage Jenkins → Nodes**. This machine must be **online** with l
 Details: [icode-harness-inputs.md](icode-harness-inputs.md). Both methods work for DeepSWE and LoLBench.
 
 1. **Release binary (typical)** — download `icode-<os>-<arch>-full-vX.Y.Z`. **Jenkins:** Build with Parameters → `ICODE_MODE=release` → upload `ICODE_RELEASE_FILE` (the original `*-full-*` name is lost; P3 uses gzip/tar magic or copies a standalone binary as `icode`). **Local `--stage` / `--local`:** copy to `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release /path/to/that-drop`. This is **not** a git clone of GitHub Release assets.
-2. **Git clone** — `ICODE_MODE=git` plus URL + `ICODE_GIT_REF` + `ICODE_GIT_REF_KIND` (`branch` / `tag` / `commit`). A tag checkout is a git tag, not a downloaded zip. Report field `icode_git` records the resolved SHA. The clone is under the eval workdir, not a permanent developer tree.
+2. **Git clone** — `ICODE_MODE=git` plus URL + `ICODE_GIT_REF` + `ICODE_GIT_REF_KIND` (`branch` / `tag` / `commit` / `pr`). A tag checkout is a git tag, not a downloaded zip. Kind `pr` takes the pull-request number and checks out that tip. Report field `icode_git` records the resolved SHA. The clone is under the eval workdir, not a permanent developer tree.
 
 ```bash
 # Local only (not Jenkins): discover under the worker share
@@ -164,25 +164,26 @@ Rebuild/extract pipeline on the worker (`mac-k3d eval --stage p0` or `config`) s
 | Field | Value |
 |-------|--------|
 | HARNESS / LLM / BENCHMARK | `icode` / `deepseek` / `deepswe` or `lolbench` (fixed on that job) |
-| TASK | empty on DeepSWE = first alphabetical; LoLBench default `ruff_1` |
-| N_TASKS | `1` |
+| TASK | One question id. A non-empty TASKS list replaces this. Empty plus empty TASKS uses N_TASKS. LoLBench default `ruff_1` |
+| TASKS | Comma-separated ids. This field wins over TASK and N_TASKS. Example: `ruff_1,fastapi_1` |
+| N_TASKS | Used only when TASK and TASKS are empty: first N sorted ids. Full suite: DeepSWE `113`, LoLBench `20`, SWE-bench Pro `731` |
 | ICODE_MODE | Choose `release` (upload a drop) or `git` (clone URL + ref). Fill only the fields for that choice; leave the other group as it is. |
 | ICODE_RELEASE_FILE | **release:** choose the `icode` / `icode-*-full-*` drop here. **git:** do not choose a file; leave this control as it is. Vice versa: if you chose git, ignore this; if you chose release, this is the file you upload. |
 | ICODE_GIT_URL | **git:** https URL on github.com or gitcode.com. **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required. |
-| ICODE_GIT_REF | **git:** branch name, tag, or commit SHA (match KIND). **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required. |
-| ICODE_GIT_REF_KIND | **git:** pick `branch`, `tag`, or `commit` (no auto). **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF. |
+| ICODE_GIT_REF | **git:** branch name, tag, commit SHA, or pull-request number when KIND is `pr`. **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required. |
+| ICODE_GIT_REF_KIND | **git:** pick `branch`, `tag`, `commit`, or `pr` (no auto). **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF. |
 | AGENT_LABEL | `lolbench` |
-| CPU_LOCK_QTY | `4` |
+| CPU_LOCK_QTY | `4` (cores reserved; that many question/rollout containers may run). See [optimization.md](optimization.md). |
 | MAC_K3D_ROOT | empty |
-| DEEPSEEK_MODEL | `deepseek-v4-pro` (catalog default; or `deepseek-flash`) |
+| DEEPSEEK_MODEL | `deepseek-v4-pro` (catalog default; or `deepseek-flash`). iCode sends this id to `https://api.deepseek.com/v1` with provider `OpenAI` |
 
 Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND`. The archived JSON includes `icode_git` (resolved SHA + subject). Full split: [icode-harness-inputs.md](icode-harness-inputs.md).
 
 Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --yes` cannot attach a file (it uses GET `buildWithParameters`).
 
-3. Click **Build**. Console must say `Running on <this-worker-name>`.
-4. Download **Build Artifacts** → `eval-runs/reports/eval-icode-deepseek-{deepswe|lolbench}-n1-*.json`.
-   On the worker the same files are at `$HOME/jenkins-agent/workspace/deepswe_one_task/eval-runs/reports/` or `…/workspace/lolbench_one_task/eval-runs/reports/` (or `{remote_fs}/workspace/<job>/eval-runs/reports/` if `jenkins_agent.remote_fs` was changed).
+3. Click **Build**. Console must say `Running on <this-worker-name>`. The build is allowed **120 hours** (Thursday afternoon through Monday). Re-run `mac-k3d setup` so the Jenkins job picks up that limit; an already installed job still has the old cap.
+4. Download **Build Artifacts** → `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, plus `summary.md` and `report.html` in that same folder. Token totals include a `~$` DeepSeek USD estimate.
+   The worker also keeps a compressed copy in the git checkout at `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` (override with `MAC_K3D_OUTPUT_ROOT`). The workspace copy Jenkins shows is still the loose folder at `$HOME/jenkins-agent/workspace/<job>/eval-runs/output/` (or `{remote_fs}/workspace/<job>/eval-runs/output/` if `jenkins_agent.remote_fs` was changed).
 
 ### CLI from the worker (queues Jenkins; no `--local`)
 
@@ -200,11 +201,11 @@ mac-k3d eval --benchmark deepswe --n-tasks 1 --icode-mode git \
 
 `--yes` without `--local` means **Jenkins**. An old binary may run a local eval instead; replace `~/.local/bin/mac-k3d` with v0.5.2 or newer.
 
-Expect: build **SUCCESS**, artifact present. `pass_at_1` may be `0.0` on N=1 — that is a task result, not a setup failure. Missing F2P/P2P rates are `null`, not empty test-name lists.
+Expect: build **SUCCESS**, artifact present. `pass@1` may be `0.0` on N=1 — that is a task result, not a setup failure. Missing F2P/P2P rates are `null`, not empty test-name lists.
 
 ```bash
 # Optional: schema check on the downloaded JSON (from a checkout or extracted pipeline)
-./pipeline/stages/check_report.sh /path/to/eval-icode-deepseek-deepswe-n1-*.json
+./pipeline/stages/check_report.sh /path/to/artifact.json
 ```
 
 ---

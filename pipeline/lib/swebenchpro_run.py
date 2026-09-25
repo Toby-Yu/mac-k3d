@@ -145,8 +145,8 @@ def run_icode_docker(
         "DEEPSEEK_API_KEY": os.environ.get("DEEPSEEK_API_KEY", ""),
         "DEEPSEEK_MODEL": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
         "ICODE_MODEL": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
-        "ICODE_API_BASE": "https://api.deepseek.com",
-        "ICODE_PROVIDER": "DeepSeek",
+        "ICODE_API_BASE": "https://api.deepseek.com/v1",
+        "ICODE_PROVIDER": "OpenAI",
         "BASE_COMMIT": str(meta.get("base_commit") or ""),
         "ICODE_BIN_IN_SANDBOX": icode_name,
     }

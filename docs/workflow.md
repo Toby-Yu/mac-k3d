@@ -1,6 +1,6 @@
 # Binary-initializer workflow
 
-Full path from a **new Mac or Linux** machine through Jenkins roles to an **iCode vs DeepSeek** evaluation and named JSON output.
+Full path from a **new Mac or Linux** machine through Jenkins roles to an iCode harness evaluation, with JSON, summary, and HTML output.
 
 This is the **binary-initializer** story. Older `cargo install` / `prepare` steps are listed under **Historical** in [README.md](README.md), not this page.
 
@@ -21,7 +21,7 @@ Pier is not used. It left a long-lived Docker Compose sandbox on the host, with 
 | Process | Goal | Why |
 |---------|------|-----|
 | **1. Machine bootstrap** | Download one `mac-k3d` binary; become a Jenkins **controller** or **worker** | A blank PC has no Rust. The binary installs Docker and the rest. |
-| **2. Eval pipeline** | Run DeepSWE, LoLBench, or SWE-bench Pro with harness=iCode and LLM=DeepSeek; compare to raw DeepSeek API; write JSON | Measure whether iCode improves patches (f2p / p2p) vs calling the model without a harness. |
+| **2. Eval pipeline** | Run DeepSWE, LoLBench, or SWE-bench Pro with harness=iCode and LLM=DeepSeek; write JSON and HTML | Score the iCode harness (f2p / p2p, pass@k, tokens, time). |
 
 ```text
 New Mac/Linux
@@ -30,10 +30,10 @@ New Mac/Linux
   → mac-k3d eval (harness=icode, llm=deepseek, benchmark=deepswe|lolbench|swebenchpro, N)
   → Jenkins job deepswe_one_task, lolbench_one_task, or swebenchpro_one_task (all Harbor)
        install harbor; bind-mount the worker iCode drop at /opt/icode-host
-       arm A: harbor run + icode_harbor_agent:ICodeAgent (DeepSeek allowlist)
-       arm B: DeepSeek chat API only (no iCode)
+       harbor run + icode_harbor_agent:ICodeAgent (DeepSeek allowlist)
        grade Harbor reward.json
-  → eval-runs/reports/eval-icode-deepseek-{deepswe|lolbench|swebenchpro}-n{N}-{utc}.json
+  → eval-runs/output/{benchmark}/jenkins-<build>-<UTC>/{artifact.json,summary.md,report.html}
+  → output/{benchmark}/jenkins-<build>-<UTC>.tar.gz in the git checkout
 ```
 
 ```mermaid
@@ -47,9 +47,8 @@ flowchart TD
   evalCli["mac-k3d eval: icode / deepseek / deepswe or lolbench or swebenchpro / TASK"]
   job["Jenkins deepswe_one_task or lolbench_one_task or swebenchpro_one_task"]
   harborA["Harbor + iCode allowlist"]
-  baseB["Baseline: DeepSeek API no iCode"]
   grade["Verifier reward.json"]
-  json["eval-runs/reports named JSON"]
+  json["eval JSON, summary, HTML, checkout backup"]
 
   newHost --> bin --> setup --> role
   role --> ctrl
@@ -58,9 +57,7 @@ flowchart TD
   work --> job
   evalCli --> job
   job --> harborA
-  job --> baseB
   harborA --> grade
-  baseB --> grade
   grade --> json
 ```
 
@@ -96,10 +93,9 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 | Install Harbor | `uv tool install harbor` | One runner for all three benchmarks |
 | Clone the suite | DeepSWE, LoLBench-Preview, or SWE-bench_Pro-os | Not vendored in this repo. SWE-bench Pro P2 writes a Harbor `task.toml` whose image is `jefzda/sweap-images:…` |
 | Harbor agent `icode` | `icode_harbor_agent:ICodeAgent` bind-mounts the worker drop at `/opt/icode-host` | Same iCode binary in every suite. LoLBench also calls `lolbench-submit` |
-| Arm A | `harbor run -a icode_harbor_agent:ICodeAgent --allow-agent-host api.deepseek.com` | Harness under test. Allowlist is the isolation that ships today |
-| Arm B | Baseline DeepSeek chat (`$DEEPSEEK_MODEL`, default `deepseek-v4-pro`) on the same `instruction.md` | Compare without iCode scaffolding |
+| Harness run | `harbor run -a icode_harbor_agent:ICodeAgent --allow-agent-host api.deepseek.com` | iCode under test. Allowlist is the isolation that ships today. A full eval does not run the no-harness P6 stage |
 | Grade | Harbor `reward.json` → f2p / p2p / `resolved` / pass@1, tokens, time, model | Held-out tests plus API usage |
-| JSON | `eval-runs/reports/eval-icode-deepseek-{suite}-n{N}-{utc}.json` | Clear naming for which eval ran |
+| JSON | `eval-runs/output/{suite}/jenkins-<build>-<UTC>/artifact.json` plus `summary.md` and `report.html` | One folder per run |
 
 Trigger:
 
@@ -108,7 +104,7 @@ mac-k3d eval                  # interactive → Jenkins deepswe_one_task (or --l
 mac-k3d eval --stage p5 --n-tasks 1   # isolated stage test
 ```
 
-Jenkins job names: **`deepswe_one_task`**, **`lolbench_one_task`**, and **`swebenchpro_one_task`**. All three run Harbor. Shared `run_all.sh`; each job pins `BENCHMARK`. One `TASK` per build. Logs print `PROGRESS n% …`. Agent label `lolbench`; builds take a `CPU_CORES` lock.
+Jenkins job names: **`deepswe_one_task`**, **`lolbench_one_task`**, and **`swebenchpro_one_task`**. All three run Harbor. Shared `run_all.sh`; each job pins `BENCHMARK`. One `TASK` per build. Logs print `PROGRESS n% …`. Agent label `lolbench`; builds take a `CPU_CORES` lock. How that lock becomes Harbor slots is [optimization.md](optimization.md).
 
 ---
 
@@ -118,17 +114,18 @@ Workdir is **`eval-runs/`** (`MAC_K3D_EVAL_WORKDIR`). Jenkins sets it to `$WORKS
 
 | What | Path |
 |------|------|
-| Official report (P8) | `eval-runs/reports/eval-icode-deepseek-deepswe-n{N}-{utc}.json` |
-| On the worker (Jenkins) | `$HOME/jenkins-agent/workspace/deepswe_one_task/eval-runs/reports/` |
-| Jenkins artifact | same glob on the build |
+| Official report (P8) | `eval-runs/output/deepswe/jenkins-<build>-<UTC>/artifact.json` |
+| Summary and HTML | `summary.md` and `report.html` in that same run folder |
+| Checkout backup | `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` (`MAC_K3D_OUTPUT_ROOT` overrides the checkout `output/` directory) |
+| On the worker (Jenkins workspace) | `$HOME/jenkins-agent/workspace/deepswe_one_task/eval-runs/output/` |
+| Jenkins artifact | that run folder only (`eval-runs/last_output.txt`) |
 | P7 scratch | `eval-runs/results/score-temp.json` |
 | Last report path | `eval-runs/last_output.txt` |
-| Arm A logs/patches | `eval-runs/harness/` |
-| Arm B logs/patches | `eval-runs/baseline/` |
+| Harness logs/patches | `eval-runs/harness/` |
 | DeepSWE clone | `eval-runs/deep-swe/` |
 | Copied iCode for the run | `eval-runs/icode-bin/icode` |
 
-If `jenkins_agent.remote_fs` in `worker.yaml` is not the default, reports are at `{remote_fs}/workspace/deepswe_one_task/eval-runs/reports/`. Repo-root `output/` and `eval-work/` are leftovers (removed); do not look there. Share `~/.local/share/mac-k3d/eval-runs` is not the Jenkins report dir.
+If `jenkins_agent.remote_fs` in `worker.yaml` is not the default, the workspace copy is at `{remote_fs}/workspace/deepswe_one_task/eval-runs/output/`. The copy to keep for investigation is the git checkout `output/` directory. Share `~/.local/share/mac-k3d/eval-runs` is not the Jenkins report dir.
 
 ---
 

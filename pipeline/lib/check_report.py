@@ -63,10 +63,125 @@ def _num_or_null_error(loc: str, value: object) -> str | None:
     return None
 
 
+def validate_comparison(doc: dict) -> list[str]:
+    """Schema for the harness artifact written by render_report.py."""
+    errors: list[str] = []
+    for key in (
+        "suite",
+        "model",
+        "api_base",
+        "run_id",
+        "n_tasks",
+        "n_rollouts",
+        "concurrency",
+        "cpus_each",
+        "icode",
+    ):
+        if key not in doc:
+            errors.append(f"missing {key}")
+    if doc.get("suite") not in (None, "deepswe", "lolbench", "swebenchpro"):
+        errors.append("suite should be deepswe, lolbench, or swebenchpro")
+    n_roll = doc.get("n_rollouts")
+    banned = (
+        "n_tasks",
+        "n_rollouts",
+        "concurrency",
+        "first_wilson_low",
+        "first_wilson_high",
+        "any_pass_hits",
+        "best_attempt_pass",
+        "requested_rollouts",
+        "pass_at",
+        "first_pass_at_1",
+        "first_pass_hits",
+        "macro_pass_at_1",
+    )
+    arm_names = ["icode"]
+    if "llm" in doc:
+        arm_names.append("llm")
+    for arm_name in arm_names:
+        arm = doc.get(arm_name)
+        if not isinstance(arm, dict):
+            errors.append(f"{arm_name} must be an object")
+            continue
+        for key in banned:
+            if key in arm:
+                errors.append(f"{arm_name}.{key} is redundant")
+        if isinstance(n_roll, int) and n_roll >= 1:
+            for i in range(1, n_roll + 1):
+                key = f"pass@{i}"
+                if key not in arm:
+                    errors.append(f"missing {arm_name}.{key}")
+                else:
+                    err = _rate_error(f"{arm_name}.{key}", arm.get(key))
+                    if err:
+                        errors.append(err)
+        for key in ("macro_pass@1", "any_pass"):
+            if key not in arm:
+                errors.append(f"missing {arm_name}.{key}")
+            else:
+                err = _rate_error(f"{arm_name}.{key}", arm.get(key))
+                if err:
+                    errors.append(err)
+        if isinstance(n_roll, int) and n_roll >= 1:
+            for i in range(1, n_roll + 1):
+                key = f"pass@{i}_scored"
+                if key in arm:
+                    err = _rate_error(f"{arm_name}.{key}", arm.get(key))
+                    if err:
+                        errors.append(err)
+        if "macro_pass@1_scored" in arm:
+            err = _rate_error(f"{arm_name}.macro_pass@1_scored", arm.get("macro_pass@1_scored"))
+            if err:
+                errors.append(err)
+        methods = arm.get("pass_methods")
+        if methods is not None:
+            if not isinstance(methods, dict):
+                errors.append(f"{arm_name}.pass_methods must be an object")
+            else:
+                for name in ("padded", "scored"):
+                    if name in methods and not isinstance(methods.get(name), str):
+                        errors.append(f"{arm_name}.pass_methods.{name} must be a string")
+        if "unscored_tasks" in arm and not isinstance(arm.get("unscored_tasks"), list):
+            errors.append(f"{arm_name}.unscored_tasks must be a list")
+        if "unscored_rollouts" in arm:
+            raw = arm.get("unscored_rollouts")
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+                errors.append(f"{arm_name}.unscored_rollouts must be an integer >= 0")
+        tokens = arm.get("tokens")
+        if not isinstance(tokens, dict) or "total" not in tokens:
+            errors.append(f"missing {arm_name}.tokens.total")
+        micro = arm.get("micro")
+        if not isinstance(micro, dict) or "partial_pass" not in micro or "partial_total" not in micro:
+            errors.append(f"missing {arm_name}.micro partial counts")
+        timing = arm.get("timing")
+        if not isinstance(timing, dict) or "wall_seconds" not in timing:
+            errors.append(f"missing {arm_name}.timing.wall_seconds")
+        tasks = arm.get("tasks")
+        if not isinstance(tasks, list):
+            errors.append(f"{arm_name}.tasks must be a list")
+            continue
+        for i, task in enumerate(tasks):
+            if not isinstance(task, dict):
+                errors.append(f"{arm_name}.tasks[{i}] must be an object")
+                continue
+            for key in ("id", "c", "n", "pass_frac", "reward", "dur_s"):
+                if key not in task:
+                    errors.append(f"missing {arm_name}.tasks[{i}].{key}")
+            for key in ("pass_frac_scored", "unscored_frac"):
+                if key in task:
+                    err = _rate_error(f"{arm_name}.tasks[{i}].{key}", task.get(key))
+                    if err:
+                        errors.append(err)
+    return errors
+
+
 def validate(doc: object) -> list[str]:
     errors: list[str] = []
     if not isinstance(doc, dict):
         return ["report must be a JSON object"]
+    if "icode" in doc and "pass_at_1" not in doc:
+        return validate_comparison(doc)
     for key in REQUIRED_TOP:
         if key not in doc:
             errors.append(f"missing {key}")
@@ -188,15 +303,39 @@ def validate(doc: object) -> list[str]:
     return errors
 
 
+def _report_file(text: str) -> Path | None:
+    raw = text.strip()
+    if raw.endswith("/**"):
+        raw = raw[:-3]
+    path = Path(raw)
+    workdir = Path(os.environ.get("MAC_K3D_EVAL_WORKDIR") or "eval-runs")
+    candidates = [path]
+    if not path.is_absolute():
+        candidates.extend([Path.cwd() / path, workdir / path, workdir.parent / path])
+    for candidate in candidates:
+        artifact = candidate / "artifact.json"
+        if artifact.is_file():
+            return artifact
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def resolve_path(explicit: str | None) -> Path:
     if explicit:
-        return Path(explicit)
+        found = _report_file(explicit)
+        if found:
+            return found
+        raw = explicit.strip()
+        if raw.endswith("/**"):
+            raw = raw[:-3]
+        return Path(raw)
     workdir = Path(os.environ.get("MAC_K3D_EVAL_WORKDIR") or "eval-runs")
     last = workdir / "last_output.txt"
     if last.is_file():
-        p = Path(last.read_text(encoding="utf-8").strip())
-        if p.is_file():
-            return p
+        found = _report_file(last.read_text(encoding="utf-8"))
+        if found:
+            return found
     out_dir = workdir / "reports"
     jsons = sorted(out_dir.glob("eval-*.json")) if out_dir.is_dir() else []
     if jsons:

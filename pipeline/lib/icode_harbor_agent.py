@@ -13,7 +13,7 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-v4-pro"
 ICODE_HOST = "/opt/icode-host"
 
@@ -60,7 +60,7 @@ class ICodeAgent(BaseInstalledAgent):
     ) -> None:
         env = dict(self.extra_env)
         env.setdefault("ICODE_API_BASE", DEEPSEEK_BASE_URL)
-        env.setdefault("ICODE_PROVIDER", "DeepSeek")
+        env.setdefault("ICODE_PROVIDER", "OpenAI")
         env.setdefault("ICODE_MODEL", DEFAULT_MODEL)
 
         await self.exec_as_agent(
@@ -74,23 +74,26 @@ class ICodeAgent(BaseInstalledAgent):
         submit = ""
         if str(env.get("MAC_K3D_BENCHMARK") or "").strip().lower() == "lolbench":
             submit = 'lolbench-submit "$repo" || true; '
-
-        await self.exec_as_agent(
-            environment,
-            env=env,
-            command=(
-                'export PATH="$HOME/.local/bin:$PATH"; '
-                'repo=""; '
-                'for root in /workspace /app; do '
-                '  [ -d "$root" ] || continue; '
-                '  hit=$(find "$root" -maxdepth 3 -type d -name .git 2>/dev/null | head -1 || true); '
-                '  if [ -n "$hit" ]; then repo=$(dirname "$hit"); break; fi; '
-                "done; "
-                'if [ -z "$repo" ]; then if [ -d /app ]; then repo=/app; else repo=/workspace; fi; fi; '
-                'cd "$repo"; '
-                "icode -p /logs/agent/icode-project "
-                "run -t /tmp/icode_task.md "
-                '-C "$repo" -a code --json 2>&1 | tee /logs/agent/icode.txt; '
-                f"{submit}"
-            ),
+        # Harbor prefixes this script with `set -o pipefail`. iCode exits 1 when
+        # the turn is not ok (including a tool path that is too long). That exit
+        # must not become NonZeroAgentExitCodeError; the verifier still grades
+        # whatever patch was written. Turn pipefail off, keep iCode's status,
+        # and let the shell itself exit 0. Same command for every benchmark.
+        command = (
+            'export PATH="$HOME/.local/bin:$PATH"; '
+            'repo=""; '
+            'for root in /workspace /app; do '
+            '  [ -d "$root" ] || continue; '
+            '  hit=$(find "$root" -maxdepth 3 -type d -name .git 2>/dev/null | head -1 || true); '
+            '  if [ -n "$hit" ]; then repo=$(dirname "$hit"); break; fi; '
+            "done; "
+            'if [ -z "$repo" ]; then if [ -d /app ]; then repo=/app; else repo=/workspace; fi; fi; '
+            'cd "$repo"; '
+            "set +o pipefail; "
+            "icode -p /logs/agent/icode-project "
+            "run -t /tmp/icode_task.md "
+            '-C "$repo" -a code --json 2>&1 | tee /logs/agent/icode.txt; '
+            'printf "%s\\n" "${PIPESTATUS[0]}" > /logs/agent/icode-exit.txt; '
+            f"{submit}"
         )
+        await self.exec_as_agent(environment, env=env, command=command)

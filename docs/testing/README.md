@@ -10,5 +10,6 @@ These pages are **this team’s copy-paste checklists** (cloud IP, this PC, sign
 | [cloud-eval-runbook.md](cloud-eval-runbook.md) | This lab’s controller IP + worker |
 | [testing-binary-initializer.md](testing-binary-initializer.md) | Bootstrap Task 0–8 |
 | [clean-machine-binary-test.md](clean-machine-binary-test.md) | Wipe or new PC |
+| [question-coverage.md](question-coverage.md) | Questions run on this worker, and Docker memory per question |
 
 Do not nest a second `testing/` under a branch folder. Branch re-test notes stay in `docs/<branch>/testing.md`.

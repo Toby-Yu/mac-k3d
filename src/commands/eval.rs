@@ -43,11 +43,11 @@ pub struct EvalArgs {
     #[arg(long)]
     pub icode_git_url: Option<String>,
 
-    /// Git tag, commit SHA, or branch (ICODE_MODE=git; empty = main)
+    /// Git tag, commit SHA, branch, or pull-request number (ICODE_MODE=git; empty = main)
     #[arg(long)]
     pub icode_git_ref: Option<String>,
 
-    /// How to check out ICODE_GIT_REF: branch | tag | commit (PR SHA)
+    /// How to check out ICODE_GIT_REF: branch | tag | commit | pr
     #[arg(long)]
     pub icode_git_ref_kind: Option<String>,
 
@@ -218,7 +218,7 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             .with_prompt("iCode delivery")
             .items(&[
                 "release (official *-full-* or icode under ~/.local/share/mac-k3d/)",
-                "git (clone allow-listed URL at tag / commit / branch)",
+                "git (clone allow-listed URL at tag / commit / branch / pull request)",
             ])
             .default(if icode_mode == "git" { 1 } else { 0 })
             .interact()
@@ -238,10 +238,12 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
                 "branch (checkout the tip of this branch)",
                 "tag (release or lightweight tag)",
                 "commit (SHA, including a pull-request commit to score before merge)",
+                "pr (pull-request number; checks out that PR tip)",
             ];
             let kind_default = match icode_git_ref_kind.as_str() {
                 "tag" => 1,
                 "commit" => 2,
+                "pr" => 3,
                 "auto" if eval_catalog::looks_like_git_commit(&icode_git_ref) => 2,
                 _ => 0,
             };
@@ -254,6 +256,7 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
             icode_git_ref_kind = match kind_idx {
                 1 => "tag".into(),
                 2 => "commit".into(),
+                3 => "pr".into(),
                 _ => "branch".into(),
             };
             let ref_prompt = match icode_git_ref_kind.as_str() {
@@ -261,6 +264,7 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
                 "commit" => {
                     "ICODE_GIT_REF (commit SHA; use the PR commit you want to evaluate, 7–40 hex)"
                 }
+                "pr" => "ICODE_GIT_REF (pull-request number)",
                 _ => "ICODE_GIT_REF (branch name; tip is checked out)",
             };
             icode_git_ref = Input::with_theme(&theme)

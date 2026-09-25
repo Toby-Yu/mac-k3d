@@ -47,10 +47,10 @@ mac-k3d eval --local --stage p3 --icode-mode release --yes
 
 Product path: **Build with Parameters** on `deepswe_one_task`, `lolbench_one_task`, or `swebenchpro_one_task`. `mac-k3d eval --yes` only queues the same job.
 
-1. `ICODE_MODE=git`. Fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND` (`branch`, `tag`, or `commit`). Leave **ICODE_RELEASE_FILE** as it is.
+1. `ICODE_MODE=git`. Fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND` (`branch`, `tag`, `commit`, or `pr`). For `pr`, `ICODE_GIT_REF` is the pull-request number. Leave **ICODE_RELEASE_FILE** as it is.
 2. Build on this worker.
 
-Console: `OK iCode git kind=branch` (or `tag` / `commit`); report includes `icode_git`. A leftover clone may print `removing leftover …/icode-src via docker` then continue — that is expected, not a failure.
+Console: `OK iCode git kind=branch` (or `tag` / `commit` / `pr`); report includes `icode_git`. A leftover clone may print `removing leftover …/icode-src via docker` then continue — that is expected, not a failure.
 
 ## `--yes` release must not queue
 

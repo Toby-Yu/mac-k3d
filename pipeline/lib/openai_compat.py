@@ -28,6 +28,18 @@ def api_base() -> str:
     return raw.rstrip("/")
 
 
+def models_base(base: str | None = None) -> str:
+    """Catalog check stays on GET https://api.deepseek.com/models.
+
+    iCode chat uses https://api.deepseek.com/v1. That suffix is not part of the
+    models list URL.
+    """
+    raw = (base if base is not None else api_base()).rstrip("/")
+    if raw.endswith("/v1"):
+        raw = raw[: -len("/v1")]
+    return raw
+
+
 def parse_model_ids(payload: object) -> list[str]:
     if not isinstance(payload, dict):
         return []
@@ -47,7 +59,7 @@ def fetch_model_ids(api_key: str, base: str | None = None) -> list[str]:
     key = (api_key or "").strip()
     if not key:
         raise RuntimeError("DEEPSEEK_API_KEY missing")
-    url = f"{(base or api_base()).rstrip('/')}/models"
+    url = f"{models_base(base)}/models"
     req = urllib.request.Request(
         url,
         headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},

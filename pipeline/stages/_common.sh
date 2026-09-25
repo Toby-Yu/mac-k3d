@@ -6,6 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export MAC_K3D_ROOT="$ROOT"
 export PIPELINE_LIB="$ROOT/pipeline/lib"
+# shellcheck source=../lib/parallel_degree.sh
+source "$PIPELINE_LIB/parallel_degree.sh"
 export PIPELINE_STAGES="$ROOT/pipeline/stages"
 export WORKDIR="${MAC_K3D_EVAL_WORKDIR:-$ROOT/eval-runs}"
 mkdir -p "$WORKDIR"

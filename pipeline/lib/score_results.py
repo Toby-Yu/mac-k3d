@@ -564,25 +564,94 @@ def requested_rollouts() -> int:
     return max(int(raw), 1)
 
 
+def attempt_index(path: Path) -> int | None:
+    """1-based attempt from a Harbor job name such as ``task_icode_local_a02``."""
+    for part in path.parts:
+        match = re.search(r"_a(\d+)(?:_|$)", part)
+        if match:
+            number = int(match.group(1))
+            if number >= 1:
+                return number
+    return None
+
+
+def _attempt_sort_key(path: Path, mtime: float) -> tuple:
+    index = attempt_index(path)
+    return (index if index is not None else 10**9, mtime, str(path))
+
+
 def reward_files(job_dir: Path | None) -> list[Path]:
-    """Oldest verifier reward.json first. Each file is one attempt."""
+    """Attempt order, then oldest reward.json. ``_a01`` wins over finish time."""
     if job_dir is None or not job_dir.is_dir():
         return []
-    found: list[tuple[float, str, Path]] = []
+    found: list[tuple[tuple, Path]] = []
     for path in job_dir.rglob("reward.json"):
         try:
             mtime = path.stat().st_mtime
         except OSError:
             continue
-        found.append((mtime, str(path), path))
-    found.sort()
-    return [path for _, _, path in found]
+        found.append((_attempt_sort_key(path, mtime), path))
+    found.sort(key=lambda item: item[0])
+    return [path for _, path in found]
 
 
 def trial_dir_for_reward(path: Path) -> Path:
     if path.parent.name == "verifier":
         return path.parent.parent
     return path.parent
+
+
+def trial_dirs(job_dir: Path | None) -> list[Path]:
+    """One dir per Harbor trial, oldest first. Includes trials with no reward.json."""
+    if job_dir is None or not job_dir.is_dir():
+        return []
+    found: dict[Path, float] = {}
+
+    def consider(trial: Path, stamp: float) -> None:
+        if not trial.is_dir():
+            return
+        prev = found.get(trial)
+        if prev is None or stamp < prev:
+            found[trial] = stamp
+
+    for path in job_dir.rglob("reward.json"):
+        try:
+            stamp = path.stat().st_mtime
+        except OSError:
+            continue
+        consider(trial_dir_for_reward(path), stamp)
+    for path in job_dir.rglob("result.json"):
+        if path.parent.name == "verifier":
+            continue
+        # The attempt folder task_icode_N_aNN holds a nested trial. That folder
+        # also has result.json and must not replace the trial that has reward.json.
+        nested = False
+        try:
+            for child in path.parent.iterdir():
+                if child.is_dir() and (
+                    (child / "result.json").is_file()
+                    or (child / "verifier" / "reward.json").is_file()
+                ):
+                    nested = True
+                    break
+        except OSError:
+            nested = False
+        if nested:
+            # #region agent log
+            try:
+                import json as _json, time as _time
+                with open("/home/Toby/Documents/Toby/mac-k3d/.cursor/debug-be7ee3.log", "a", encoding="utf-8") as _fh:
+                    _fh.write(_json.dumps({"sessionId": "be7ee3", "hypothesisId": "A", "location": "score_results.py:trial_dirs", "message": "skip attempt folder that wraps a trial", "data": {"parent": path.parent.name}, "timestamp": int(_time.time() * 1000)}) + "\n")
+            except OSError:
+                pass
+            # #endregion
+            continue
+        try:
+            stamp = path.stat().st_mtime
+        except OSError:
+            continue
+        consider(path.parent, stamp)
+    return [trial for trial, _ in sorted(found.items(), key=lambda item: _attempt_sort_key(item[0], item[1]))]
 
 
 def rates_for_trial(trial: Path) -> dict:

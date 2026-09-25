@@ -42,7 +42,7 @@ flowchart TD
   workerSetup["This PC: setup worker.yaml"]
   e1check["E1: node online in cloud Jenkins"]
   cheap["E2-E3: P0-P4 plus report schema"]
-  paid["E4-E6: P5 harness P6 baseline P7-P8 JSON"]
+  paid["E4-E6: P5 harness then P7-P8 JSON and HTML"]
   e7job["E7: Jenkins deepswe_one_task on this PC"]
   jsonOut["Named JSON archived and schema OK"]
 
@@ -58,17 +58,14 @@ flowchart TD
   p2["P2 clone DeepSWE GitHub"]
   p3["P3 iCode release upload or git clone"]
   p4["P4 Harbor agent icode"]
-  p5["P5 Arm A: Harbor plus iCode plus DeepSeek"]
-  p6["P6 Arm B: DeepSeek API only"]
+  p5["P5 Harbor plus iCode plus DeepSeek"]
   p7["P7 score f2p p2p"]
-  p8["P8 named JSON under eval-runs/reports/"]
-  jenkins["E7 deepswe_one_task archives the same JSON"]
+  p8["P8 artifact.json summary.md report.html"]
+  jenkins["E7 deepswe_one_task archives that folder"]
 
   p0 --> p1 --> p2 --> p3 --> p4
   p4 --> p5
-  p4 --> p6
   p5 --> p7
-  p6 --> p7
   p7 --> p8 --> jenkins
 ```
 
@@ -312,7 +309,6 @@ cd ~/Documents/Toby/mac-k3d
 # .env already has DEEPSEEK_API_KEY + DEEPSEEK_MODEL (chmod 600)
 
 mac-k3d eval --stage p5 --n-tasks 1
-mac-k3d eval --stage p6 --n-tasks 1
 mac-k3d eval --stage p7
 mac-k3d eval --stage p8 --n-tasks 1
 ./pipeline/stages/check_report.sh
@@ -320,12 +316,11 @@ mac-k3d eval --stage p8 --n-tasks 1
 
 **Expected:**
 
-- P5: `PROGRESS` lines; Harbor/Docker/LLM work (minutes, not 4s); `reward.json` under `harness/`. CLI usage errors and a missing `reward.json` **fail** the stage. P0 installs `docker compose` if missing. P5 and P6 use the same `selected_tasks.txt`.
-- P6: `baseline/<task>/agent.patch`; `baseline/summary.json` has usage / time / model
-- P8: `eval-runs/reports/eval-icode-deepseek-deepswe-n1-<utc>.json` with `suite`, `pass_at_1`, `macro.f2p`/`p2p`/`reward`, `tokens`, `wall_seconds`/`wall_minutes`, `model`
+- P5: `PROGRESS` lines; Harbor/Docker/LLM work (minutes, not 4s); `reward.json` under `harness/`. CLI usage errors and a missing `reward.json` **fail** the stage. P0 installs `docker compose` if missing.
+- P8: `eval-runs/output/<benchmark>/<run>/artifact.json`, `summary.md`, and `report.html`. The harness arm is `icode`.
 - `check_report.sh` prints `OK report schema`
 
-**Checkpoint — paste:** P5/P6 OK or error tail, JSON path, `OK report schema`.
+**Checkpoint — paste:** P5 OK or error tail, JSON path, `OK report schema`.
 
 ---
 
