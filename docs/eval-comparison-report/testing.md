@@ -10,7 +10,7 @@ python3 -m unittest pipeline/lib/test_report.py
 
 The cases that cover this branch:
 
-- `test_parallel_degree_four_lock_is_four_slots` — slot math and the Docker memory cap
+- `test_parallel_degree_four_lock_is_four_slots` — four open slots and no Docker memory cap
 - `test_work_unit_finishes_one_question_before_the_next` — one question’s rollouts finish before the next question starts
 - `test_question_memory_record_covers_every_benchmark` — `container_mem.jsonl` for DeepSWE, LoLBench, and SWE-bench Pro
 
@@ -24,7 +24,7 @@ Console lines that show this branch:
 
 - `P5 harbor: one question's rollouts together`
 - the first wave is attempts 1–4 of the same question
-- `OK harbor result.json=`
-- `P5 harbor: question=<id> rollouts=4/4` before the next question id
+- `OK unit=<question>:<attempt>`
+- `P5 harbor: question=<id> rollouts=4/4 time=...` before the next question id
 
-After P8, copy `peak_gb`, `slots`, and `memory_mb` from that run’s `container_mem.jsonl` into [question-coverage](../testing/question-coverage.md) and set those ids to `run`. A skipped id stays `not run`.
+After P8, copy `peak_gb`, `slots`, and `memory_mb` from that run’s `container_mem.jsonl` into [question-coverage](../testing/question-coverage.md) and set those ids to `run`. Do not read `harness/container_mem_history.jsonl` for that table. A skipped id stays `not run`.

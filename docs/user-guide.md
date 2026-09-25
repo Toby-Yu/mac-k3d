@@ -182,7 +182,7 @@ Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICO
 Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --yes` cannot attach a file (it uses GET `buildWithParameters`).
 
 3. Click **Build**. Console must say `Running on <this-worker-name>`. The build is allowed **120 hours** (Thursday afternoon through Monday). Re-run `mac-k3d setup` so the Jenkins job picks up that limit; an already installed job still has the old cap.
-4. Download **Build Artifacts** → `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, plus `summary.md` and `report.html` in that same folder. Token totals include a `~$` DeepSeek USD estimate.
+4. Download **Build Artifacts** → `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, plus `summary.md` and `report.html` in that same folder. Token totals are input, output, and the sum.
    The worker also keeps a compressed copy in the git checkout at `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` (override with `MAC_K3D_OUTPUT_ROOT`). The workspace copy Jenkins shows is still the loose folder at `$HOME/jenkins-agent/workspace/<job>/eval-runs/output/` (or `{remote_fs}/workspace/<job>/eval-runs/output/` if `jenkins_agent.remote_fs` was changed).
 
 ### CLI from the worker (queues Jenkins; no `--local`)

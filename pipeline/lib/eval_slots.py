@@ -15,6 +15,7 @@ MEM_BUFFER = 1.5
 PEAK_NAME = "container_mem_peak_gb"
 CURRENT_NAME = "container_mem_current.json"
 JSONL_NAME = "container_mem.jsonl"
+HISTORY_NAME = "container_mem_history.jsonl"
 # Used only when a benchmark has no live container sample. DeepSWE and LoLBench
 # follow CPU_LOCK_QTY until docker stats sees an `_icode_` container.
 FALLBACK_GB = {
@@ -200,14 +201,20 @@ def flush_question(
         "memory_mb": int(memory_mb),
         "benchmark": benchmark,
     }
-    dest = _mem_dir(workdir) / JSONL_NAME
+    _append_jsonl(_mem_dir(workdir) / JSONL_NAME, row)
+    history = dict(row)
+    history["build"] = os.environ.get("BUILD_NUMBER") or "local"
+    _append_jsonl(_mem_dir(workdir) / HISTORY_NAME, history)
+    return row
+
+
+def _append_jsonl(path: Path, row: dict) -> None:
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with dest.open("a", encoding="utf-8") as handle:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row) + "\n")
     except OSError:
         pass
-    return row
 
 
 def budget_gb(benchmark: str, measured_gb: float | None) -> float | None:

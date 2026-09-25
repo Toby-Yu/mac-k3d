@@ -1659,6 +1659,12 @@ class EvalReportTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            history = root / "harness" / "container_mem_history.jsonl"
+            history.parent.mkdir(parents=True)
+            history.write_text(
+                json.dumps({"question": "earlier", "peak_gb": 0.2, "build": "32"}) + "\n",
+                encoding="utf-8",
+            )
             observe_question(root, "q1", 1.0, 4, 1536, "deepswe")
             observe_question(root, "q1", 1.2, 4, 1843, "deepswe")
             flush_question(root, "q1", 4, 1843, "deepswe")
@@ -1670,6 +1676,10 @@ class EvalReportTests(unittest.TestCase):
             ]
             self.assertEqual([row["question"] for row in rows], ["q1", "q2"])
             self.assertAlmostEqual(rows[0]["peak_gb"], 1.2)
+            self.assertNotIn("build", rows[0])
+            hist_rows = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([row["question"] for row in hist_rows], ["earlier", "q1", "q2"])
+            self.assertEqual(hist_rows[1]["build"], os.environ.get("BUILD_NUMBER") or "local")
             mem_kb = int(6 * 1024 * 1024)
             self.assertEqual(eval_slots(4, "lolbench", mem_kb=mem_kb, container_gb=1.2), (4, 1))
             self.assertEqual(eval_slots(4, "swebenchpro", mem_kb=mem_kb, container_gb=1.2), (4, 1))
@@ -1679,6 +1689,7 @@ class EvalReportTests(unittest.TestCase):
             out.mkdir()
             copy_memory_sidecars(root / "harness", out)
             self.assertTrue((out / "container_mem.jsonl").is_file())
+            self.assertFalse((out / "container_mem_history.jsonl").exists())
             self.assertEqual((out / "skipped_questions.txt").read_text(encoding="utf-8"), "q9\n")
             peak, skipped = memory_sidecar(root / "harness")
             self.assertAlmostEqual(peak, 1.2)
@@ -1689,6 +1700,8 @@ class EvalReportTests(unittest.TestCase):
         for name in ("deepswe", "lolbench", "swebenchpro"):
             self.assertIn(name, common)
         p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        self.assertIn('"$HARNESS_DIR/container_mem.jsonl"', p5)
+        self.assertNotIn("container_mem_history.jsonl", p5)
         self.assertIn("eval_slots.py\" flush", p5)
         self.assertNotIn("--override-memory-mb", p5)
         self.assertIn("out of memory", p5)

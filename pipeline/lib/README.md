@@ -7,8 +7,8 @@ Used by `mac-k3d eval` and Jenkins jobs `deepswe_one_task`, `lolbench_one_task`,
 | `icode_input.sh` | P3 iCode inputs: Jenkins upload / local `*-full-*`, or git clone; leftover `icode-src` wipe via Docker |
 | `icode_pier_agent.py` | Pier 0.3.1 `ICodeAgent` (`--agent-import-path icode_pier_agent:ICodeAgent`) |
 | `icode_harbor_agent.py` | Harbor `ICodeAgent` for all three benchmarks; worker iCode tree bind-mounted at `/opt/icode-host` |
-| `eval_slots.py` | P5/P6 slot cap, Docker memory cap, and one-question-at-a-time rollout order ([optimization.md](../../docs/optimization.md)) |
-| `eval_progress.py` | P5 `progress.json` and the 60s heartbeat ETA line |
+| `eval_slots.py` | P5/P6 slot count and one-question-at-a-time rollout order. No Docker memory cap ([optimization.md](../../docs/optimization.md)) |
+| `eval_progress.py` | P5 `progress.json` and the 60s heartbeat (`done/needed`, inflight, slots) |
 | `pier-agent-icode/` | Unused by the current runner. Kept from the Pier path. |
 | `swebenchpro_tasks.py` | P2: materialize Harbor `tasks/<instance_id>/` (`task.toml`, tests) from the SWE-bench Pro dataset |
 | `swebenchpro_run.py` | Docker Hub tag helper used when writing those Harbor tasks |

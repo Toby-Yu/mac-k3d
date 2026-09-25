@@ -8,16 +8,18 @@ DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-e
 
 ## Where a run is stored
 
-P8 writes one folder per run under the Jenkins workspace (or `eval-runs` for a local stage run). The folder holds three files:
+P8 writes one folder per run under the Jenkins workspace (or `eval-runs` for a local stage run). The folder holds the report files, and also `container_mem.jsonl` and `skipped_questions.txt` when this build wrote them:
 
 ```text
 eval-runs/output/<benchmark>/jenkins-<BUILD_NUMBER>-<UTC>/
   artifact.json
   summary.md
   report.html
+  container_mem.jsonl
+  skipped_questions.txt
 ```
 
-Example: `eval-runs/output/deepswe/jenkins-23-20260923T052713Z/artifact.json`. Jenkins archives only that folder, so the build page shows these three files. Older build pages stay downloadable. A local stage run with no `BUILD_NUMBER` names the folder `<UTC>-<task>` or `<UTC>-n<count>`. `report.pdf` and the long `eval-icode-deepseek-...json` name are not written.
+Example: `eval-runs/output/deepswe/jenkins-23-20260923T052713Z/artifact.json`. Jenkins archives only that folder. Older build pages stay downloadable. A local stage run with no `BUILD_NUMBER` names the folder `<UTC>-<task>` or `<UTC>-n<count>`. `report.pdf` and the long `eval-icode-deepseek-...json` name are not written.
 
 The same files, plus `tasks.txt` and the per-question trial files, are packed into one gitignored archive so a workspace wipe does not remove them:
 
@@ -64,4 +66,4 @@ Pass@k is stored twice. `pass@k` / `macro_pass@1` / `c` / `n` / `pass_frac` are 
 
 `n_tasks`, `n_rollouts`, `concurrency`, and `cpus_each` are stored once at the top of the JSON. The spread next to macro Pass@1 is `macro_pass@1_sd`, the sample standard deviation of the per-question `c/n` values. `macro_pass@1_scored_sd` is the same for `pass_frac_scored`. One question has SD 0.
 
-CPU slot packing, the RAM ceiling, and the disk gate are in [optimization.md](optimization.md).
+CPU slot packing, the open slots, and the disk floor are in [optimization.md](optimization.md).

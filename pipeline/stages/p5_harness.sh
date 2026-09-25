@@ -106,7 +106,10 @@ export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
 export ICODE_MODEL="${ICODE_MODEL:-$DEEPSEEK_MODEL}"
 mkdir -p "$HARNESS_DIR"
 rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
-rm -f "$HARNESS_DIR/container_mem_peak_gb"
+rm -f "$HARNESS_DIR/container_mem_peak_gb" \
+  "$HARNESS_DIR/container_mem.jsonl" \
+  "$HARNESS_DIR/container_mem_current.json" \
+  "$HARNESS_DIR/skipped_questions.txt"
 echo "P5 harbor: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
 ensure_selected_tasks
 eval_parallel_degree || die "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1"

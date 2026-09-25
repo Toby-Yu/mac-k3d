@@ -11,7 +11,7 @@ EVAL_SLOTS = CPU_LOCK_QTY
 EVAL_CPUS_EACH = max(1, CPU_LOCK_QTY / EVAL_SLOTS)
 ```
 
-P5 still samples `docker stats` for containers whose names contain `_icode_` or `__env-main-` and writes `peak_gb` to `container_mem.jsonl`. That sample does not change the slot count and does not set a Docker memory cap. Free disk at `WORKDIR` below 40 GB sets `EVAL_SLOTS` to 1.
+P5 still samples `docker stats` for containers whose names contain `_icode_` or `__env-main-` and writes `peak_gb` to `container_mem.jsonl`. That file is emptied at the start of P5, so the report copy contains only this build. The same row, plus the build number, is appended to `harness/container_mem_history.jsonl` on the worker and is not copied into the report. That sample does not change the slot count and does not set a Docker memory cap. Free disk at `WORKDIR` below 40 GB sets `EVAL_SLOTS` to 1.
 
 After the question list is chosen, P5 prints:
 

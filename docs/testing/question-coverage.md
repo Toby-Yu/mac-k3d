@@ -4,7 +4,7 @@ Which questions have a Harbor run on this PC, and the Docker memory recorded for
 
 Jenkins build numbers are the `jenkins-<n>` trees under each job’s `eval-runs/harness/harbor_runs`. `peak_gb`, `slots`, and `memory_mb` come from that run’s `container_mem.jsonl` after P8 (copied next to `artifact.json`). Historical builds finished before that file existed, so those cells stay empty.
 
-A skip (`skip question=` / `skipped_questions.txt`) stays **not run**: no container memory was measured. After a finished P8, fill the three memory cells and set status to `run`.
+A skip (`skip question=` / `skipped_questions.txt`) stays **not run**. An out-of-memory skip can still have a sampled `peak_gb` in that run’s `container_mem.jsonl`. After a finished P8, fill the three memory cells and set status to `run`.
 
 ## Next DeepSWE TASKS
 
