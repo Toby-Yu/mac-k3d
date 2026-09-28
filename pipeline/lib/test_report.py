@@ -1484,9 +1484,20 @@ class EvalReportTests(unittest.TestCase):
             "k3d-server\t2.0GiB / 16GiB\n"
             "q1_icode_1_a01\t400MiB / 16GiB\n"
             "abs-module-cache-flags__BB2vSAk__env-main-1\t800MiB / 16GiB\n"
+            "fastapi-deprecation-response-hea__FzVfjPP-main-1\t350MiB / 16GiB\n"
+            "fastapi-deprecation-response-hea__FzVfjPP-main-1\t400KiB / 16GiB\n"
             "abs-module-cache-flags__BB2vSAk__env-harbor-docker-egress-control-sidecar-1\t4GiB / 16GiB\n"
         )
         self.assertAlmostEqual(max_icode_mem_gb(sample), 800 / 1024)
+        trial_only = (
+            "k3d-server\t2.0GiB / 16GiB\n"
+            "fastapi-deprecation-response-hea__FzVfjPP-main-1\t350MiB / 16GiB\n"
+            "abs-module-cache-flags__BB2vSAk__env-harbor-docker-egress-control-sidecar-1\t4GiB / 16GiB\n"
+        )
+        self.assertAlmostEqual(max_icode_mem_gb(trial_only), 350 / 1024)
+        self.assertIsNone(
+            max_icode_mem_gb("fastapi-deprecation-response-hea__FzVfjPP-main-1\t400KiB / 16GiB\n")
+        )
         ids = ["a", "b", "c", "d"]
         low_line = parallel_report_line(ids, 4, 2, now_kb, 2.0, 3.0)
         high_line = parallel_report_line(ids, 4, 4, now_kb, 0.4, 0.6)
@@ -1508,6 +1519,8 @@ class EvalReportTests(unittest.TestCase):
         self.assertNotIn("[[:space:]]137", p5)
         self.assertIn('ExitCode[=:[:space:]]*137', p5)
         self.assertIn('[ -z "$reward" ]', p5)
+        self.assertIn("active_question.txt", p5)
+        self.assertIn('eval_slots.py" sample', p5)
 
     def test_pass_at_ladder_and_demo_report(self):
         from eval_metrics import pass_at_ladder, summarize_arm
@@ -1658,7 +1671,14 @@ class EvalReportTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from eval_slots import eval_slots, flush_question, memory_limit_mb, observe_question
+        from eval_slots import (
+            eval_slots,
+            flush_question,
+            memory_limit_mb,
+            observe_question,
+            sample_active_question,
+            write_active_question,
+        )
         from render_report import copy_memory_sidecars, memory_sidecar
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1671,18 +1691,28 @@ class EvalReportTests(unittest.TestCase):
             )
             observe_question(root, "q1", 1.0, 4, 1536, "deepswe")
             observe_question(root, "q1", 1.2, 4, 1843, "deepswe")
-            flush_question(root, "q1", 4, 1843, "deepswe")
+            flush_question(root, "q1", 4, 1843, "deepswe", final_sample=False)
             observe_question(root, "q2", 0.4, 4, 614, "deepswe")
-            flush_question(root, "q2", 4, 614, "deepswe")
+            flush_question(root, "q2", 4, 614, "deepswe", final_sample=False)
+            observe_question(root, "q3", 0.0004, 4, 0, "deepswe")
+            flush_question(root, "q3", 4, 0, "deepswe", final_sample=False)
+            write_active_question(root, "q4")
+            # No docker in unit tests: sample leaves peak untouched / unmeasured.
+            self.assertEqual(sample_active_question(root, slots=4, benchmark="deepswe"), "q4")
+            flush_question(root, "q4", 4, 0, "deepswe", final_sample=False)
             rows = [
                 json.loads(line)
                 for line in (root / "harness" / "container_mem.jsonl").read_text(encoding="utf-8").splitlines()
             ]
-            self.assertEqual([row["question"] for row in rows], ["q1", "q2"])
+            self.assertEqual([row["question"] for row in rows], ["q1", "q2", "q3", "q4"])
             self.assertAlmostEqual(rows[0]["peak_gb"], 1.2)
+            self.assertAlmostEqual(rows[1]["peak_gb"], 0.4)
+            self.assertIsNone(rows[2]["peak_gb"])
+            self.assertIsNone(rows[3]["peak_gb"])
             self.assertNotIn("build", rows[0])
+            self.assertFalse((root / "harness" / "active_question.txt").exists())
             hist_rows = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([row["question"] for row in hist_rows], ["earlier", "q1", "q2"])
+            self.assertEqual([row["question"] for row in hist_rows], ["earlier", "q1", "q2", "q3", "q4"])
             self.assertEqual(hist_rows[1]["build"], os.environ.get("BUILD_NUMBER") or "local")
             mem_kb = int(6 * 1024 * 1024)
             self.assertEqual(eval_slots(4, "lolbench", mem_kb=mem_kb, container_gb=1.2), (4, 1))
@@ -1707,6 +1737,8 @@ class EvalReportTests(unittest.TestCase):
         self.assertIn('"$HARNESS_DIR/container_mem.jsonl"', p5)
         self.assertNotIn("container_mem_history.jsonl", p5)
         self.assertIn("eval_slots.py\" flush", p5)
+        self.assertIn('eval_slots.py" sample', p5)
+        self.assertIn("active_question.txt", p5)
         self.assertNotIn("--override-memory-mb", p5)
         self.assertIn("out of memory", p5)
         self.assertIn("skipped_questions.txt", p5)

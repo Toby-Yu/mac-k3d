@@ -109,6 +109,7 @@ rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
 rm -f "$HARNESS_DIR/container_mem_peak_gb" \
   "$HARNESS_DIR/container_mem.jsonl" \
   "$HARNESS_DIR/container_mem_current.json" \
+  "$HARNESS_DIR/active_question.txt" \
   "$HARNESS_DIR/skipped_questions.txt"
 echo "P5 harbor: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
 ensure_selected_tasks
@@ -259,6 +260,7 @@ start_unit() {
   log="$jobs/harbor-a${att_tag}.log"
   if [ -z "${QUESTION_START[$tid]:-}" ]; then
     QUESTION_START[$tid]="$SECONDS"
+    printf '%s\n' "$tid" >"$HARNESS_DIR/active_question.txt"
     echo "P5 harbor: -p ${task_path} -a icode_harbor_agent:ICodeAgent -m ${DEEPSEEK_MODEL}"
     echo "P5 harbor: --jobs-dir $jobs (attempts 1-${N_ROLLOUTS})"
   fi
@@ -427,6 +429,7 @@ reap_finished() {
         --memory-mb "${EVAL_MEMORY_MB:-0}" \
         --benchmark "${BENCHMARK:-deepswe}" \
         --workdir "$WORKDIR" || true
+      rm -f "$HARNESS_DIR/active_question.txt"
     fi
   done
   return "$waited"
@@ -438,6 +441,11 @@ write_progress
   while true; do
     sleep 60
     python3 "$PIPELINE_LIB/eval_progress.py" heartbeat --progress "$HARNESS_DIR/progress.json" --elapsed "$SECONDS" || true
+    python3 "$PIPELINE_LIB/eval_slots.py" sample \
+      --workdir "$WORKDIR" \
+      --slots "${EVAL_SLOTS:-0}" \
+      --memory-mb "${EVAL_MEMORY_MB:-0}" \
+      --benchmark "${BENCHMARK:-deepswe}" || true
   done
 ) &
 heartbeat_pid=$!

@@ -12,16 +12,20 @@ from pathlib import Path
 HOST_RESERVE_GB = 2
 MIN_DISK_GB = 40
 MEM_BUFFER = 1.5
+# Ignore startup noise / mis-parses below ~10 MiB so they cannot become peak 0.00.
+MIN_SAMPLE_GB = 0.01
 PEAK_NAME = "container_mem_peak_gb"
 CURRENT_NAME = "container_mem_current.json"
 JSONL_NAME = "container_mem.jsonl"
 HISTORY_NAME = "container_mem_history.jsonl"
+ACTIVE_QUESTION_NAME = "active_question.txt"
 # Used only when a benchmark has no live container sample. DeepSWE and LoLBench
-# follow CPU_LOCK_QTY until docker stats sees an `_icode_` container.
+# follow CPU_LOCK_QTY until docker stats sees an eval container.
 FALLBACK_GB = {
     "swebenchpro": 8,
 }
 _MEM_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]i?B)", re.IGNORECASE)
+_MAIN_RE = re.compile(r"-main-\d+")
 
 
 def mem_available_kb() -> int | None:
@@ -49,10 +53,24 @@ def parse_mem_gb(text: str) -> float | None:
     return value * factor
 
 
+def usable_sample_gb(sample_gb: float | None) -> float | None:
+    """Drop readings below MIN_SAMPLE_GB so noise cannot become the recorded peak."""
+    if sample_gb is None or sample_gb < MIN_SAMPLE_GB:
+        return None
+    return sample_gb
+
+
 def _is_eval_container(line: str) -> bool:
-    # Harbor job names contain _icode_. The trial container is task__id__env-main-1.
-    # The egress sidecar also contains __ and must not set the memory cap.
-    return "_icode_" in line or "__env-main-" in line
+    # Harbor job names contain _icode_. Older trials use __env-main-1; current
+    # Harbor often names the main service task__hash-main-1. Egress sidecars
+    # also contain __ and must not set the memory peak.
+    name = line.split("\t", 1)[0]
+    low = name.lower()
+    if "egress" in low or "sidecar" in low:
+        return False
+    if "_icode_" in name or "__env-main-" in name:
+        return True
+    return "__" in name and _MAIN_RE.search(name) is not None
 
 
 def max_icode_mem_gb(stats_text: str) -> float | None:
@@ -60,7 +78,7 @@ def max_icode_mem_gb(stats_text: str) -> float | None:
     for line in stats_text.splitlines():
         if not _is_eval_container(line):
             continue
-        gb = parse_mem_gb(line)
+        gb = usable_sample_gb(parse_mem_gb(line))
         if gb is None:
             continue
         best = gb if best is None else max(best, gb)
@@ -95,11 +113,13 @@ def noted_peak_gb(workdir: str | Path, sample_gb: float | None) -> float | None:
             prev = float(path.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             prev = None
-    vals = [v for v in (prev, sample_gb) if v is not None and v > 0]
+    sample = usable_sample_gb(sample_gb)
+    prev_ok = usable_sample_gb(prev)
+    vals = [v for v in (prev_ok, sample) if v is not None]
     if not vals:
         return None
     peak = max(vals)
-    if sample_gb is not None and sample_gb > 0:
+    if sample is not None:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"{peak:.6f}\n", encoding="utf-8")
@@ -110,6 +130,32 @@ def noted_peak_gb(workdir: str | Path, sample_gb: float | None) -> float | None:
 
 def _mem_dir(workdir: str | Path) -> Path:
     return Path(workdir) / "harness"
+
+
+def active_question_path(workdir: str | Path) -> Path:
+    return _mem_dir(workdir) / ACTIVE_QUESTION_NAME
+
+
+def read_active_question(workdir: str | Path) -> str:
+    path = active_question_path(workdir)
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_active_question(workdir: str | Path, question: str) -> None:
+    path = active_question_path(workdir)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if question:
+            path.write_text(f"{question}\n", encoding="utf-8")
+        elif path.is_file():
+            path.unlink()
+    except OSError:
+        return
 
 
 def observe_question(
@@ -134,8 +180,9 @@ def observe_question(
                 peak = float(doc.get("peak_gb") or 0)
             except (TypeError, ValueError):
                 peak = 0.0
-    if sample_gb is not None and sample_gb > peak:
-        peak = sample_gb
+    sample = usable_sample_gb(sample_gb)
+    if sample is not None and sample > peak:
+        peak = sample
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -160,7 +207,13 @@ def flush_question(
     slots: int,
     memory_mb: int,
     benchmark: str,
+    *,
+    final_sample: bool = True,
 ) -> dict:
+    if final_sample:
+        sample = measure_container_gb()
+        if sample is not None:
+            observe_question(workdir, question, sample, slots, memory_mb, benchmark)
     path = _mem_dir(workdir) / CURRENT_NAME
     peak = 0.0
     if path.is_file():
@@ -177,9 +230,11 @@ def flush_question(
             path.unlink()
         except OSError:
             pass
+    write_active_question(workdir, "")
+    measured = usable_sample_gb(peak)
     row = {
         "question": question,
-        "peak_gb": round(peak, 2),
+        "peak_gb": round(measured, 2) if measured is not None else None,
         "slots": int(slots),
         "memory_mb": int(memory_mb),
         "benchmark": benchmark,
@@ -189,6 +244,22 @@ def flush_question(
     history["build"] = os.environ.get("BUILD_NUMBER") or "local"
     _append_jsonl(_mem_dir(workdir) / HISTORY_NAME, history)
     return row
+
+
+def sample_active_question(
+    workdir: str | Path,
+    *,
+    slots: int = 0,
+    memory_mb: int = 0,
+    benchmark: str = "deepswe",
+) -> str:
+    """Measure docker stats for the active question (heartbeat sampler)."""
+    question = read_active_question(workdir)
+    if not question:
+        return ""
+    sample = measure_container_gb()
+    observe_question(workdir, question, sample, slots, memory_mb, benchmark)
+    return question
 
 
 def _append_jsonl(path: Path, row: dict) -> None:
@@ -382,6 +453,11 @@ def main() -> int:
     flush_p.add_argument("--memory-mb", type=int, default=0)
     flush_p.add_argument("--benchmark", default=os.environ.get("BENCHMARK", "deepswe"))
     flush_p.add_argument("--workdir", default=os.environ.get("WORKDIR", "."))
+    sample_p = sub.add_parser("sample")
+    sample_p.add_argument("--workdir", default=os.environ.get("WORKDIR", "."))
+    sample_p.add_argument("--slots", type=int, default=0)
+    sample_p.add_argument("--memory-mb", type=int, default=0)
+    sample_p.add_argument("--benchmark", default=os.environ.get("BENCHMARK", "deepswe"))
     args = ap.parse_args()
     cap = os.environ.get("EVAL_RESOURCE_CAP", "1") != "0"
     if args.cmd == "slots":
@@ -398,6 +474,16 @@ def main() -> int:
         print("EVAL_MEMORY_MB=0")
         if args.question:
             observe_question(args.workdir, args.question, sample, slots, 0, args.benchmark)
+        return 0
+    if args.cmd == "sample":
+        if not cap:
+            return 0
+        sample_active_question(
+            args.workdir,
+            slots=args.slots,
+            memory_mb=args.memory_mb,
+            benchmark=args.benchmark,
+        )
         return 0
     if args.cmd == "flush":
         row = flush_question(args.workdir, args.question, args.slots, args.memory_mb, args.benchmark)

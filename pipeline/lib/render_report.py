@@ -517,8 +517,13 @@ def memory_sidecar(harness_dir: Path) -> tuple[float | None, list[str]]:
                 continue
             try:
                 row = json.loads(line)
-                gb = float(row.get("peak_gb") or 0)
+                raw = row.get("peak_gb")
+                if raw is None:
+                    continue
+                gb = float(raw)
             except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if gb <= 0:
                 continue
             peak = gb if peak is None else max(peak, gb)
     skipped_path = harness_dir / "skipped_questions.txt"
