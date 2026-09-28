@@ -13,6 +13,8 @@ case "${BENCHMARK:-deepswe}" in
       git clone --depth 1 "$LOLBENCH_GIT_URL" "$LOLBENCH_DIR"
     fi
     [ -d "$LOLBENCH_DIR/harbor_tasks" ] || die "missing $LOLBENCH_DIR/harbor_tasks after clone"
+    # Ensure reward.json always carries integer F2P/P2P counts (DeepSWE-shaped).
+    python3 "$PIPELINE_LIB/lolbench_fix_rewards.py" "$LOLBENCH_DIR/harbor_tasks"
     ;;
   swebenchpro)
     if [ ! -f "$SWEBENCHPRO_DIR/src/swe_bench_pro_eval.py" ] \

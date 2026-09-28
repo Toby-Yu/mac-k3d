@@ -18,6 +18,7 @@ from icode_usage import find_icode_usage
 _TRIAL_FILES = {
     "result.json",
     "reward.json",
+    "agent_report.json",
     "usage.json",
     "notes.txt",
     "icode-usage.json",

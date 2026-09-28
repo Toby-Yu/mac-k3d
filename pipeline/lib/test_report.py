@@ -802,6 +802,193 @@ class ScoreResultsTests(unittest.TestCase):
             self.assertEqual(task["baseline"]["tok_in"], 663)
             self.assertIsNone(task["baseline"]["reward"])
 
+    def test_lolbench_reward_counts_without_agent_report(self):
+        """Early-exit / patched report_to_reward writes counts on reward.json alone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = root / "tasks" / "fastapi_1"
+            tasks.mkdir(parents=True)
+            trial = (
+                root
+                / "harness"
+                / "harbor_runs"
+                / "jenkins-19"
+                / "fastapi_1"
+                / "fastapi_1_icode_union_19_a01"
+                / "fastapi_1__empty"
+            )
+            verifier = trial / "verifier"
+            verifier.mkdir(parents=True)
+            (verifier / "reward.json").write_text(
+                json.dumps(
+                    {
+                        "reward": 0.0,
+                        "resolved": 0.0,
+                        "applied": 0.0,
+                        "build_ok": 0.0,
+                        "f2p_pass_rate": 0.0,
+                        "p2p_pass_rate": 0.0,
+                        "f2p_pass": 0,
+                        "f2p_total": 11,
+                        "p2p_pass": 0,
+                        "p2p_total": 51,
+                        "harness_ok": 1.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "agent").mkdir()
+            (trial / "agent" / "icode.txt").write_text("{}\n", encoding="utf-8")
+            harness = root / "harness"
+            (harness / "meta.json").write_text(
+                json.dumps({"duration_seconds": 10}),
+                encoding="utf-8",
+            )
+            (root / "baseline").mkdir()
+            (root / "baseline" / "summary.json").write_text("[]\n", encoding="utf-8")
+            (root / "baseline" / "meta.json").write_text("{}\n", encoding="utf-8")
+            out = root / "out.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(LIB / "score_results.py"),
+                    "--harness-dir",
+                    str(harness),
+                    "--baseline-dir",
+                    str(root / "baseline"),
+                    "--tasks-dir",
+                    str(root / "tasks"),
+                    "--n-tasks",
+                    "1",
+                    "--out",
+                    str(out),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "BENCHMARK": "lolbench", "DEEPSEEK_MODEL": "deepseek-flash"},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            doc = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(validate(doc), [])
+            task = doc["tasks"][0]
+            self.assertEqual(task["f2p_pass"], 0)
+            self.assertEqual(task["f2p_total"], 11)
+            self.assertEqual(task["p2p_pass"], 0)
+            self.assertEqual(task["p2p_total"], 51)
+            from render_report import _attempt_from_trial
+
+            row = _attempt_from_trial(trial, verifier / "reward.json")
+            self.assertEqual(row["f2p_pass"], 0)
+            self.assertEqual(row["f2p_total"], 11)
+            self.assertEqual(row["p2p_pass"], 0)
+            self.assertEqual(row["p2p_total"], 51)
+            self.assertIsNotNone(row["partial"])
+
+    def test_lolbench_fix_rewards_patcher(self):
+        from lolbench_fix_rewards import MARKER, patch_harbor_tasks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            harbor = Path(tmp) / "harbor_tasks"
+            task = harbor / "fastapi_1" / "tests"
+            task.mkdir(parents=True)
+            (task / "report_to_reward.py").write_text(
+                'x = {"instance_id": "fastapi_1"}\n',
+                encoding="utf-8",
+            )
+            (task / "test.sh").write_text(
+                "#!/usr/bin/env bash\nif [ ! -s \"$patch\" ]; then\n"
+                "  python3 /tests/report_to_reward.py --missing-patch \"$patch\" a b\n"
+                "  exit 0\nfi\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(patch_harbor_tasks(harbor), 1)
+            self.assertEqual(patch_harbor_tasks(harbor), 0)
+            report = (task / "report_to_reward.py").read_text(encoding="utf-8")
+            self.assertIn(MARKER, report)
+            self.assertIn("f2p_pass", report)
+            self.assertIn("f2p_total", report)
+            self.assertIn("p2p_pass", report)
+            self.assertIn("p2p_total", report)
+            self.assertIn("instance_id = 'fastapi_1'", report)
+            compile(report, "report_to_reward.py", "exec")
+            sh = (task / "test.sh").read_text(encoding="utf-8")
+            self.assertIn(MARKER, sh)
+            self.assertNotIn("--missing-patch", sh)
+            self.assertIn('[ -s "$patch" ]', sh)
+            # Patched script emits counts on early exit
+            out_report = Path(tmp) / "agent_report.json"
+            out_reward = Path(tmp) / "reward.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(task / "report_to_reward.py"),
+                    "--suite",
+                    "union",
+                    "--missing-patch",
+                    "/logs/artifacts/solution.patch",
+                    str(out_report),
+                    str(out_reward),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            reward = json.loads(out_reward.read_text(encoding="utf-8"))
+            self.assertEqual(reward["f2p_pass"], 0)
+            self.assertEqual(reward["f2p_total"], 0)
+            self.assertEqual(reward["p2p_pass"], 0)
+            self.assertEqual(reward["p2p_total"], 0)
+            # Normal path with agent_report buckets
+            out_report.write_text(
+                json.dumps(
+                    {
+                        "applied": True,
+                        "resolved": False,
+                        "build": {"status": "ok"},
+                        "f2p": {"passed": 8, "total": 11},
+                        "p2p": {"passed": 51, "total": 51},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(task / "report_to_reward.py"),
+                    "--suite",
+                    "union",
+                    "--runner-rc",
+                    "0",
+                    str(out_report),
+                    str(out_reward),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            reward = json.loads(out_reward.read_text(encoding="utf-8"))
+            self.assertEqual(reward["f2p_pass"], 8)
+            self.assertEqual(reward["f2p_total"], 11)
+            self.assertEqual(reward["p2p_pass"], 51)
+            self.assertEqual(reward["p2p_total"], 51)
+            self.assertAlmostEqual(reward["f2p_pass_rate"], 8 / 11)
+
+    def test_p2_lolbench_applies_fix_rewards(self):
+        p2 = (ROOT / "pipeline" / "stages" / "p2_deepswe.sh").read_text(encoding="utf-8")
+        self.assertIn("lolbench_fix_rewards.py", p2)
+        lolbench_block = p2.split("lolbench)", 1)[1].split("swebenchpro)", 1)[0]
+        self.assertIn("lolbench_fix_rewards.py", lolbench_block)
+        self.assertIn("$LOLBENCH_DIR/harbor_tasks", lolbench_block)
+
+    def test_trial_files_includes_agent_report(self):
+        from render_report import _TRIAL_FILES
+
+        self.assertIn("agent_report.json", _TRIAL_FILES)
+        self.assertIn("reward.json", _TRIAL_FILES)
+
     def test_verifier_rates_nested_mean_and_list_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             nested = Path(tmp) / "nested"
