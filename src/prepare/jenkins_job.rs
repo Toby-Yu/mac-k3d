@@ -606,7 +606,7 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
   agent {{ label params.AGENT_LABEL }}
 
   options {{
-    timeout(time: 120, unit: 'HOURS')
+    timeout(time: 96, unit: 'HOURS')
   }}
 
   parameters {{

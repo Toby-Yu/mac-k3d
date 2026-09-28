@@ -34,3 +34,6 @@ iCode/
 **/.env
 **/.env.local
 !.env.example
+
+# Personal copy-paste deploy runbook (local only)
+LOCAL_DEPLOY_CHEATSHEET.md

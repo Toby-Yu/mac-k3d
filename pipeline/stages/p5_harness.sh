@@ -386,7 +386,12 @@ reap_finished() {
         echo "WARNING: harbor run exited $rc for $spec. reward.json present; treating as a score."
       fi
     fi
-    if grep -Eiq 'out of memory|Killed|[[:space:]]137([^0-9]|$)' "$log"; then
+    # OOM detect: require exit/status context for 137 so Harbor f2p totals like
+    # "137 passed" / table cell "137" are not false positives. Only skip remaining
+    # attempts when this unit has no reward.json (real unscored OOM).
+    if [ -z "$reward" ] && grep -Eiq \
+      'out of memory|Cannot allocate memory|oom-kill|oom_kill|exit(ed)?[[:space:]]+(with[[:space:]]+)?(status|code)[[:space:]]*137([^0-9]|$)|ExitCode[=:[:space:]]*137([^0-9]|$)' \
+      "$log"; then
       echo "P5 harbor: skip question=$tid (out of memory); continuing"
       if ! grep -qx "$tid" "$HARNESS_DIR/skipped_questions.txt" 2>/dev/null; then
         echo "$tid" >>"$HARNESS_DIR/skipped_questions.txt"

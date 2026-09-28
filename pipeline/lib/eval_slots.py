@@ -59,27 +59,10 @@ def max_icode_mem_gb(stats_text: str) -> float | None:
     best: float | None = None
     for line in stats_text.splitlines():
         if not _is_eval_container(line):
-            # #region agent log
-            if "__" in line:
-                try:
-                    import json as _json, time as _time
-                    with open("/home/Toby/Documents/Toby/mac-k3d/.cursor/debug-be7ee3.log", "a", encoding="utf-8") as _fh:
-                        _fh.write(_json.dumps({"sessionId": "be7ee3", "runId": "post-fix", "hypothesisId": "C", "location": "eval_slots.py:max_icode_mem_gb", "message": "skipped non-main container", "data": {"has_main": "__env-main-" in line}, "timestamp": int(_time.time() * 1000)}) + "\n")
-                except OSError:
-                    pass
-            # #endregion
             continue
         gb = parse_mem_gb(line)
         if gb is None:
             continue
-        # #region agent log
-        try:
-            import json as _json, time as _time
-            with open("/home/Toby/Documents/Toby/mac-k3d/.cursor/debug-be7ee3.log", "a", encoding="utf-8") as _fh:
-                _fh.write(_json.dumps({"sessionId": "be7ee3", "hypothesisId": "B", "location": "eval_slots.py:max_icode_mem_gb", "message": "counted eval container", "data": {"gb": gb, "has_icode": "_icode_" in line, "has_trial": "__" in line}, "timestamp": int(_time.time() * 1000)}) + "\n")
-        except OSError:
-            pass
-        # #endregion
         best = gb if best is None else max(best, gb)
     return best
 

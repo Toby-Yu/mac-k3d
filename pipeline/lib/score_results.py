@@ -637,14 +637,6 @@ def trial_dirs(job_dir: Path | None) -> list[Path]:
         except OSError:
             nested = False
         if nested:
-            # #region agent log
-            try:
-                import json as _json, time as _time
-                with open("/home/Toby/Documents/Toby/mac-k3d/.cursor/debug-be7ee3.log", "a", encoding="utf-8") as _fh:
-                    _fh.write(_json.dumps({"sessionId": "be7ee3", "hypothesisId": "A", "location": "score_results.py:trial_dirs", "message": "skip attempt folder that wraps a trial", "data": {"parent": path.parent.name}, "timestamp": int(_time.time() * 1000)}) + "\n")
-            except OSError:
-                pass
-            # #endregion
             continue
         try:
             stamp = path.stat().st_mtime

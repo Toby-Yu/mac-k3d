@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -1504,6 +1505,9 @@ class EvalReportTests(unittest.TestCase):
         self.assertIn("out of memory", p5)
         self.assertIn("skip question=", p5)
         self.assertIn('echo "OK unit=$spec"', p5)
+        self.assertNotIn("[[:space:]]137", p5)
+        self.assertIn('ExitCode[=:[:space:]]*137', p5)
+        self.assertIn('[ -z "$reward" ]', p5)
 
     def test_pass_at_ladder_and_demo_report(self):
         from eval_metrics import pass_at_ladder, summarize_arm
@@ -1706,6 +1710,19 @@ class EvalReportTests(unittest.TestCase):
         self.assertNotIn("--override-memory-mb", p5)
         self.assertIn("out of memory", p5)
         self.assertIn("skipped_questions.txt", p5)
+        self.assertNotIn("[[:space:]]137", p5)
+        self.assertIn('[ -z "$reward" ]', p5)
+        oom_re = re.compile(
+            r"out of memory|Cannot allocate memory|oom-kill|oom_kill|"
+            r"exit(?:ed)?\s+(?:with\s+)?(?:status|code)\s*137(?:[^0-9]|$)|"
+            r"ExitCode[=:\s]*137(?:[^0-9]|$)",
+            re.I,
+        )
+        self.assertIsNone(oom_re.search("│ 137    │     1 │"))
+        self.assertIsNone(oom_re.search("============================= 137 passed in 0.93s =============================="))
+        self.assertIsNotNone(oom_re.search("harbor run exited with code 137"))
+        self.assertIsNotNone(oom_re.search("ExitCode: 137"))
+        self.assertIsNotNone(oom_re.search("process out of memory"))
 
     def test_compact_rollouts_only_when_every_attempt_is_perfect(self):
         from eval_metrics import summarize_arm
@@ -2045,6 +2062,11 @@ class EvalReportTests(unittest.TestCase):
             (attempt / "verifier" / "reward.json").write_text('{"reward": 0}\n', encoding="utf-8")
             (attempt / ".harbor-env").write_text("DEEPSEEK_API_KEY=secret\n", encoding="utf-8")
             (attempt / "agent.patch").write_text("patch\n", encoding="utf-8")
+            (work / "harness" / "container_mem.jsonl").write_text(
+                json.dumps({"question": "alpha", "peak_gb": 1.5, "slots": 1, "memory_mb": 0}) + "\n",
+                encoding="utf-8",
+            )
+            (work / "harness" / "skipped_questions.txt").write_text("beta\n", encoding="utf-8")
             backup = root / "backup"
             env = os.environ.copy()
             env.pop("BUILD_NUMBER", None)
@@ -2080,6 +2102,8 @@ class EvalReportTests(unittest.TestCase):
                 self.assertIn(f"{folder}/artifact.json", names)
                 self.assertIn(f"{folder}/summary.md", names)
                 self.assertIn(f"{folder}/report.html", names)
+                self.assertIn(f"{folder}/container_mem.jsonl", names)
+                self.assertIn(f"{folder}/skipped_questions.txt", names)
                 self.assertIn(f"{folder}/icode/alpha/attempt-01/result.json", names)
                 self.assertIn(f"{folder}/icode/alpha/attempt-02/result.json", names)
                 self.assertIn(f"{folder}/icode/alpha/attempt-01/agent.patch", names)
@@ -2087,10 +2111,14 @@ class EvalReportTests(unittest.TestCase):
                 self.assertFalse(any("eval-icode-deepseek-" in name for name in names))
                 written = json.loads(tar.extractfile(f"{folder}/artifact.json").read().decode("utf-8"))
                 html_report = tar.extractfile(f"{folder}/report.html").read().decode("utf-8")
+                skip_txt = tar.extractfile(f"{folder}/skipped_questions.txt").read().decode("utf-8")
             self.assertTrue(written["run_dir"].endswith(f"{folder}.tar.gz"))
             self.assertNotIn("llm", written)
             self.assertEqual(written["model"], "openai/deepseek-flash")
             self.assertEqual(written["api_base"], "https://api.deepseek.com/v1")
+            self.assertAlmostEqual(written["container_mem_max_gb"], 1.5)
+            self.assertEqual(written["skipped_questions"], ["beta"])
+            self.assertEqual(skip_txt.strip(), "beta")
             self.assertTrue(html_report.startswith("<!DOCTYPE html>"))
             self.assertIn("icode + deepseek-flash", html_report)
             self.assertNotIn("deepseek-v4.1-flash", html_report)
@@ -2100,6 +2128,8 @@ class EvalReportTests(unittest.TestCase):
             self.assertTrue((workspace_run / "artifact.json").is_file())
             self.assertTrue((workspace_run / "summary.md").is_file())
             self.assertTrue((workspace_run / "report.html").is_file())
+            self.assertTrue((workspace_run / "container_mem.jsonl").is_file())
+            self.assertTrue((workspace_run / "skipped_questions.txt").is_file())
             self.assertFalse((workspace_run / "report.pdf").exists())
             last = (work / "last_output.txt").read_text(encoding="utf-8").strip()
             self.assertTrue(last.endswith(f"{folder}/**"), last)

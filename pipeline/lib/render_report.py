@@ -605,7 +605,13 @@ def backup_run(
     del baseline_dir
     dest = backup_root / suite / run_folder
     dest.mkdir(parents=True, exist_ok=True)
-    for name in ("artifact.json", "summary.md", "report.html"):
+    for name in (
+        "artifact.json",
+        "summary.md",
+        "report.html",
+        "container_mem.jsonl",
+        "skipped_questions.txt",
+    ):
         src = report_dir / name
         if src.is_file():
             shutil.copy2(src, dest / name)
