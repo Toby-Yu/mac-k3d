@@ -78,7 +78,7 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 | `--icode-git-ref REF` | `git` mode: branch name, tag, commit SHA, or pull-request number when kind is `pr`. Default `main` |
 | `--icode-git-ref-kind KIND` | `branch` (default), `tag`, `commit` (PR SHA), or `pr` (pull-request number). Leftover `auto` still maps: 7–40 hex → commit, else branch |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
-| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-v4-pro` (default) or `deepseek-flash`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=OpenAI` and `ICODE_API_BASE=https://api.deepseek.com/v1`; the HTTP model id stays this catalog id |
+| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-v4-pro` (default) or `deepseek-flash`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`; the HTTP model id stays this catalog id |
 | `--yes` | Skip prompts: Jenkins `deepswe_one_task` or `lolbench_one_task` unless `--local`. Git `--yes` queues the job. Release `--yes` prints UI upload instructions (cannot attach `ICODE_RELEASE_FILE`). Also skips the git PAT prompt |
 
 Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import html
-from statistics import stdev
+
+from eval_metrics import mean_ci
 
 CANDIDATE = "icode"
 DASH = "—"
@@ -78,16 +79,25 @@ def _pass_k_scored(arm: dict, k: int) -> float | None:
 def _macro_from_tasks(tasks: list[dict]) -> tuple[float | None, float | None]:
     vals = []
     for task in tasks:
+        frac = task.get("pass_frac")
+        if isinstance(frac, (int, float)) and not isinstance(frac, bool):
+            vals.append(float(frac))
+            continue
         c = task.get("c")
         n = task.get("n")
         if isinstance(c, int) and not isinstance(c, bool) and isinstance(n, int) and n > 0:
             vals.append(c / n)
-    if not vals:
-        return None, None
-    mean = sum(vals) / len(vals)
-    if len(vals) < 2:
-        return mean, 0.0
-    return mean, stdev(vals)
+    return mean_ci(vals)
+
+
+def _scored_ci_from_tasks(tasks: list[dict]) -> float | None:
+    vals = [
+        float(task["pass_frac_scored"])
+        for task in tasks
+        if task.get("n_scored") and isinstance(task.get("pass_frac_scored"), (int, float)) and not isinstance(task.get("pass_frac_scored"), bool)
+    ]
+    _mean, half = mean_ci(vals)
+    return half
 
 
 def _fmt_pct(rate: float | None) -> str:
@@ -350,14 +360,14 @@ def report_html(doc: dict) -> str:
     macro = _as_rate(arm.get("macro_pass@1"))
     if macro is None:
         macro = _as_rate(arm.get("macro_pass_at_1"))
-    sd = _as_rate(arm.get("macro_pass@1_sd"))
-    if sd is None:
-        sd = _as_rate(arm.get("macro_pass_at_1_sd"))
-    task_macro, task_sd = _macro_from_tasks(tasks)
+    ci = _as_rate(arm.get("macro_pass@1_ci"))
+    if ci is None:
+        ci = _as_rate(arm.get("macro_pass_at_1_ci"))
+    task_macro, task_ci = _macro_from_tasks(tasks)
     if macro is None:
         macro = task_macro
-    if sd is None:
-        sd = task_sd
+    if ci is None:
+        ci = task_ci
 
     first = _as_rate(arm.get("first_pass_at_1"))
     if first is None:
@@ -407,6 +417,18 @@ def report_html(doc: dict) -> str:
         clauses.append(f"Model {model}.")
     if api_base is not None:
         clauses.append(f"API {api_base}.")
+    protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
+    if protocol:
+        icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
+        params = protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {}
+        thinking = params.get("thinking") if isinstance(params.get("thinking"), dict) else {}
+        version = icode.get("version") or "-"
+        clauses.append(
+            f"iCode {icode.get('mode') or '-'} {version}. "
+            f"Provider {params.get('provider') or '-'}. "
+            f"reasoning_effort {params.get('reasoning_effort') or '-'}. "
+            f"thinking.type {thinking.get('type') or '-'}."
+        )
     if run_id is not None:
         clauses.append(f"Run {run_id}.")
 
@@ -419,17 +441,19 @@ def report_html(doc: dict) -> str:
         chips.append(f"run {run_id}")
 
     macro_scored = _as_rate(arm.get("macro_pass@1_scored"))
-    sd_scored = _as_rate(arm.get("macro_pass@1_scored_sd"))
+    ci_scored = _as_rate(arm.get("macro_pass@1_scored_ci"))
+    if ci_scored is None:
+        ci_scored = _scored_ci_from_tasks(tasks)
     headline_bits = []
     if macro is not None:
         bit = f"macro Pass@1 (padded, missing=fail) {_fmt_pct(macro)}"
-        if sd is not None:
-            bit += f" ±{sd * 100:.1f}% (SD)"
+        if ci is not None:
+            bit += f" ±{ci * 100:.1f}% (CI)"
         headline_bits.append(bit)
     if macro_scored is not None:
         bit = f"macro Pass@1 (scored-only, missing omitted) {_fmt_pct(macro_scored)}"
-        if sd_scored is not None:
-            bit += f" ±{sd_scored * 100:.1f}% (SD)"
+        if ci_scored is not None:
+            bit += f" ±{ci_scored * 100:.1f}% (CI)"
         headline_bits.append(bit)
     if any_pass is not None:
         headline_bits.append(f"Pass@{n_rollouts} / any-pass (padded, missing=fail) {_fmt_pct(any_pass)} ({hits}/{n_tasks})")
@@ -441,9 +465,9 @@ def report_html(doc: dict) -> str:
     if headline_bits:
         headline += ": " + ". ".join(headline_bits) + "."
 
-    se_caption = "Macro Pass@1 (padded, missing=fail)" if sd is None else f"Macro Pass@1 (padded, missing=fail) ±{sd * 100:.1f}% (SD)"
+    ci_caption = "Macro Pass@1 (padded, missing=fail)" if ci is None else f"Macro Pass@1 (padded, missing=fail) ±{ci * 100:.1f}% (CI)"
     kpis = [
-        (_fmt_pct(macro), se_caption),
+        (_fmt_pct(macro), ci_caption),
         (_fmt_pct(any_pass), f"Pass@{n_rollouts} / any-pass (padded, missing=fail) ({hits}/{n_tasks})"),
         (_kpi_minutes(median_s), "Median best-attempt"),
         (_fmt_token(mean_tokens) if mean_tokens is not None else DASH, "Mean tokens / task"),
@@ -465,7 +489,7 @@ def report_html(doc: dict) -> str:
             return DASH
         cell = _fmt_pct(rate)
         if spread is not None:
-            cell = f"{cell} ±{spread * 100:.1f}% (SD)"
+            cell = f"{cell} ±{spread * 100:.1f}% (CI)"
         return cell
 
     metric_headers = [
@@ -474,7 +498,7 @@ def report_html(doc: dict) -> str:
         "Pass@1..k (scored-only, missing omitted)",
     ]
     metric_rows = [
-        ["Macro Pass@1 (±SD)", _macro_cell(macro, sd), _macro_cell(macro_scored, sd_scored)],
+        ["Macro Pass@1 (±CI)", _macro_cell(macro, ci), _macro_cell(macro_scored, ci_scored)],
     ]
     for k in range(1, n_rollouts + 1):
         metric_rows.append([f"Pass@{k}", _fmt_pct(_pass_k(arm, k)), _fmt_pct(_pass_k_scored(arm, k))])

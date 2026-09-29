@@ -35,7 +35,13 @@ if [ -z "${ICODE_API_BASE:-}" ]; then
   export ICODE_API_BASE="https://api.deepseek.com/v1"
 fi
 if [ -z "${ICODE_PROVIDER:-}" ]; then
-  export ICODE_PROVIDER="OpenAI"
+  case "${ICODE_API_BASE}" in
+    *deepseek.com*) export ICODE_PROVIDER="DeepSeek" ;;
+    *) export ICODE_PROVIDER="OpenAI" ;;
+  esac
+fi
+if [ -z "${ICODE_REASONING_EFFORT:-}" ]; then
+  export ICODE_REASONING_EFFORT="high"
 fi
 if [ -z "${ICODE_MODEL:-}" ]; then
   export ICODE_MODEL="$DEEPSEEK_MODEL"

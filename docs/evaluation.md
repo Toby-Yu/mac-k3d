@@ -2,7 +2,15 @@
 
 One Jenkins build scores the iCode harness. Harbor runs iCode for `N_ROLLOUTS` attempts on each question. A later comparison harness is not part of this run.
 
-Release and git both mount the supplied iCode at `/opt/icode-host` and run the same `icode run` command. That process calls the model through the OpenAI-compatible client: `ICODE_PROVIDER=OpenAI`, `ICODE_API_BASE=https://api.deepseek.com/v1`, and `ICODE_MODEL` set to the catalog id (`deepseek-flash` or `deepseek-v4-pro`). The artifact `model` field is `openai/<catalog id>`. The HTTP model id is still the catalog id. P0 still checks `GET https://api.deepseek.com/models` for that id.
+Release and git both mount the supplied iCode at `/opt/icode-host` and run the same single-shot `icode run` (one question × one rollout, no improve-loop). DeepSeek official API uses `ICODE_PROVIDER=DeepSeek` and `ICODE_REASONING_EFFORT=high` (wire fields `thinking.type=enabled` and `reasoning_effort=high`) unless those env vars are already set. `ICODE_API_BASE` is `https://api.deepseek.com/v1`. `ICODE_MODEL` is the catalog id (`deepseek-flash` or `deepseek-v4-pro`). The artifact `model` field is still `openai/<catalog id>` (catalog label, not the provider string). P0 still checks `GET https://api.deepseek.com/models` for that id.
+
+After `icode run`, the Harbor agent force-commits a dirty git tree so DeepSWE can grade `git diff <base> HEAD` and LoLBench submit sees the same tree. That commit does not start another model call.
+
+Default packing stays `CPU_LOCK_QTY=4` → concurrency **4** and `cpus_each=1`, with `N_ROLLOUTS=4`. DeepSWE `task.toml` asks for 2 CPUs and LoLBench asks for 4; those requests are not applied, because raising `cpus_each` on a 4-core lock would drop concurrency below 4. See [optimization.md](optimization.md).
+
+Harbor’s agent budget is the task’s `agent.timeout_sec` (often 10800s on DeepSWE) with timeout multiplier 1. A rollout that ends near 5100s is iCode stopping itself, not Harbor cutting the trial. There is no Docker memory cap. An out-of-memory kill skips the rest of that question and the run continues.
+
+P8 stores `eval_protocol` on `artifact.json` (iCode mode/version/source, model params, concurrency, `cpus_each`, and the timeout note) and repeats it in `summary.md` and `report.html`.
 
 DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-empty `TASKS` list wins; otherwise one `TASK`; otherwise `N_TASKS` is the first N sorted ids. Full suite sizes are DeepSWE 113, LoLBench 20, and SWE-bench Pro 731. `N_ROLLOUTS` is how many attempts each question gets. Default rollout count is 1.
 
@@ -64,6 +72,6 @@ Pass@k is stored twice. `pass@k` / `macro_pass@1` / `c` / `n` / `pass_frac` are 
 | `tokens.total` | `in` plus `out`. |
 | `rollouts` | One object per attempt. Omitted when every requested attempt exists and every one has F2P 1 and P2P 1. |
 
-`n_tasks`, `n_rollouts`, `concurrency`, and `cpus_each` are stored once at the top of the JSON. The spread next to macro Pass@1 is `macro_pass@1_sd`, the sample standard deviation of the per-question `c/n` values. `macro_pass@1_scored_sd` is the same for `pass_frac_scored`. One question has SD 0.
+`n_tasks`, `n_rollouts`, `concurrency`, and `cpus_each` are stored once at the top of the JSON. `eval_protocol` records the iCode version under test, `provider`, `reasoning_effort`, `thinking.type`, and the CPU lock actually used. The band next to macro Pass@1 is `macro_pass@1_ci`, a 95% confidence interval half-width of the mean of the per-question `c/n` values: `1.96 * sample_sd / sqrt(M)`. `macro_pass@1_scored_ci` is the same for `pass_frac_scored`. Fewer than two questions has half-width 0.
 
 CPU slot packing, the open slots, and the disk floor are in [optimization.md](optimization.md).

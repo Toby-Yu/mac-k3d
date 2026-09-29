@@ -104,6 +104,14 @@ fi
 
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
 export ICODE_MODEL="${ICODE_MODEL:-$DEEPSEEK_MODEL}"
+export ICODE_API_BASE="${ICODE_API_BASE:-https://api.deepseek.com/v1}"
+if [ -z "${ICODE_PROVIDER:-}" ]; then
+  case "$ICODE_API_BASE" in
+    *deepseek.com*) export ICODE_PROVIDER=DeepSeek ;;
+    *) export ICODE_PROVIDER=OpenAI ;;
+  esac
+fi
+export ICODE_REASONING_EFFORT="${ICODE_REASONING_EFFORT:-high}"
 mkdir -p "$HARNESS_DIR"
 rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
 rm -f "$HARNESS_DIR/container_mem_peak_gb" \
@@ -115,6 +123,20 @@ echo "P5 harbor: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run
 ensure_selected_tasks
 eval_parallel_degree || die "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1"
 echo "P5 harbor: n_rollouts=$N_ROLLOUTS slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
+python3 - "$WORKDIR/eval_protocol_inputs.json" <<PY
+import json, os, sys
+doc = {
+    "model": os.environ.get("ICODE_MODEL") or os.environ.get("DEEPSEEK_MODEL") or "",
+    "api_base": os.environ.get("ICODE_API_BASE") or "https://api.deepseek.com/v1",
+    "provider": os.environ.get("ICODE_PROVIDER") or "DeepSeek",
+    "reasoning_effort": os.environ.get("ICODE_REASONING_EFFORT") or "high",
+    "cpu_lock_qty": int(os.environ.get("CPU_LOCK_QTY") or "0"),
+    "concurrency": int(os.environ.get("EVAL_SLOTS") or os.environ.get("EVAL_PARALLEL") or "0"),
+    "cpus_each": int(os.environ.get("EVAL_CPUS_EACH") or "0"),
+    "n_rollouts": int(os.environ.get("N_ROLLOUTS") or "0"),
+}
+open(sys.argv[1], "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
+PY
 python3 "$PIPELINE_LIB/eval_slots.py" report \
   --tasks-file "$WORKDIR/selected_tasks.txt" \
   --n-rollouts "$N_ROLLOUTS" \
@@ -134,8 +156,9 @@ umask 077
   printf 'DEEPSEEK_API_KEY=%s\n' "${DEEPSEEK_API_KEY}"
   printf 'DEEPSEEK_MODEL=%s\n' "${DEEPSEEK_MODEL}"
   printf 'ICODE_MODEL=%s\n' "${ICODE_MODEL}"
-  printf 'ICODE_API_BASE=%s\n' "https://api.deepseek.com/v1"
-  printf 'ICODE_PROVIDER=%s\n' "OpenAI"
+  printf 'ICODE_API_BASE=%s\n' "${ICODE_API_BASE}"
+  printf 'ICODE_PROVIDER=%s\n' "${ICODE_PROVIDER}"
+  printf 'ICODE_REASONING_EFFORT=%s\n' "${ICODE_REASONING_EFFORT}"
   printf 'PYTHONDONTWRITEBYTECODE=%s\n' "1"
   printf 'MAC_K3D_BENCHMARK=%s\n' "${BENCHMARK:-deepswe}"
   if [ -n "${GITCODE_TOKEN:-}" ]; then
@@ -286,8 +309,9 @@ start_unit() {
   fi
   cmd+=(--mounts "$MOUNTS_JSON")
   cmd+=(--ae "ICODE_MODEL=${ICODE_MODEL}")
-  cmd+=(--ae "ICODE_API_BASE=https://api.deepseek.com/v1")
-  cmd+=(--ae "ICODE_PROVIDER=OpenAI")
+  cmd+=(--ae "ICODE_API_BASE=${ICODE_API_BASE}")
+  cmd+=(--ae "ICODE_PROVIDER=${ICODE_PROVIDER}")
+  cmd+=(--ae "ICODE_REASONING_EFFORT=${ICODE_REASONING_EFFORT}")
   cmd+=(--ae "PYTHONDONTWRITEBYTECODE=1")
   cmd+=(--ae "DEEPSEEK_MODEL=${DEEPSEEK_MODEL}")
   cmd+=(--ae "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")

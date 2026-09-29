@@ -74,6 +74,7 @@ python3 "$PIPELINE_LIB/render_report.py" \
   --n-rollouts "${N_ROLLOUTS:-1}" \
   --concurrency "${EVAL_PARALLEL:-1}" \
   --cpus-each "${EVAL_CPUS_EACH:-1}" \
+  --workdir "$WORKDIR" \
   --utc "$UTC" \
   --run-folder "$FOLDER" \
   --backup-root "$BACKUP_ROOT" \

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from statistics import stdev
 
@@ -69,6 +70,17 @@ def mean_sd(vals: list[float]) -> tuple[float | None, float | None]:
     if len(vals) < 2:
         return mean, 0.0
     return mean, stdev(vals)
+
+
+def mean_ci(vals: list[float]) -> tuple[float | None, float | None]:
+    """Mean and 95% CI half-width of that mean: 1.96 * sample_sd / sqrt(M).
+
+    Fewer than two values has half-width 0.
+    """
+    mean, sd = mean_sd(vals)
+    if mean is None or sd is None or len(vals) < 2:
+        return mean, 0.0 if mean is not None else None
+    return mean, 1.96 * sd / math.sqrt(len(vals))
 
 
 def _num(value) -> float | None:
@@ -227,11 +239,11 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
     ladder = pass_at_ladder(flags, n_rollouts)
     ladder_scored = pass_at_ladder_scored(scored_flags, n_rollouts)
     fracs = [row["pass_frac"] for row in rows]
-    macro_p, macro_sd = mean_sd(fracs)
+    macro_p, macro_ci = mean_ci(fracs)
     scored_fracs = [row["pass_frac_scored"] for row in rows if row.get("n_scored")]
-    macro_p_s, macro_sd_s = mean_sd(scored_fracs)
+    macro_p_s, macro_ci_s = mean_ci(scored_fracs)
     if macro_p_s is None:
-        macro_p_s, macro_sd_s = 0.0, 0.0
+        macro_p_s, macro_ci_s = 0.0, 0.0
     any_hits = sum(1 for row in rows if row["best"])
     f2p_vals = [_num(row.get("f2p")) for row in rows]
     p2p_vals = [_num(row.get("p2p")) for row in rows]
@@ -283,9 +295,9 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
         **ladder,
         **ladder_scored,
         "macro_pass@1": macro_p,
-        "macro_pass@1_sd": macro_sd,
+        "macro_pass@1_ci": macro_ci,
         "macro_pass@1_scored": macro_p_s,
-        "macro_pass@1_scored_sd": macro_sd_s,
+        "macro_pass@1_scored_ci": macro_ci_s,
         "any_pass": (any_hits / len(rows)) if rows else 0.0,
         "best_attempt_hits": any_hits,
         "infra_excluded": infra_excluded,

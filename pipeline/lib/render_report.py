@@ -6,12 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import tarfile
 from datetime import datetime
 from pathlib import Path
 
-from eval_metrics import summarize_arm
+from eval_metrics import mean_ci, summarize_arm
 from score_results import load_json, parse_reward_value, rates_for_trial
 from icode_usage import find_icode_usage
 
@@ -208,6 +209,102 @@ def eval_model_label(model: str) -> str:
     return f"openai/{raw}"
 
 
+HARBOR_TIMEOUT_NOTE = (
+    "Harbor agent budget is task.toml agent.timeout_sec times timeout multiplier 1 "
+    "(DeepSWE often 10800s). A rollout that stops near 5100s is iCode's own duration, "
+    "not a Harbor AgentTimeoutError."
+)
+
+
+def _thinking_type(effort: str) -> str:
+    return "disabled" if str(effort or "").strip().lower() == "none" else "enabled"
+
+
+def _icode_version_from_path(bin_path: str) -> str:
+    match = re.search(r"full-v([0-9][^/\\]*)", bin_path or "")
+    if not match:
+        return Path(bin_path).name if bin_path else ""
+    version = match.group(1)
+    for suffix in (".tar.gz", ".tgz", ".tar"):
+        if version.endswith(suffix):
+            version = version[: -len(suffix)]
+    return f"v{version}"
+
+
+def build_eval_protocol(
+    *,
+    workdir: Path | None,
+    model: str,
+    api_base: str,
+    n_rollouts: int,
+    concurrency: int,
+    cpus_each: int,
+) -> dict:
+    """Record the iCode drop and model knobs used for this run."""
+    inputs: dict = {}
+    bin_path = ""
+    git_doc = None
+    if workdir is not None:
+        inputs_path = workdir / "eval_protocol_inputs.json"
+        loaded = load_json(inputs_path)
+        if isinstance(loaded, dict):
+            inputs = loaded
+        bin_file = workdir / "icode_bin_path.txt"
+        if bin_file.is_file():
+            bin_path = bin_file.read_text(encoding="utf-8").strip()
+        git_raw = load_json(workdir / "icode_git.json")
+        if isinstance(git_raw, dict) and str(git_raw.get("sha") or "").strip():
+            git_doc = git_raw
+    effort = str(
+        inputs.get("reasoning_effort")
+        or os.environ.get("ICODE_REASONING_EFFORT")
+        or "high"
+    )
+    provider = str(inputs.get("provider") or os.environ.get("ICODE_PROVIDER") or "DeepSeek")
+    if git_doc:
+        icode = {
+            "mode": "git",
+            "version": str(git_doc.get("sha") or ""),
+            "bin_path": bin_path,
+            "source": f"{git_doc.get('url') or ''}@{git_doc.get('ref') or ''}",
+            "git": {
+                "url": str(git_doc.get("url") or ""),
+                "kind": str(git_doc.get("kind") or ""),
+                "ref": str(git_doc.get("ref") or ""),
+                "sha": str(git_doc.get("sha") or ""),
+                "subject": str(git_doc.get("subject") or ""),
+            },
+        }
+    else:
+        icode = {
+            "mode": os.environ.get("ICODE_MODE") or "release",
+            "version": _icode_version_from_path(bin_path),
+            "bin_path": bin_path,
+            "source": bin_path,
+        }
+    cpu_lock = inputs.get("cpu_lock_qty")
+    if not isinstance(cpu_lock, int) or isinstance(cpu_lock, bool):
+        raw_lock = os.environ.get("CPU_LOCK_QTY") or ""
+        cpu_lock = int(raw_lock) if raw_lock.isdigit() else None
+    return {
+        "icode": icode,
+        "model_params": {
+            "model": str(inputs.get("model") or model),
+            "api_base": str(inputs.get("api_base") or api_base),
+            "provider": provider,
+            "reasoning_effort": effort,
+            "thinking": {"type": _thinking_type(effort)},
+            "n_rollouts": n_rollouts,
+        },
+        "resources": {
+            "cpu_lock_qty": cpu_lock,
+            "concurrency": int(inputs.get("concurrency") or concurrency),
+            "cpus_each": int(inputs.get("cpus_each") or cpus_each),
+            "harbor_agent_timeout_note": HARBOR_TIMEOUT_NOTE,
+        },
+    }
+
+
 def build_artifact(
     *,
     suite: str,
@@ -220,6 +317,7 @@ def build_artifact(
     concurrency: int,
     cpus_each: int,
     run_id: str,
+    eval_protocol: dict | None = None,
 ) -> dict:
     del baseline_dir
     icode_rows = [(tid, harness_task_attempts(harness_dir, tid, n_rollouts)) for tid in task_ids]
@@ -238,7 +336,7 @@ def build_artifact(
                         timing = {}
                         arm["timing"] = timing
                     timing["eta_note"] = note
-    return {
+    doc = {
         "suite": suite,
         "model": model,
         "api_base": api_base,
@@ -250,6 +348,12 @@ def build_artifact(
         "cpus_each": cpus_each,
         "icode": arm,
     }
+    if eval_protocol:
+        doc["eval_protocol"] = eval_protocol
+        git = (eval_protocol.get("icode") or {}).get("git")
+        if isinstance(git, dict) and git.get("sha"):
+            doc["icode_git"] = git
+    return doc
 
 
 def _pct(value) -> str:
@@ -361,6 +465,14 @@ def _md_table(headers: list[str], rows: list[list[str]]) -> list[str]:
     return [fmt(headers), sep] + [fmt(row) for row in rows]
 
 
+def _ci_half(stored, fracs: list) -> float | None:
+    if isinstance(stored, (int, float)) and not isinstance(stored, bool):
+        return float(stored)
+    vals = [float(value) for value in fracs if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    _mean, half = mean_ci(vals)
+    return half
+
+
 def summary_markdown(doc: dict) -> str:
     suite = doc.get("suite")
     title = _suite_title(suite)
@@ -373,6 +485,30 @@ def summary_markdown(doc: dict) -> str:
     lines.append(f"- Run dir: `{doc.get('run_dir') or '-'}`")
     lines.append(f"- Eval model: `{doc.get('model')}`")
     lines.append(f"- Eval API base: `{doc.get('api_base')}`")
+    protocol = doc.get("eval_protocol")
+    if isinstance(protocol, dict):
+        icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
+        params = protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {}
+        resources = protocol.get("resources") if isinstance(protocol.get("resources"), dict) else {}
+        thinking = params.get("thinking") if isinstance(params.get("thinking"), dict) else {}
+        lines.append(f"- iCode mode: `{icode.get('mode') or '-'}`")
+        lines.append(f"- iCode version: `{icode.get('version') or '-'}`")
+        lines.append(f"- iCode source: `{icode.get('source') or '-'}`")
+        lines.append(
+            "- Model params: "
+            f"provider `{params.get('provider') or '-'}` · "
+            f"reasoning_effort `{params.get('reasoning_effort') or '-'}` · "
+            f"thinking.type `{thinking.get('type') or '-'}`"
+        )
+        lines.append(
+            "- Resources: "
+            f"cpu_lock_qty `{resources.get('cpu_lock_qty')}` · "
+            f"concurrency `{resources.get('concurrency')}` · "
+            f"cpus_each `{resources.get('cpus_each')}`"
+        )
+        note = resources.get("harbor_agent_timeout_note")
+        if isinstance(note, str) and note.strip():
+            lines.append(f"- Agent timeout: {note}")
     lines.append("")
     arm = doc.get("icode")
     if isinstance(arm, dict):
@@ -385,10 +521,13 @@ def summary_markdown(doc: dict) -> str:
         if isinstance(n_tasks, int) and not isinstance(n_tasks, bool):
             metrics_n = n_tasks
         lines.append(f"- Tasks with metrics: **{metrics_n}** (missing/excluded: {excluded})")
-        sd = arm.get("macro_pass@1_sd")
-        sd_txt = "" if not isinstance(sd, (int, float)) or isinstance(sd, bool) else f" ±{float(sd) * 100:.1f} pp (SD)"
-        sd_s = arm.get("macro_pass@1_scored_sd")
-        sd_s_txt = "" if not isinstance(sd_s, (int, float)) or isinstance(sd_s, bool) else f" ±{float(sd_s) * 100:.1f} pp (SD)"
+        ci = _ci_half(arm.get("macro_pass@1_ci"), [row.get("pass_frac") for row in tasks])
+        ci_txt = "" if ci is None else f" ±{ci * 100:.1f}% (CI)"
+        ci_s = _ci_half(
+            arm.get("macro_pass@1_scored_ci"),
+            [row.get("pass_frac_scored") for row in tasks if row.get("n_scored")],
+        )
+        ci_s_txt = "" if ci_s is None else f" ±{ci_s * 100:.1f}% (CI)"
         padded_bits = [f"Pass@{i} **{_pct(arm.get(f'pass@{i}'))}**" for i in range(1, k + 1)]
         scored_bits = [f"Pass@{i} **{_pct(arm.get(f'pass@{i}_scored'))}**" for i in range(1, k + 1)]
         lines.append(
@@ -398,10 +537,10 @@ def summary_markdown(doc: dict) -> str:
             f"- {title} Pass@1..k (scored-only, missing omitted): " + " · ".join(scored_bits)
         )
         lines.append(
-            f"- {title} macro Pass@1 (padded, mean of c/n): **{_pct(arm.get('macro_pass@1'))}**{sd_txt}"
+            f"- {title} macro Pass@1 (padded, mean of c/n): **{_pct(arm.get('macro_pass@1'))}**{ci_txt}"
         )
         lines.append(
-            f"- {title} macro Pass@1 (scored-only, mean of c_scored/n_scored): **{_pct(arm.get('macro_pass@1_scored'))}**{sd_s_txt}"
+            f"- {title} macro Pass@1 (scored-only, mean of c_scored/n_scored): **{_pct(arm.get('macro_pass@1_scored'))}**{ci_s_txt}"
         )
         hits = arm.get("best_attempt_hits")
         if not isinstance(hits, int) or isinstance(hits, bool):
@@ -708,6 +847,7 @@ def main() -> int:
     ap.add_argument("--n-rollouts", type=int, default=0)
     ap.add_argument("--concurrency", type=int, default=0)
     ap.add_argument("--cpus-each", type=int, default=0)
+    ap.add_argument("--workdir", default=os.environ.get("WORKDIR", ""))
     ap.add_argument("--utc", default="")
     ap.add_argument("--run-folder", default="")
     ap.add_argument("--backup-root", default="")
@@ -726,6 +866,15 @@ def main() -> int:
     if run_id not in ("local",) and not str(run_id).startswith(("jenkins-", "local-")):
         run_id = f"jenkins-{run_id}"
     mem_peak, skipped = memory_sidecar(Path(args.harness_dir))
+    workdir = Path(args.workdir) if args.workdir else None
+    protocol = build_eval_protocol(
+        workdir=workdir,
+        model=args.model,
+        api_base=args.api_base,
+        n_rollouts=n_rollouts,
+        concurrency=concurrency,
+        cpus_each=cpus_each,
+    )
     doc = build_artifact(
         suite=args.suite,
         model=eval_model_label(args.model),
@@ -737,6 +886,7 @@ def main() -> int:
         concurrency=concurrency,
         cpus_each=cpus_each,
         run_id=run_id,
+        eval_protocol=protocol,
     )
     utc = args.utc or datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     folder = args.run_folder or run_folder_name(utc, ids, os.environ.get("BUILD_NUMBER", ""))

@@ -60,7 +60,12 @@ class ICodeAgent(BaseInstalledAgent):
     ) -> None:
         env = dict(self.extra_env)
         env.setdefault("ICODE_API_BASE", DEEPSEEK_BASE_URL)
-        env.setdefault("ICODE_PROVIDER", "OpenAI")
+        base = str(env.get("ICODE_API_BASE") or "").lower()
+        env.setdefault(
+            "ICODE_PROVIDER",
+            "DeepSeek" if "deepseek.com" in base else "OpenAI",
+        )
+        env.setdefault("ICODE_REASONING_EFFORT", "high")
         env.setdefault("ICODE_MODEL", DEFAULT_MODEL)
 
         await self.exec_as_agent(
@@ -94,6 +99,18 @@ class ICodeAgent(BaseInstalledAgent):
             "run -t /tmp/icode_task.md "
             '-C "$repo" -a code --json 2>&1 | tee /logs/agent/icode.txt; '
             'printf "%s\\n" "${PIPESTATUS[0]}" > /logs/agent/icode-exit.txt; '
+            # DeepSWE grades git diff base HEAD. Commit dirty work before
+            # LoLBench submit so the scored tree matches what iCode wrote.
+            "if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then "
+            '  dirty_n=$(git status --porcelain 2>/dev/null | wc -l); '
+            '  if [ "${dirty_n:-0}" -gt 0 ]; then '
+            "    git add -A "
+            "      ':(exclude).agent_history' ':(exclude).agent_history/**' "
+            "      2>/dev/null || git add -A; "
+            "    git -c user.name=icode -c user.email=icode@local "
+            '      commit -q --no-verify -m "icode solution" || true; '
+            "  fi; "
+            "fi; "
             f"{submit}"
         )
         await self.exec_as_agent(environment, env=env, command=command)

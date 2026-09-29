@@ -93,7 +93,8 @@ class ICodeAgent(BaseInstalledAgent):
             "ICODE_BIN": self._get_env("ICODE_BIN") or "icode",
             "AGENT_OUTPUT_DIR": "/logs/agent",
             "ICODE_API_BASE": self._get_env("ICODE_API_BASE") or "https://api.deepseek.com/v1",
-            "ICODE_PROVIDER": self._get_env("ICODE_PROVIDER") or "OpenAI",
+            "ICODE_PROVIDER": self._get_env("ICODE_PROVIDER") or "DeepSeek",
+            "ICODE_REASONING_EFFORT": self._get_env("ICODE_REASONING_EFFORT") or "high",
             "ICODE_MODEL": self._get_env("ICODE_MODEL") or model,
         }
         await self.exec_as_agent(

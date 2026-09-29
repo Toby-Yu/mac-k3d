@@ -1116,8 +1116,11 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
         self.assertIn("selected_tasks", text)
         self.assertNotIn("pier run", text)
         self.assertNotIn("--agent icode", text)
-        self.assertIn('cmd+=(--ae "ICODE_API_BASE=https://api.deepseek.com/v1")', text)
-        self.assertIn('cmd+=(--ae "ICODE_PROVIDER=OpenAI")', text)
+        self.assertIn('cmd+=(--ae "ICODE_API_BASE=${ICODE_API_BASE}")', text)
+        self.assertIn('cmd+=(--ae "ICODE_PROVIDER=${ICODE_PROVIDER}")', text)
+        self.assertIn('cmd+=(--ae "ICODE_REASONING_EFFORT=${ICODE_REASONING_EFFORT}")', text)
+        self.assertIn("ICODE_PROVIDER=DeepSeek", text)
+        self.assertIn('ICODE_REASONING_EFFORT:-high', text)
         self.assertIn('printf \'ICODE_MODEL=%s\\n\' "${ICODE_MODEL}"', text)
         run_sh = (ROOT / "pipeline" / "lib" / "pier-agent-icode" / "run.sh").read_text(
             encoding="utf-8"
@@ -1130,7 +1133,8 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
             encoding="utf-8"
         )
         self.assertIn("https://api.deepseek.com/v1", adapter)
-        self.assertIn("OpenAI", adapter)
+        self.assertIn("DeepSeek", adapter)
+        self.assertIn("ICODE_REASONING_EFFORT", adapter)
 
     def test_icode_nonzero_exit_does_not_fail_harbor_shell(self):
         agent = (ROOT / "pipeline" / "lib" / "icode_harbor_agent.py").read_text(encoding="utf-8")
@@ -1169,12 +1173,16 @@ exit 0
         agent = (ROOT / "pipeline" / "lib" / "icode_harbor_agent.py").read_text(encoding="utf-8")
         self.assertIn("set +o pipefail", agent)
         self.assertIn("icode-exit.txt", agent)
-        self.assertIn('ICODE_PROVIDER", "OpenAI"', agent)
+        self.assertIn('"DeepSeek" if "deepseek.com" in base else "OpenAI"', agent)
+        self.assertIn("ICODE_REASONING_EFFORT", agent)
+        self.assertIn('commit -q --no-verify -m "icode solution"', agent)
+        self.assertLess(agent.find('commit -q --no-verify -m "icode solution"'), agent.find('f"{submit}"'))
         self.assertIn("https://api.deepseek.com/v1", agent)
         stage = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertGreaterEqual(stage.count("icode_harbor_agent:ICodeAgent"), 2)
-        self.assertIn('cmd+=(--ae "ICODE_PROVIDER=OpenAI")', stage)
-        self.assertIn('cmd+=(--ae "ICODE_API_BASE=https://api.deepseek.com/v1")', stage)
+        self.assertIn('cmd+=(--ae "ICODE_PROVIDER=${ICODE_PROVIDER}")', stage)
+        self.assertIn('cmd+=(--ae "ICODE_API_BASE=${ICODE_API_BASE}")', stage)
+        self.assertIn('cmd+=(--ae "ICODE_REASONING_EFFORT=${ICODE_REASONING_EFFORT}")', stage)
         self.assertIn('BENCHMARK:-deepswe}" = "lolbench"', stage)
         self.assertLess(stage.find("= \"lolbench\""), stage.find("cmd=(harbor run)"))
 
@@ -1655,6 +1663,42 @@ class EvalReportTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "4 1")
         from eval_slots import eval_slots, parallel_report_line
+        from render_report import build_eval_protocol
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "icode_bin_path.txt").write_text(
+                "/opt/drops/icode-linux-x86_64-full-v0.1.44\n",
+                encoding="utf-8",
+            )
+            (work / "eval_protocol_inputs.json").write_text(
+                json.dumps(
+                    {
+                        "model": "deepseek-flash",
+                        "api_base": "https://api.deepseek.com/v1",
+                        "provider": "DeepSeek",
+                        "reasoning_effort": "high",
+                        "cpu_lock_qty": 4,
+                        "concurrency": 4,
+                        "cpus_each": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            protocol = build_eval_protocol(
+                workdir=work,
+                model="deepseek-flash",
+                api_base="https://api.deepseek.com/v1",
+                n_rollouts=4,
+                concurrency=4,
+                cpus_each=1,
+            )
+            self.assertEqual(protocol["icode"]["version"], "v0.1.44")
+            self.assertEqual(protocol["model_params"]["provider"], "DeepSeek")
+            self.assertEqual(protocol["model_params"]["reasoning_effort"], "high")
+            self.assertEqual(protocol["model_params"]["thinking"]["type"], "enabled")
+            self.assertEqual(protocol["resources"]["concurrency"], 4)
+            self.assertEqual(protocol["resources"]["cpus_each"], 1)
 
         from eval_slots import budget_gb, max_icode_mem_gb, memory_limit_mb
 
@@ -1719,6 +1763,11 @@ class EvalReportTests(unittest.TestCase):
         self.assertEqual(set(ladder), {"pass@1", "pass@2"})
         self.assertAlmostEqual(ladder["pass@1"], 0.5)
         self.assertAlmostEqual(ladder["pass@2"], 1.0)
+        from eval_metrics import mean_ci
+
+        mean, half = mean_ci([0.5] + [0.0] * 19)
+        self.assertAlmostEqual(mean, 0.025)
+        self.assertAlmostEqual(half, 0.049)
         arm = summarize_arm(
             [
                 (
@@ -1776,13 +1825,15 @@ class EvalReportTests(unittest.TestCase):
         self.assertTrue(page.startswith("<!DOCTYPE html>"))
         self.assertIn("icode + deepseek-flash", page)
         self.assertNotIn("deepseek-v4.1-flash", page)
-        self.assertIn("macro_pass@1_sd", doc["icode"])
+        self.assertIn("macro_pass@1_ci", doc["icode"])
+        self.assertIn("macro_pass@1_scored_ci", doc["icode"])
+        self.assertNotIn("macro_pass@1_sd", doc["icode"])
         self.assertNotIn("macro_pass@1_se", doc["icode"])
-        self.assertIn("(SD)", text)
+        self.assertIn("(CI)", text)
         self.assertIn("33.3%", page)
         self.assertIn("Pass@1..k (padded, missing=fail)", page)
         self.assertIn("Pass@1..k (scored-only, missing omitted)", page)
-        self.assertIn("(SD)", page)
+        self.assertIn("(CI)", page)
         self.assertIn("Lowest pass fraction", page)
         self.assertNotIn("Highest pass fraction", page)
         self.assertIn("Solved", page)

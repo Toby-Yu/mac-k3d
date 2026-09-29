@@ -81,6 +81,19 @@ def validate_comparison(doc: dict) -> list[str]:
             errors.append(f"missing {key}")
     if doc.get("suite") not in (None, "deepswe", "lolbench", "swebenchpro"):
         errors.append("suite should be deepswe, lolbench, or swebenchpro")
+    protocol = doc.get("eval_protocol")
+    if protocol is not None:
+        if not isinstance(protocol, dict):
+            errors.append("eval_protocol must be an object")
+        else:
+            for key in ("icode", "model_params", "resources"):
+                if key not in protocol:
+                    errors.append(f"missing eval_protocol.{key}")
+            params = protocol.get("model_params")
+            if isinstance(params, dict):
+                for key in ("provider", "reasoning_effort", "thinking"):
+                    if key not in params:
+                        errors.append(f"missing eval_protocol.model_params.{key}")
     n_roll = doc.get("n_rollouts")
     banned = (
         "n_tasks",
@@ -95,6 +108,9 @@ def validate_comparison(doc: dict) -> list[str]:
         "first_pass_at_1",
         "first_pass_hits",
         "macro_pass_at_1",
+        "macro_pass@1_sd",
+        "macro_pass@1_scored_sd",
+        "macro_pass@1_se",
     )
     arm_names = ["icode"]
     if "llm" in doc:
@@ -116,7 +132,7 @@ def validate_comparison(doc: dict) -> list[str]:
                     err = _rate_error(f"{arm_name}.{key}", arm.get(key))
                     if err:
                         errors.append(err)
-        for key in ("macro_pass@1", "any_pass"):
+        for key in ("macro_pass@1", "macro_pass@1_ci", "any_pass"):
             if key not in arm:
                 errors.append(f"missing {arm_name}.{key}")
             else:
@@ -132,6 +148,10 @@ def validate_comparison(doc: dict) -> list[str]:
                         errors.append(err)
         if "macro_pass@1_scored" in arm:
             err = _rate_error(f"{arm_name}.macro_pass@1_scored", arm.get("macro_pass@1_scored"))
+            if err:
+                errors.append(err)
+        if "macro_pass@1_scored_ci" in arm:
+            err = _rate_error(f"{arm_name}.macro_pass@1_scored_ci", arm.get("macro_pass@1_scored_ci"))
             if err:
                 errors.append(err)
         methods = arm.get("pass_methods")

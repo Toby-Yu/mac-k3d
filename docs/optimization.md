@@ -35,7 +35,11 @@ Examples with `CPU_LOCK_QTY=4` and `N_ROLLOUTS=4`:
 
 P6 grading uses the same `EVAL_SLOTS` cap. A local stage run that leaves `CPU_LOCK_QTY` unset uses 1. The Jenkins parameter defaults to 4.
 
-`--override-cpus` is `EVAL_CPUS_EACH`. With `CPU_LOCK_QTY=4` that is one core per container.
+`--override-cpus` is `EVAL_CPUS_EACH`. With `CPU_LOCK_QTY=4` that is one core per container, so four rollouts of one question run together (`concurrency=4`). That matches the PDF DeepSWE schedule.
+
+DeepSWE `task.toml` files request `cpus = 2` and LoLBench requests `cpus = 4`. Those values are not copied into `--override-cpus`. Giving each container that many cores on a 4-core lock would drop concurrency below 4. To keep concurrency 4 and also honor task.toml, raise `CPU_LOCK_QTY` to `N_ROLLOUTS` times the task CPU request (DeepSWE 8, LoLBench 16) and change the slot formula; this pipeline does not do that.
+
+Time and token cost are reduced by `ICODE_REASONING_EFFORT=high` (less explore soft-stop), not by cutting rollouts. Out-of-memory is detected and that question’s remaining rollouts are skipped; there is no memory cap that prevents OOM.
 
 ## Disk and I/O
 
