@@ -2406,6 +2406,81 @@ class EvalReportTests(unittest.TestCase):
             self.assertFalse(any((work / "reports").glob("eval-*.json")))
 
 
+class CostTokenReportTests(unittest.TestCase):
+    def test_render_and_build_locator(self):
+        from cost_token_report import estimate_cost, main, render_report, resolve_run_dir
+
+        doc = {
+            "suite": "deepswe",
+            "model": "openai/deepseek-flash",
+            "run_id": "jenkins-99",
+            "run_label": "deepswe-99",
+            "n_tasks": 2,
+            "n_rollouts": 4,
+            "icode": {
+                "tokens": {
+                    "tasks_with_data": 2,
+                    "in": 2_000_000,
+                    "out": 1_000_000,
+                    "total": 3_000_000,
+                    "avg_total_per_task": 1_500_000,
+                },
+                "timing": {"wall_seconds": 3661},
+                "tasks": [
+                    {"id": "heavy", "tok_in": 1_500_000, "tok_out": 800_000},
+                    {"id": "light", "tok_in": 500_000, "tok_out": 200_000},
+                ],
+            },
+        }
+        md = render_report(doc, folder_label="output/deepswe/jenkins-99-demo")
+        self.assertIn("deepswe-99", md)
+        self.assertIn("2,000,000", md)
+        self.assertIn("1.50M", md)
+        self.assertIn("heavy", md)
+        self.assertIn("~$0.90", md)  # off-peak 0% hit: 2*0.15 + 1*0.60 = 0.90
+        off = estimate_cost(
+            input_tokens=2_000_000,
+            output_tokens=1_000_000,
+            band={"cache_hit": 0.003, "cache_miss": 0.15, "output": 0.60},
+            hit_share=0.0,
+        )
+        self.assertAlmostEqual(off["total"], 0.90, places=4)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            run = repo / "output" / "deepswe" / "jenkins-99-20260101T000000Z"
+            run.mkdir(parents=True)
+            (run / "artifact.json").write_text(json.dumps(doc), encoding="utf-8")
+            run_dir, tar_path, loaded = resolve_run_dir(
+                repo=repo,
+                run_dir=None,
+                suite="deepswe",
+                build="99",
+                run=None,
+                tar=None,
+            )
+            self.assertIsNone(tar_path)
+            self.assertEqual(run_dir, run)
+            self.assertEqual(loaded["run_label"], "deepswe-99")
+            out = repo / "report.md"
+            rc = main(
+                [
+                    "--repo",
+                    str(repo),
+                    "--suite",
+                    "deepswe",
+                    "--build",
+                    "99",
+                    "--out",
+                    str(out),
+                ]
+            )
+            self.assertEqual(rc, 0)
+            text = out.read_text(encoding="utf-8")
+            self.assertIn("**~$0.90**", text)
+            self.assertIn("~$1.80", text)  # peak 0% hit
+
+
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
 

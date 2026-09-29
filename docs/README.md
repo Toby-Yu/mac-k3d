@@ -70,6 +70,7 @@ Each folder is **only** `README.md` (what that git branch shipped) and `testing.
 | [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) | Git or release iCode input; Harbor on DeepSWE, LoLBench, and SWE-bench Pro |
 | [binary-initializer/README.md](binary-initializer/README.md) | Release `setup` + Docker install |
 | [eval-comparison-report/README.md](eval-comparison-report/README.md) | Comparison report, same-question slots, four open slots, and the per-run container memory log |
+| [eval-optimization/README.md](eval-optimization/README.md) | DeepSeek+high, force-commit, eval_protocol, LoLBench fix rewards, active-question mem, cost-token report |
 
 ## Goals
 

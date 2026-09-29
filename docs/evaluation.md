@@ -75,3 +75,27 @@ Pass@k is stored twice. `pass@k` / `macro_pass@1` / `c` / `n` / `pass_frac` are 
 `n_tasks`, `n_rollouts`, `concurrency`, and `cpus_each` are stored once at the top of the JSON. `eval_protocol` records the iCode version under test, `provider`, `reasoning_effort`, `thinking.type`, and the CPU lock actually used. The band next to macro Pass@1 is `macro_pass@1_ci`, a 95% confidence interval half-width of the mean of the per-question `c/n` values: `1.96 * sample_sd / sqrt(M)`. `macro_pass@1_scored_ci` is the same for `pass_frac_scored`. Fewer than two questions has half-width 0.
 
 CPU slot packing, the open slots, and the disk floor are in [optimization.md](optimization.md).
+
+## Cost and token report (on demand)
+
+After a run finishes, generate `cost-token-report.md` from that run’s `artifact.json` (list-price estimate, not DeepSeek’s invoice):
+
+```bash
+cd /path/to/mac-k3d
+
+# Explicit folder (loose extract or workspace copy)
+python3 pipeline/lib/cost_token_report.py \
+  --run-dir output/deepswe/jenkins-37-20260927T153132Z
+
+# Suite + Jenkins build number (searches output/ and eval-runs/output/)
+python3 pipeline/lib/cost_token_report.py --suite deepswe --build 37
+
+# Suite + full folder stem
+python3 pipeline/lib/cost_token_report.py --suite lolbench --run jenkins-21-20260929T010830Z
+
+# Compressed backup only
+python3 pipeline/lib/cost_token_report.py \
+  --tar output/deepswe/jenkins-37-20260927T153132Z.tar.gz
+```
+
+Default output is `<run-dir>/cost-token-report.md`. Override with `--out PATH`. This is not part of P8; re-run the command whenever you need the report.
