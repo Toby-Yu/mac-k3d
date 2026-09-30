@@ -1613,6 +1613,13 @@ class SwebenchproTests(unittest.TestCase):
         self.assertIn("swebenchpro) echo \"$SWEBENCHPRO_DIR/tasks\"", common)
 
 
+class EvalSlotsDebugGuardTests(unittest.TestCase):
+    def test_eval_slots_source_has_no_agent_debug_log(self):
+        text = (LIB / "eval_slots.py").read_text(encoding="utf-8")
+        self.assertNotIn("_debug_log", text)
+        self.assertNotIn(".cursor/", text)
+
+
 class SecretGuardTests(unittest.TestCase):
     def test_check_no_secrets_script_passes_on_tracked_tree(self):
         script = ROOT / "scripts" / "check_no_secrets.sh"

@@ -29,31 +29,6 @@ FALLBACK_GB = {
     "lolbench": 4.0,
     "deepswe": 1.5,
 }
-# #region agent log
-_DEBUG_LOG = Path("/home/Toby/Documents/Toby/mac-k3d/.cursor/debug-fcb7a8.log")
-
-
-def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    try:
-        import time
-
-        payload = {
-            "sessionId": "fcb7a8",
-            "runId": os.environ.get("BUILD_NUMBER") or "local",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with _DEBUG_LOG.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-
-
-# #endregion
 _MEM_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]i?B)", re.IGNORECASE)
 _MAIN_RE = re.compile(r"-main-\d+")
 
@@ -428,22 +403,6 @@ def eval_slots(
         ram = ram_slots(benchmark, mem_kb=mem_kb, measured_gb=estimated)
         if ram is not None:
             slots = min(slots, ram)
-        # #region agent log
-        _debug_log(
-            "H1",
-            "eval_slots.py:eval_slots",
-            "slot_decision",
-            {
-                "cpu_lock": int(cpu_lock),
-                "benchmark": benchmark,
-                "question": question or None,
-                "estimated_gb": estimated,
-                "ram_slots": ram,
-                "slots": slots,
-                "mem_kb": mem_kb if mem_kb is not None else mem_available_kb(),
-            },
-        )
-        # #endregion
     cpus_each = max(1, int(cpu_lock) // slots)
     return slots, cpus_each
 
@@ -472,21 +431,6 @@ def memory_limit_mb(
     if measured_gb is not None and measured_gb > 0:
         need_mb = max(512, int(measured_gb * MEM_BUFFER * 1024 + 0.999))
     per = min(need_mb, host_share)
-    # #region agent log
-    _debug_log(
-        "H2",
-        "eval_slots.py:memory_limit_mb",
-        "memory_cap",
-        {
-            "slots": n,
-            "avail_mb": avail_mb,
-            "measured_gb": measured_gb,
-            "need_mb": need_mb,
-            "host_share": host_share,
-            "per_mb": per,
-        },
-    )
-    # #endregion
     return int(per)
 
 
@@ -787,22 +731,6 @@ def main() -> int:
         print(f"EVAL_CPUS_EACH={cpus}")
         print("EVAL_FITS=1")
         print(f"EVAL_MEMORY_MB={mem_mb}")
-        # #region agent log
-        _debug_log(
-            "H3",
-            "eval_slots.py:main.slots",
-            "export_env",
-            {
-                "EVAL_SLOTS": slots,
-                "EVAL_CPUS_EACH": cpus,
-                "EVAL_MEMORY_MB": mem_mb,
-                "question": question or None,
-                "sample_gb": sample,
-                "estimated_gb": estimated,
-                "cap": cap,
-            },
-        )
-        # #endregion
         if question:
             observe_question(args.workdir, question, sample, slots, mem_mb, args.benchmark)
         return 0
@@ -830,19 +758,6 @@ def main() -> int:
         print(f"ASSIGNED={','.join(done)}")
         print(f"RESUME_DONE={len(done)}")
         print(f"RESUME_REMAINING={','.join(remaining)}")
-        # #region agent log
-        _debug_log(
-            "H4",
-            "eval_slots.py:main.resume-seed",
-            "resume_seed",
-            {
-                "build": build or None,
-                "done": len(done),
-                "remaining_n": len(remaining),
-                "remaining_head": remaining[:8],
-            },
-        )
-        # #endregion
         return 0
     if args.cmd == "report":
         ids = _read_ids(args.tasks_file)

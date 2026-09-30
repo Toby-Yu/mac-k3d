@@ -41,6 +41,7 @@ Copy-paste checklists with this lab’s IPs live under [testing/](testing/).
 | [deployment.md](deployment.md) | Multi-Mac topology |
 | [setup.md](setup.md) | Wizard / k3d scenarios (includes local cluster without Jenkins) |
 | [prepare-wizard.md](prepare-wizard.md) | `prepare` questionnaire |
+| [integration-log.md](integration-log.md) | Phase 0 integration steps, test evidence, and follow-ups |
 
 ## Releases (what each version shipped)
 

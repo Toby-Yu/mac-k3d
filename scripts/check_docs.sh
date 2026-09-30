@@ -24,6 +24,7 @@ PRODUCT_MD=(
   export-import.md
   optimization.md
   icode-harness-inputs.md
+  integration-log.md
   initializer-new-machine.md
   lolbench-jenkins.md
   new-machine.md
