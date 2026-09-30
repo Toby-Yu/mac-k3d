@@ -15,6 +15,7 @@ const DESC_ICODE_GIT_URL: &str = "Git: https URL on github.com or gitcode.com. R
 const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-request number when KIND is pr. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
 const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, commit, or pr (no auto). For pr, REF is the pull-request number. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
 const DESC_TASKS: &str = "Comma-separated question ids. This field wins over TASK and N_TASKS. Example: ruff_1,fastapi_1. Leave empty to use TASK or N_TASKS.";
+const DESC_RESUME: &str = "After agent death or an aborted full suite: set true and keep the same TASK/TASKS/N_TASKS. P5 seeds from the aborted harbor_runs/jenkins-* tree (override with RESUME_FROM=jenkins-N) and continues units that lack reward.json. Works for LoLBench and DeepSWE.";
 
 fn benchmark_label(job_benchmark: &str) -> &'static str {
     match job_benchmark {
@@ -85,12 +86,14 @@ pub struct JobOpts {
     pub default_icode_release: String,
     pub default_icode_git_url: String,
     pub default_icode_git_ref: String,
+    pub default_icode_git_ref_kind: String,
     pub default_icode_args: String,
     pub default_harness: String,
     pub default_llm: String,
     pub default_deepseek_model: String,
     pub default_benchmark: String,
     pub default_n_tasks: u32,
+    pub default_n_rollouts: u32,
     pub default_tasks: Vec<String>,
     /// Credential IDs present in Jenkins (only these are bound in the Pipeline).
     pub credential_ids: Vec<String>,
@@ -104,6 +107,7 @@ impl JobOpts {
             release = config.jenkins_job.default_binary_target.trim().to_string();
         }
         let git_ref = config.jenkins_job.default_icode_git_ref.trim();
+        let git_ref_kind = config.jenkins_job.default_icode_git_ref_kind.trim();
         let harness = if config.jenkins_job.default_harness.trim().is_empty() {
             eval_catalog::HARNESSES[0].to_string()
         } else {
@@ -132,6 +136,7 @@ impl JobOpts {
                     .unwrap_or_else(|_| eval_catalog::default_model().to_string())
             }
         };
+        let n_rollouts = config.jenkins_job.default_n_rollouts.max(1);
         Self {
             default_task: if config.jenkins_job.default_task.trim().is_empty() {
                 String::new()
@@ -142,9 +147,13 @@ impl JobOpts {
             default_icode_release: release,
             default_icode_git_url: config.jenkins_job.default_icode_git_url.clone(),
             default_icode_git_ref: if git_ref.is_empty() {
-                "main".into()
+                "2".into()
             } else {
                 git_ref.to_string()
+            },
+            default_icode_git_ref_kind: match git_ref_kind.to_ascii_lowercase().as_str() {
+                "tag" | "commit" | "pr" | "branch" => git_ref_kind.to_ascii_lowercase(),
+                _ => "pr".into(),
             },
             default_icode_args: config.jenkins_job.default_icode_args.clone(),
             default_harness: harness,
@@ -156,6 +165,7 @@ impl JobOpts {
                 .trim()
                 .to_ascii_lowercase(),
             default_n_tasks: config.jenkins_job.default_n_tasks.max(1),
+            default_n_rollouts: n_rollouts,
             default_tasks: config.jenkins_job.default_tasks.clone(),
             credential_ids,
         }
@@ -518,34 +528,20 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn job_applies_question_defaults(opts: &JobOpts, job_benchmark: &str) -> bool {
-    let b = opts.default_benchmark.trim();
-    if b.eq_ignore_ascii_case(job_benchmark) {
-        return true;
-    }
-    b.is_empty() && job_benchmark == "lolbench"
-}
-
 fn question_defaults_for_job(opts: &JobOpts, job_benchmark: &str) -> (String, u32, String) {
-    if job_applies_question_defaults(opts, job_benchmark) {
-        let tasks = opts.default_tasks.join(",");
-        let n = if opts.default_tasks.is_empty() {
-            opts.default_n_tasks.max(1)
-        } else {
-            opts.default_tasks.len() as u32
-        };
-        let task = if opts.default_tasks.is_empty() {
-            opts.default_task.clone()
-        } else {
-            String::new()
-        };
-        return (task, n, tasks);
-    }
-    if job_benchmark == "lolbench" {
-        ("ruff_1".into(), 1, String::new())
+    let _ = job_benchmark;
+    let tasks = opts.default_tasks.join(",");
+    let n = if opts.default_tasks.is_empty() {
+        opts.default_n_tasks.max(1)
     } else {
-        (String::new(), 1, String::new())
-    }
+        opts.default_tasks.len() as u32
+    };
+    let task = if opts.default_tasks.is_empty() {
+        opts.default_task.clone()
+    } else {
+        String::new()
+    };
+    (task, n, tasks)
 }
 
 fn groovy_quoted_list(items: &[&str]) -> String {
@@ -589,9 +585,12 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     let icode_mode_fb = jenkins_icode_mode(opts);
     let icode_git_url_g = groovy_escape(opts.default_icode_git_url.trim());
     let icode_git_ref_g = groovy_escape(&opts.default_icode_git_ref);
-    let icode_git_ref_kind_choices =
-        eval_catalog::choices_preferred_first(eval_catalog::ICODE_GIT_REF_KINDS, "branch");
+    let icode_git_ref_kind_choices = eval_catalog::choices_preferred_first(
+        eval_catalog::ICODE_GIT_REF_KINDS,
+        &opts.default_icode_git_ref_kind,
+    );
     let icode_git_ref_kind_g = groovy_quoted_list(&icode_git_ref_kind_choices);
+    let n_rollouts = opts.default_n_rollouts.max(1);
     let task_desc_g = groovy_escape(&task_param_description(job_benchmark));
     let bench_desc_g = groovy_escape(&benchmark_param_description(job_benchmark));
     let icode_mode_desc_g = groovy_escape(DESC_ICODE_MODE);
@@ -600,6 +599,7 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     let icode_git_ref_desc_g = groovy_escape(DESC_ICODE_GIT_REF);
     let icode_git_ref_kind_desc_g = groovy_escape(DESC_ICODE_GIT_REF_KIND);
     let tasks_desc_g = groovy_escape(DESC_TASKS);
+    let resume_desc_g = groovy_escape(DESC_RESUME);
     let n_tasks_desc_g = groovy_escape(&n_tasks_param_description(job_benchmark));
     format!(
         r#"pipeline {{
@@ -616,14 +616,15 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     string(name: 'TASK', defaultValue: '{task}', description: '{task_desc_g}')
     string(name: 'TASKS', defaultValue: '{tasks}', description: '{tasks_desc_g}')
     string(name: 'N_TASKS', defaultValue: '{n_tasks}', description: '{n_tasks_desc_g}')
-    string(name: 'N_ROLLOUTS', defaultValue: '1', description: 'Number of iCode attempts for the selected question. Default 1. Each extra attempt is another full agent run.')
+    string(name: 'N_ROLLOUTS', defaultValue: '{n_rollouts}', description: 'Number of iCode attempts for the selected question. Default 4. Each extra attempt is another full agent run.')
+    booleanParam(name: 'RESUME', defaultValue: false, description: '{resume_desc_g}')
     choice(name: 'ICODE_MODE', choices: [{icode_mode_g}], description: '{icode_mode_desc_g}')
     stashedFile(name: 'ICODE_RELEASE_FILE', description: '{icode_release_file_desc_g}')
     string(name: 'ICODE_GIT_URL', defaultValue: '{icode_git_url_g}', description: '{icode_git_url_desc_g}')
     string(name: 'ICODE_GIT_REF', defaultValue: '{icode_git_ref_g}', description: '{icode_git_ref_desc_g}')
     choice(name: 'ICODE_GIT_REF_KIND', choices: [{icode_git_ref_kind_g}], description: '{icode_git_ref_kind_desc_g}')
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
-    string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'CPU cores reserved for this build. One question uses that many containers for its rollouts; the next question starts after they exit. A question that does not fit in free RAM is skipped.')
+    string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'CPU cores reserved for this build. One question uses that many containers for its rollouts; the next question starts after they exit. Slots also shrink to fit free RAM; a question that still OOMs inside Docker is skipped.')
     string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Dir with pipeline/stages/run_all.sh (optional)')
     choice(name: 'DEEPSEEK_MODEL', choices: [{model_g}], description: 'DeepSeek Chat Completions model id (catalog)')
   }}
@@ -667,7 +668,9 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             export MAC_K3D_ROOT="$ROOT"
             export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
             export N_TASKS="${{N_TASKS:-1}}"
-            export N_ROLLOUTS="${{N_ROLLOUTS:-1}}"
+            export N_ROLLOUTS="${{N_ROLLOUTS:-4}}"
+            export RESUME="${{RESUME:-false}}"
+            export RESUME_FROM="${{RESUME_FROM:-}}"
             case "$N_ROLLOUTS" in
               ""|*[!0-9]*)
                 echo "N_ROLLOUTS must be an integer >= 1" >&2
@@ -758,6 +761,7 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
         task = task,
         tasks = tasks,
         n_tasks = n_tasks,
+        n_rollouts = n_rollouts,
         harness_g = harness_g,
         llm_g = llm_g,
         model_g = model_g,
@@ -779,6 +783,7 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
         icode_git_ref_desc_g = icode_git_ref_desc_g,
         icode_git_ref_kind_desc_g = icode_git_ref_kind_desc_g,
         tasks_desc_g = tasks_desc_g,
+        resume_desc_g = resume_desc_g,
         n_tasks_desc_g = n_tasks_desc_g,
     )
 }
@@ -807,15 +812,19 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
     let icode_mode_xml = xml_choice_strings(&icode_mode_choices);
     let icode_git_url_xml = xml_escape(opts.default_icode_git_url.trim());
     let icode_git_ref_xml = xml_escape(&opts.default_icode_git_ref);
-    let icode_git_ref_kind_choices =
-        eval_catalog::choices_preferred_first(eval_catalog::ICODE_GIT_REF_KINDS, "branch");
+    let icode_git_ref_kind_choices = eval_catalog::choices_preferred_first(
+        eval_catalog::ICODE_GIT_REF_KINDS,
+        &opts.default_icode_git_ref_kind,
+    );
     let icode_git_kind_xml = xml_choice_strings(&icode_git_ref_kind_choices);
+    let n_rollouts = opts.default_n_rollouts.max(1);
     let icode_mode_desc_xml = xml_escape(DESC_ICODE_MODE);
     let icode_release_file_desc_xml = xml_escape(DESC_ICODE_RELEASE_FILE);
     let icode_git_url_desc_xml = xml_escape(DESC_ICODE_GIT_URL);
     let icode_git_ref_desc_xml = xml_escape(DESC_ICODE_GIT_REF);
     let icode_git_ref_kind_desc_xml = xml_escape(DESC_ICODE_GIT_REF_KIND);
     let tasks_desc_xml = xml_escape(DESC_TASKS);
+    let resume_desc_xml = xml_escape(DESC_RESUME);
     let n_tasks_desc_xml = xml_escape(&n_tasks_param_description(job_benchmark));
     format!(
         r#"<?xml version='1.0' encoding='UTF-8'?>
@@ -870,10 +879,15 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>N_ROLLOUTS</name>
-          <description>Number of iCode attempts for the selected question. Default 1. Each extra attempt is another full agent run.</description>
-          <defaultValue>1</defaultValue>
+          <description>Number of iCode attempts for the selected question. Default 4. Each extra attempt is another full agent run.</description>
+          <defaultValue>{n_rollouts}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <name>RESUME</name>
+          <description>{resume_desc_xml}</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
           <name>ICODE_MODE</name>
           <description>{icode_mode_desc_xml}</description>
@@ -915,7 +929,7 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>CPU_LOCK_QTY</name>
-          <description>CPU cores reserved for this build. One question uses that many containers for its rollouts; the next question starts after they exit. A question that does not fit in free RAM is skipped.</description>
+          <description>CPU cores reserved for this build. One question uses that many containers for its rollouts; the next question starts after they exit. Slots also shrink to fit free RAM; a question that still OOMs inside Docker is skipped.</description>
           <defaultValue>4</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
@@ -1239,12 +1253,14 @@ mod tests {
                 "https://gitcode.com/example/icode-linux-x86_64-full-v0.1.41.tar.gz".into(),
             default_icode_git_url: "https://gitcode.com/example/icode.git".into(),
             default_icode_git_ref: "main".into(),
+            default_icode_git_ref_kind: "branch".into(),
             default_icode_args: "--help".into(),
             default_harness: "icode".into(),
             default_llm: "deepseek".into(),
             default_deepseek_model: eval_catalog::default_model().into(),
             default_benchmark: "lolbench".into(),
             default_n_tasks: 1,
+            default_n_rollouts: 4,
             default_tasks: Vec::new(),
             credential_ids: vec!["deepseek-api-key".into(), "gitcode-pat".into()],
         }
@@ -1257,12 +1273,14 @@ mod tests {
             default_icode_release: String::new(),
             default_icode_git_url: String::new(),
             default_icode_git_ref: "main".into(),
+            default_icode_git_ref_kind: "branch".into(),
             default_icode_args: String::new(),
             default_harness: "icode".into(),
             default_llm: "deepseek".into(),
             default_deepseek_model: eval_catalog::default_model().into(),
             default_benchmark: "deepswe".into(),
             default_n_tasks: 1,
+            default_n_rollouts: 4,
             default_tasks: Vec::new(),
             credential_ids,
         }
@@ -1362,9 +1380,15 @@ mod tests {
         cfg.jenkins_job.default_binary_target = "/tmp/icode".into();
         let opts = JobOpts::from_config(&cfg, Vec::new());
         assert_eq!(opts.default_icode_release, "/tmp/icode");
-        assert_eq!(opts.default_task, "ruff_1");
-        assert_eq!(opts.default_eval_mode, "release");
-        assert_eq!(opts.default_icode_git_ref, "main");
+        assert!(opts.default_task.is_empty());
+        assert_eq!(opts.default_eval_mode, "git");
+        assert_eq!(opts.default_icode_git_ref, "2");
+        assert_eq!(opts.default_icode_git_ref_kind, "pr");
+        assert_eq!(opts.default_n_rollouts, 4);
+        assert_eq!(
+            opts.default_icode_git_url,
+            "https://gitcode.com/michaelling/jiuwenicode"
+        );
     }
 
     #[test]
@@ -1375,7 +1399,7 @@ mod tests {
         cfg.jenkins_job.default_icode_git_ref.clear();
         let opts = JobOpts::from_config(&cfg, Vec::new());
         assert_eq!(opts.default_eval_mode, "git");
-        assert_eq!(opts.default_icode_git_ref, "main");
+        assert_eq!(opts.default_icode_git_ref, "2");
         assert_eq!(
             opts.default_icode_git_url,
             "https://gitcode.com/example/icode.git"
@@ -1408,6 +1432,8 @@ mod tests {
         assert!(xml.contains("ParametersDefinitionProperty"));
         assert!(xml.contains("<name>N_TASKS</name>"));
         assert!(xml.contains("<name>N_ROLLOUTS</name>"));
+        assert!(xml.contains("<name>RESUME</name>"));
+        assert!(xml.contains("BooleanParameterDefinition"));
         assert!(xml.contains("<defaultValue>1</defaultValue>"));
         assert!(xml.contains("<name>TASK</name>"));
         assert!(xml.contains("mac-k3d config -c worker.yaml"));
@@ -1418,6 +1444,8 @@ mod tests {
             !xml.contains("/home/Toby/Documents/Toby/iCode-main"),
             "job must not hardcode a lab iCode path"
         );
+        assert!(xml.contains("export RESUME="));
+        assert!(xml.contains("booleanParam(name: 'RESUME'"));
     }
 
     #[test]
@@ -1472,7 +1500,7 @@ mod tests {
     }
 
     #[test]
-    fn question_defaults_apply_to_matching_job_only() {
+    fn question_defaults_apply_to_all_jobs() {
         let mut opts = sample_opts();
         opts.default_benchmark = "deepswe".into();
         opts.default_task = "abs-stepped-slices".into();
@@ -1482,20 +1510,20 @@ mod tests {
         let lolbench = job_config_xml(&opts);
         let swebenchpro = swebenchpro_one_task_job_xml(&opts);
         assert!(deepswe.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
+        assert!(lolbench.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
+        assert!(swebenchpro.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
         assert!(deepswe.contains("<name>N_TASKS</name>"));
         assert!(deepswe.contains("Full suite is 113"));
         assert!(swebenchpro.contains("Full suite is 731"));
         assert!(deepswe.contains("<name>N_ROLLOUTS</name>"));
-        assert!(deepswe.contains("<defaultValue>1</defaultValue>"));
+        assert!(deepswe.contains("<defaultValue>4</defaultValue>"));
         assert!(deepswe.contains("<defaultValue>2</defaultValue>"));
-        assert!(lolbench.contains("<defaultValue>ruff_1</defaultValue>"));
         let (task, n, tasks) = question_defaults_for_job(&opts, "swebenchpro");
-        assert!(task.is_empty());
-        assert_eq!(n, 1);
+        assert_eq!(task, "abs-stepped-slices");
+        assert_eq!(n, 2);
         assert!(tasks.is_empty());
         assert!(swebenchpro.contains("<name>N_TASKS</name>"));
         assert!(swebenchpro.contains("<name>N_ROLLOUTS</name>"));
-        assert!(swebenchpro.contains("<defaultValue>1</defaultValue>"));
         assert!(lolbench.contains("<name>N_ROLLOUTS</name>"));
         assert!(lolbench.contains("<name>HARNESS</name>"));
         assert!(lolbench.contains("<string>icode</string>"));

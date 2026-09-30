@@ -24,6 +24,7 @@ iCode/
 
 # Debug-session NDJSON (never commit)
 .cursor/debug-*.log
+.tmp-eval-slots/
 
 # Copied iCode drops inside a workdir
 **/icode-bin/

@@ -1704,13 +1704,19 @@ class EvalReportTests(unittest.TestCase):
 
         low_ram_kb = int(4.5 * 1024 * 1024)
         now_kb = int(9.8 * 1024 * 1024)
-        self.assertEqual(eval_slots(4, "deepswe", mem_kb=low_ram_kb), (4, 1))
+        # Fallback deepswe 1.5 GB → low RAM yields 1 slot; light measured peaks keep 4.
+        self.assertEqual(eval_slots(4, "deepswe", mem_kb=low_ram_kb), (1, 4))
         self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=0.4), (4, 1))
-        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=2.0), (4, 1))
-        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=8.0), (4, 1))
-        self.assertEqual(memory_limit_mb(now_kb, 4, 8.0), 0)
-        self.assertEqual(memory_limit_mb(now_kb, 4, None), 0)
+        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=2.0), (2, 2))
+        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=8.0), (1, 4))
+        self.assertEqual(eval_slots(4, "lolbench", mem_kb=now_kb, container_gb=6.4), (1, 4))
+        self.assertGreater(memory_limit_mb(now_kb, 4, 8.0), 0)
+        self.assertGreater(memory_limit_mb(now_kb, 1, None), 0)
+        # History-based need is capped by host share; light peaks get a tighter Docker cap.
+        self.assertLess(memory_limit_mb(now_kb, 4, 0.4), memory_limit_mb(now_kb, 4, None))
+        self.assertEqual(memory_limit_mb(now_kb, 4, 8.0), memory_limit_mb(now_kb, 4, None))
         self.assertAlmostEqual(budget_gb("deepswe", 0.4), 0.6)
+        self.assertAlmostEqual(budget_gb("lolbench", None), 4.0)
         sample = (
             "k3d-server\t2.0GiB / 16GiB\n"
             "q1_icode_1_a01\t400MiB / 16GiB\n"
@@ -1740,10 +1746,11 @@ class EvalReportTests(unittest.TestCase):
         p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertIn("eval_slots.py", p5)
         self.assertIn("report", p5)
+        self.assertIn("resume-seed", p5)
+        self.assertIn("RESUME=1", p5)
         self.assertIn("cmd+=(-n 1)", p5)
         self.assertIn("cmd+=(-k 1)", p5)
-        self.assertNotIn("--override-memory-mb", p5)
-        self.assertNotIn("--override-memory ", p5)
+        self.assertIn("--override-memory-mb", p5)
         self.assertIn("out of memory", p5)
         self.assertIn("skip question=", p5)
         self.assertIn('echo "OK unit=$spec"', p5)
@@ -1904,6 +1911,83 @@ class EvalReportTests(unittest.TestCase):
             inflight.append(unit)
         self.assertEqual(got, [("only", 1), ("only", 2), ("only", 3), ("only", 4)])
 
+    def test_resume_seed_and_history_mem_cap(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from eval_slots import (
+            completed_units,
+            estimate_container_gb,
+            eval_slots,
+            memory_limit_mb,
+            remaining_questions,
+        )
+
+        scratch = ROOT / ".tmp-eval-slots"
+        scratch.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as tmp:
+            root = Path(tmp)
+            harness = root / "harness"
+            jobs = harness / "harbor_runs" / "jenkins-23" / "cpython_1"
+            for attempt in (1, 2):
+                trial = jobs / f"cpython_1_icode_23_a{attempt:02d}" / "verifier"
+                trial.mkdir(parents=True)
+                (trial / "reward.json").write_text("1\n", encoding="utf-8")
+            # Incomplete attempt 3: no reward — must not seed.
+            (jobs / "cpython_1_icode_23_a03").mkdir(parents=True)
+            done = completed_units(root, ["cpython_1", "flink_1"], 4, build="jenkins-23")
+            self.assertEqual(done, ["cpython_1:1", "cpython_1:2"])
+            # Older builds must not pollute resume of jenkins-23.
+            old = harness / "harbor_runs" / "jenkins-19" / "flink_1"
+            trial = old / "flink_1_icode_19_a01" / "verifier"
+            trial.mkdir(parents=True)
+            (trial / "reward.json").write_text("1\n", encoding="utf-8")
+            self.assertEqual(
+                completed_units(root, ["cpython_1", "flink_1"], 4, build="jenkins-23"),
+                ["cpython_1:1", "cpython_1:2"],
+            )
+            remaining = remaining_questions(
+                ["cpython_1", "flink_1"],
+                4,
+                {(u.split(":")[0], int(u.split(":")[1])) for u in done},
+            )
+            self.assertEqual(remaining, ["cpython_1", "flink_1"])
+            (harness / "container_mem_history.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"question": "fastapi_1", "peak_gb": 0.26, "build": "22"}),
+                        json.dumps({"question": "flink_1", "peak_gb": 6.448, "build": "23"}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            # Stale global peak must not override per-question history.
+            (harness / "container_mem_peak_gb").write_text("6.448\n", encoding="utf-8")
+            self.assertAlmostEqual(
+                estimate_container_gb(root, "lolbench", question="fastapi_1"),
+                0.26,
+            )
+            self.assertAlmostEqual(
+                estimate_container_gb(root, "lolbench", question="flink_1"),
+                6.448,
+            )
+            mem_kb = int(8.8 * 1024 * 1024)
+            self.assertEqual(
+                eval_slots(4, "lolbench", workdir=root, mem_kb=mem_kb, question="fastapi_1"),
+                (4, 1),
+            )
+            self.assertEqual(
+                eval_slots(4, "lolbench", workdir=root, mem_kb=mem_kb, question="flink_1"),
+                (1, 4),
+            )
+            light_cap = memory_limit_mb(mem_kb, 4, 0.26)
+            heavy_cap = memory_limit_mb(mem_kb, 1, 6.448)
+            self.assertLess(light_cap, heavy_cap)
+            self.assertGreaterEqual(light_cap, 512)
+            self.assertEqual(light_cap, 512)  # floor; 0.26×1.5×1024 ≈ 399
+
     def test_question_memory_record_covers_every_benchmark(self):
         import json
         import tempfile
@@ -1953,9 +2037,42 @@ class EvalReportTests(unittest.TestCase):
             self.assertEqual([row["question"] for row in hist_rows], ["earlier", "q1", "q2", "q3", "q4"])
             self.assertEqual(hist_rows[1]["build"], os.environ.get("BUILD_NUMBER") or "local")
             mem_kb = int(6 * 1024 * 1024)
-            self.assertEqual(eval_slots(4, "lolbench", mem_kb=mem_kb, container_gb=1.2), (4, 1))
-            self.assertEqual(eval_slots(4, "swebenchpro", mem_kb=mem_kb, container_gb=1.2), (4, 1))
-            self.assertEqual(memory_limit_mb(mem_kb, 4, 1.2), 0)
+            self.assertEqual(eval_slots(4, "lolbench", mem_kb=mem_kb, container_gb=1.2), (2, 2))
+            self.assertEqual(eval_slots(4, "swebenchpro", mem_kb=mem_kb, container_gb=1.2), (2, 2))
+            self.assertGreater(memory_limit_mb(mem_kb, 4, 1.2), 0)
+            # History peak for flink_1 forces a single slot on a 14 GB-class host.
+            # Use a workdir on the workspace disk so the 40 GB free-disk floor does not
+            # force slots=1 independently of RAM (tempfs /tmp is often < 40 GB).
+            scratch = ROOT / ".tmp-eval-slots"
+            scratch.mkdir(exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=scratch) as packed:
+                packed_root = Path(packed)
+                (packed_root / "harness").mkdir()
+                (packed_root / "harness" / "container_mem_history.jsonl").write_text(
+                    json.dumps({"question": "flink_1", "peak_gb": 6.448, "build": "23"})
+                    + "\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    eval_slots(
+                        4,
+                        "lolbench",
+                        workdir=packed_root,
+                        mem_kb=int(8.8 * 1024 * 1024),
+                        question="flink_1",
+                    ),
+                    (1, 4),
+                )
+                self.assertEqual(
+                    eval_slots(
+                        4,
+                        "deepswe",
+                        workdir=packed_root,
+                        mem_kb=int(9.8 * 1024 * 1024),
+                        container_gb=0.4,
+                    ),
+                    (4, 1),
+                )
             (root / "harness" / "skipped_questions.txt").write_text("q9\n", encoding="utf-8")
             out = root / "out"
             out.mkdir()
@@ -1977,7 +2094,7 @@ class EvalReportTests(unittest.TestCase):
         self.assertIn("eval_slots.py\" flush", p5)
         self.assertIn('eval_slots.py" sample', p5)
         self.assertIn("active_question.txt", p5)
-        self.assertNotIn("--override-memory-mb", p5)
+        self.assertIn("--override-memory-mb", p5)
         self.assertIn("out of memory", p5)
         self.assertIn("skipped_questions.txt", p5)
         self.assertNotIn("[[:space:]]137", p5)

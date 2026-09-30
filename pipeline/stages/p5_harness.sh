@@ -113,13 +113,26 @@ if [ -z "${ICODE_PROVIDER:-}" ]; then
 fi
 export ICODE_REASONING_EFFORT="${ICODE_REASONING_EFFORT:-high}"
 mkdir -p "$HARNESS_DIR"
-rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
-rm -f "$HARNESS_DIR/container_mem_peak_gb" \
-  "$HARNESS_DIR/container_mem.jsonl" \
-  "$HARNESS_DIR/container_mem_current.json" \
-  "$HARNESS_DIR/active_question.txt" \
-  "$HARNESS_DIR/skipped_questions.txt"
-echo "P5 harbor: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
+RESUME_RAW="$(printf '%s' "${RESUME:-0}" | tr '[:upper:]' '[:lower:]')"
+case "$RESUME_RAW" in
+  1|true|yes|on) RESUME=1 ;;
+  *) RESUME=0 ;;
+esac
+if [ "$RESUME" = "1" ]; then
+  echo "P5 harbor: RESUME=1 keeping prior harbor_runs; seeding completed units"
+  rm -f "$HARNESS_DIR/container_mem_peak_gb" \
+    "$HARNESS_DIR/container_mem_current.json" \
+    "$HARNESS_DIR/active_question.txt" \
+    "$HARNESS_DIR/skipped_questions.txt"
+else
+  rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
+  rm -f "$HARNESS_DIR/container_mem_peak_gb" \
+    "$HARNESS_DIR/container_mem.jsonl" \
+    "$HARNESS_DIR/container_mem_current.json" \
+    "$HARNESS_DIR/active_question.txt" \
+    "$HARNESS_DIR/skipped_questions.txt"
+  echo "P5 harbor: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
+fi
 ensure_selected_tasks
 eval_parallel_degree || die "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1"
 echo "P5 harbor: n_rollouts=$N_ROLLOUTS slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
@@ -188,6 +201,24 @@ DONE_UNITS=0
 DUR_SUM=0
 DUR_N=0
 
+if [ "$RESUME" = "1" ]; then
+  seed="$(
+    python3 "$PIPELINE_LIB/eval_slots.py" resume-seed \
+      --tasks-file "$WORKDIR/selected_tasks.txt" \
+      --n-rollouts "$N_ROLLOUTS" \
+      --workdir "$WORKDIR" \
+      --build "${RESUME_FROM:-}"
+  )" || die "eval_slots.py resume-seed failed"
+  eval "$seed"
+  ASSIGNED="${ASSIGNED:-}"
+  RESUME_DONE="${RESUME_DONE:-0}"
+  RESUME_REMAINING="${RESUME_REMAINING:-}"
+  RESUME_BUILD="${RESUME_BUILD:-}"
+  STARTED_UNITS="$RESUME_DONE"
+  DONE_UNITS="$RESUME_DONE"
+  echo "P5 harbor: resume from ${RESUME_BUILD:-auto} seeded done=$RESUME_DONE/$NEEDED remaining=${RESUME_REMAINING:--}"
+fi
+
 write_progress() {
   local inflight_n="${#UNIT_SPEC[@]}"
   local mean=""
@@ -245,6 +276,9 @@ live_slots() {
   local out question=""
   if [ -n "${INFLIGHT:-}" ]; then
     question="${INFLIGHT%%:*}"
+  else
+    # Next wave's question (history peak / fallback planning before launch).
+    question="$(next_work_unit 2>/dev/null | awk '{print $1}' || true)"
   fi
   out="$(
     python3 "$PIPELINE_LIB/eval_slots.py" slots \
@@ -302,6 +336,10 @@ start_unit() {
   cmd+=(-n 1)
   cmd+=(-k 1)
   cmd+=(--override-cpus "$EVAL_CPUS_EACH")
+  if [ "${EVAL_MEMORY_MB:-0}" -gt 0 ] 2>/dev/null; then
+    cmd+=(--override-memory-mb "$EVAL_MEMORY_MB")
+    echo "P5 harbor: override-memory-mb=$EVAL_MEMORY_MB slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
+  fi
   cmd+=(-y)
   cmd+=(--env-file "$HARBOR_ENV")
   if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then

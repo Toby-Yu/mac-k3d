@@ -6,13 +6,13 @@ Release and git both mount the supplied iCode at `/opt/icode-host` and run the s
 
 After `icode run`, the Harbor agent force-commits a dirty git tree so DeepSWE can grade `git diff <base> HEAD` and LoLBench submit sees the same tree. That commit does not start another model call.
 
-Default packing stays `CPU_LOCK_QTY=4` → concurrency **4** and `cpus_each=1`, with `N_ROLLOUTS=4`. DeepSWE `task.toml` asks for 2 CPUs and LoLBench asks for 4; those requests are not applied, because raising `cpus_each` on a 4-core lock would drop concurrency below 4. See [optimization.md](optimization.md).
+Default packing stays `CPU_LOCK_QTY=4` as the **upper** concurrency bound, with `N_ROLLOUTS=4`. Live `EVAL_SLOTS` and `--override-memory-mb` are set **per question** from that question’s history peak (×1.5), falling back to suite defaults (LoLBench 4.0 GB, DeepSWE 1.5 GB) so Flink-class peaks shrink to one slot while light questions keep all CPUs. See [optimization.md](optimization.md). After an aborted full suite, set Jenkins `RESUME=true` with the same question selection so P5 skips units that already have `reward.json`.
 
-Harbor’s agent budget is the task’s `agent.timeout_sec` (often 10800s on DeepSWE) with timeout multiplier 1. A rollout that ends near 5100s is iCode stopping itself, not Harbor cutting the trial. There is no Docker memory cap. An out-of-memory kill skips the rest of that question and the run continues.
+Harbor’s agent budget is the task’s `agent.timeout_sec` (often 10800s on DeepSWE) with timeout multiplier 1. A rollout that ends near 5100s is iCode stopping itself, not Harbor cutting the trial.
 
 P8 stores `eval_protocol` on `artifact.json` (iCode mode/version/source, model params, concurrency, `cpus_each`, and the timeout note) and repeats it in `summary.md` and `report.html`.
 
-DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-empty `TASKS` list wins; otherwise one `TASK`; otherwise `N_TASKS` is the first N sorted ids. Full suite sizes are DeepSWE 113, LoLBench 20, and SWE-bench Pro 731. `N_ROLLOUTS` is how many attempts each question gets. Default rollout count is 1.
+DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-empty `TASKS` list wins; otherwise one `TASK`; otherwise `N_TASKS` is the first N sorted ids. Full suite sizes are DeepSWE 113, LoLBench 20, and SWE-bench Pro 731. `N_ROLLOUTS` is how many attempts each question gets. Job default is 4.
 
 ## Where a run is stored
 

@@ -21,9 +21,39 @@ HISTORY_NAME = "container_mem_history.jsonl"
 ACTIVE_QUESTION_NAME = "active_question.txt"
 # Used only when a benchmark has no live container sample. DeepSWE and LoLBench
 # follow CPU_LOCK_QTY until docker stats sees an eval container.
+# Conservative per-container estimate when no live/history sample exists.
+# LoLBench Flink/Java images can exceed 6 GB; without a cap, 4× peaks OOM the
+# host and kill the Jenkins agent (durable task exit -1).
 FALLBACK_GB = {
     "swebenchpro": 8,
+    "lolbench": 4.0,
+    "deepswe": 1.5,
 }
+# #region agent log
+_DEBUG_LOG = Path("/home/Toby/Documents/Toby/mac-k3d/.cursor/debug-fcb7a8.log")
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    try:
+        import time
+
+        payload = {
+            "sessionId": "fcb7a8",
+            "runId": os.environ.get("BUILD_NUMBER") or "local",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _DEBUG_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+# #endregion
 _MEM_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]i?B)", re.IGNORECASE)
 _MAIN_RE = re.compile(r"-main-\d+")
 
@@ -243,6 +273,13 @@ def flush_question(
     history = dict(row)
     history["build"] = os.environ.get("BUILD_NUMBER") or "local"
     _append_jsonl(_mem_dir(workdir) / HISTORY_NAME, history)
+    # Drop run-global peak so the next question plans from its own history.
+    peak_path = _mem_dir(workdir) / PEAK_NAME
+    if peak_path.is_file():
+        try:
+            peak_path.unlink()
+        except OSError:
+            pass
     return row
 
 
@@ -275,6 +312,62 @@ def budget_gb(benchmark: str, measured_gb: float | None) -> float | None:
     if measured_gb is not None and measured_gb > 0:
         return measured_gb * MEM_BUFFER
     return FALLBACK_GB.get((benchmark or "deepswe").strip().lower())
+
+
+def history_peak_gb(workdir: str | Path, question: str) -> float | None:
+    """Best prior peak_gb for this question from container_mem_history.jsonl."""
+    if not question:
+        return None
+    path = _mem_dir(workdir) / HISTORY_NAME
+    if not path.is_file():
+        return None
+    best: float | None = None
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                doc = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if doc.get("question") != question:
+                continue
+            sample = usable_sample_gb(doc.get("peak_gb"))
+            if sample is None:
+                continue
+            best = sample if best is None else max(best, sample)
+    except OSError:
+        return None
+    return best
+
+
+def estimate_container_gb(
+    workdir: str | Path,
+    benchmark: str,
+    *,
+    question: str = "",
+    measured_gb: float | None = None,
+) -> float | None:
+    """Prefer live sample, then per-question history, else benchmark fallback.
+
+    When ``question`` is set, skip the run-global noted peak so a heavy prior
+    wave (e.g. Flink) does not pin later light questions to one slot.
+    """
+    live = usable_sample_gb(measured_gb)
+    if live is not None:
+        return live
+    if question:
+        hist = history_peak_gb(workdir, question)
+        if hist is not None:
+            return hist
+    else:
+        noted = usable_sample_gb(noted_peak_gb(workdir, None))
+        if noted is not None:
+            return noted
+        # No question id: still try history is impossible; use fallback.
+    fb = FALLBACK_GB.get((benchmark or "deepswe").strip().lower())
+    return float(fb) if fb is not None else None
 
 
 def ram_slots(benchmark: str, mem_kb: int | None = None, measured_gb: float | None = None) -> int | None:
@@ -314,28 +407,87 @@ def eval_slots(
     mem_kb: int | None = None,
     container_gb: float | None = None,
     measure: bool = False,
+    question: str = "",
 ) -> tuple[int, int]:
-    """Return (EVAL_SLOTS, EVAL_CPUS_EACH). Slots stay at CPU_LOCK_QTY.
+    """Return (EVAL_SLOTS, EVAL_CPUS_EACH).
 
-    A measured container peak is recorded for the report and does not change
-    the slot count. Free disk below MIN_DISK_GB is the only shrink, to 1 slot.
+    Cap slots by free disk and by RAM / per-container budget so a full suite
+    cannot OOM-kill the Jenkins agent (see flink_1 @ ~6.4 GB × 4).
     """
-    del benchmark, mem_kb, container_gb, measure
+    del measure
     slots = max(int(cpu_lock), 1)
-    if resource_cap and not disk_ok(workdir):
-        slots = 1
+    if resource_cap:
+        if not disk_ok(workdir):
+            slots = 1
+        estimated = estimate_container_gb(
+            workdir,
+            benchmark,
+            question=question,
+            measured_gb=container_gb,
+        )
+        ram = ram_slots(benchmark, mem_kb=mem_kb, measured_gb=estimated)
+        if ram is not None:
+            slots = min(slots, ram)
+        # #region agent log
+        _debug_log(
+            "H1",
+            "eval_slots.py:eval_slots",
+            "slot_decision",
+            {
+                "cpu_lock": int(cpu_lock),
+                "benchmark": benchmark,
+                "question": question or None,
+                "estimated_gb": estimated,
+                "ram_slots": ram,
+                "slots": slots,
+                "mem_kb": mem_kb if mem_kb is not None else mem_available_kb(),
+            },
+        )
+        # #endregion
     cpus_each = max(1, int(cpu_lock) // slots)
     return slots, cpus_each
 
 
 def memory_limit_mb(
     mem_kb: int | None,
-    cpu_lock: int,
+    slots: int,
     measured_gb: float | None,
 ) -> int:
-    """No Docker memory cap. A real out-of-memory kill skips that question."""
-    del mem_kb, cpu_lock, measured_gb
-    return 0
+    """Per-container Docker memory cap (MB) from history/estimate, host-capped.
+
+    Prefer ``peak × MEM_BUFFER`` (or benchmark fallback) so light questions get
+    a tight cap and more slots; never exceed the equal host share so a wave
+    cannot OOM-kill the Jenkins agent.
+    """
+    kb = mem_available_kb() if mem_kb is None else mem_kb
+    if kb is None or kb <= 0:
+        return 0
+    n = max(int(slots), 1)
+    avail_mb = int(kb / 1024) - int(HOST_RESERVE_GB * 1024)
+    if avail_mb < 512:
+        host_share = 512
+    else:
+        host_share = max(512, avail_mb // n)
+    need_mb = host_share
+    if measured_gb is not None and measured_gb > 0:
+        need_mb = max(512, int(measured_gb * MEM_BUFFER * 1024 + 0.999))
+    per = min(need_mb, host_share)
+    # #region agent log
+    _debug_log(
+        "H2",
+        "eval_slots.py:memory_limit_mb",
+        "memory_cap",
+        {
+            "slots": n,
+            "avail_mb": avail_mb,
+            "measured_gb": measured_gb,
+            "need_mb": need_mb,
+            "host_share": host_share,
+            "per_mb": per,
+        },
+    )
+    # #endregion
+    return int(per)
 
 
 def format_task_ids(task_ids: list[str]) -> str:
@@ -345,6 +497,146 @@ def format_task_ids(task_ids: list[str]) -> str:
     if len(ids) <= 8:
         return ",".join(ids)
     return f"{ids[0]}..{ids[-1]} (full list in selected_tasks.txt)"
+
+
+_ATTEMPT_RE = re.compile(r"_a(\d+)(?:_|$)")
+
+
+def attempt_index_from_path(path: Path) -> int | None:
+    """1-based attempt from Harbor job path segments like ``task_icode_23_a02``."""
+    for part in path.parts:
+        match = _ATTEMPT_RE.search(part)
+        if match:
+            number = int(match.group(1))
+            if number >= 1:
+                return number
+    return None
+
+
+def list_harbor_build_dirs(workdir: str | Path) -> list[Path]:
+    runs = _mem_dir(workdir) / "harbor_runs"
+    if not runs.is_dir():
+        return []
+    found: list[Path] = []
+    try:
+        for child in runs.iterdir():
+            if child.is_dir() and child.name.startswith("jenkins-"):
+                found.append(child)
+    except OSError:
+        return []
+    return found
+
+
+def resolve_resume_build(workdir: str | Path, current_build: str = "") -> str:
+    """Pick which harbor_runs/jenkins-* tree to seed from.
+
+    Prefer ``RESUME_FROM`` / explicit current build when that tree exists; else the
+    newest prior ``jenkins-*`` dir (typical after agent death + a new build number).
+    """
+    explicit = (os.environ.get("RESUME_FROM") or "").strip()
+    if explicit:
+        name = explicit if explicit.startswith("jenkins-") else f"jenkins-{explicit}"
+        path = _mem_dir(workdir) / "harbor_runs" / name
+        if path.is_dir():
+            return name
+    cur = (current_build or os.environ.get("BUILD_NUMBER") or "").strip()
+    if cur and cur != "local":
+        name = cur if cur.startswith("jenkins-") else f"jenkins-{cur}"
+        path = _mem_dir(workdir) / "harbor_runs" / name
+        if path.is_dir() and any(path.rglob("reward.json")):
+            return name
+    builds = list_harbor_build_dirs(workdir)
+    if not builds:
+        return ""
+
+    def _mtime(path: Path) -> float:
+        newest = -1.0
+        try:
+            newest = max(newest, path.stat().st_mtime)
+        except OSError:
+            pass
+        try:
+            for reward in path.rglob("reward.json"):
+                try:
+                    newest = max(newest, reward.stat().st_mtime)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        return newest
+
+    # Prefer a prior build (not the empty new jenkins-$BUILD_NUMBER).
+    candidates = builds
+    if cur and cur != "local":
+        skip = cur if cur.startswith("jenkins-") else f"jenkins-{cur}"
+        prior = [p for p in builds if p.name != skip]
+        if prior:
+            candidates = prior
+    best = max(candidates, key=_mtime)
+    return best.name
+
+
+def completed_units(
+    workdir: str | Path,
+    task_ids: list[str],
+    n_rollouts: int,
+    *,
+    build: str = "",
+) -> list[str]:
+    """Units ``tid:attempt`` that already have reward.json under harbor_runs/.
+
+    When ``build`` is set (e.g. ``jenkins-23``), only that jobs tree is scanned so
+    an aborted suite does not inherit rewards from older campaigns.
+    """
+    runs = _mem_dir(workdir) / "harbor_runs"
+    if build:
+        name = build if build.startswith("jenkins-") else f"jenkins-{build}"
+        runs = runs / name
+    if not runs.is_dir() or n_rollouts < 1:
+        return []
+    found: set[str] = set()
+    want = {tid for tid in task_ids if tid}
+    try:
+        for reward in runs.rglob("reward.json"):
+            if not reward.is_file():
+                continue
+            attempt = attempt_index_from_path(reward)
+            if attempt is None or attempt > n_rollouts:
+                continue
+            tid = ""
+            for part in reward.parts:
+                if part in want:
+                    tid = part
+                    break
+            if not tid:
+                continue
+            found.add(f"{tid}:{attempt}")
+    except OSError:
+        return []
+    out: list[str] = []
+    for tid in task_ids:
+        if not tid:
+            continue
+        for attempt in range(1, n_rollouts + 1):
+            key = f"{tid}:{attempt}"
+            if key in found:
+                out.append(key)
+    return out
+
+
+def remaining_questions(
+    task_ids: list[str],
+    n_rollouts: int,
+    assigned: set[tuple[str, int]] | list[tuple[str, int]],
+) -> list[str]:
+    taken = set(assigned)
+    out: list[str] = []
+    for tid in task_ids:
+        if not tid:
+            continue
+        if any((tid, attempt) not in taken for attempt in range(1, n_rollouts + 1)):
+            out.append(tid)
+    return out
 
 
 def parallel_report_line(
@@ -458,22 +750,61 @@ def main() -> int:
     sample_p.add_argument("--slots", type=int, default=0)
     sample_p.add_argument("--memory-mb", type=int, default=0)
     sample_p.add_argument("--benchmark", default=os.environ.get("BENCHMARK", "deepswe"))
+    resume_p = sub.add_parser("resume-seed")
+    resume_p.add_argument("--tasks-file", required=True)
+    resume_p.add_argument("--n-rollouts", type=int, required=True)
+    resume_p.add_argument("--workdir", default=os.environ.get("WORKDIR", "."))
+    resume_p.add_argument(
+        "--build",
+        default="",
+        help="harbor_runs/jenkins-N tree to seed from (default: resolve_resume_build)",
+    )
     args = ap.parse_args()
     cap = os.environ.get("EVAL_RESOURCE_CAP", "1") != "0"
     if args.cmd == "slots":
         sample = measure_container_gb() if cap else None
+        question = (args.question or "").strip()
+        estimated = (
+            estimate_container_gb(
+                args.workdir,
+                args.benchmark,
+                question=question,
+                measured_gb=sample,
+            )
+            if cap
+            else None
+        )
         slots, cpus = eval_slots(
             args.cpu,
             args.benchmark,
             args.workdir,
             resource_cap=cap,
+            container_gb=sample,
+            question=question,
         )
+        mem_mb = memory_limit_mb(None, slots, estimated) if cap else 0
         print(f"EVAL_SLOTS={slots}")
         print(f"EVAL_CPUS_EACH={cpus}")
         print("EVAL_FITS=1")
-        print("EVAL_MEMORY_MB=0")
-        if args.question:
-            observe_question(args.workdir, args.question, sample, slots, 0, args.benchmark)
+        print(f"EVAL_MEMORY_MB={mem_mb}")
+        # #region agent log
+        _debug_log(
+            "H3",
+            "eval_slots.py:main.slots",
+            "export_env",
+            {
+                "EVAL_SLOTS": slots,
+                "EVAL_CPUS_EACH": cpus,
+                "EVAL_MEMORY_MB": mem_mb,
+                "question": question or None,
+                "sample_gb": sample,
+                "estimated_gb": estimated,
+                "cap": cap,
+            },
+        )
+        # #endregion
+        if question:
+            observe_question(args.workdir, question, sample, slots, mem_mb, args.benchmark)
         return 0
     if args.cmd == "sample":
         if not cap:
@@ -489,14 +820,53 @@ def main() -> int:
         row = flush_question(args.workdir, args.question, args.slots, args.memory_mb, args.benchmark)
         print(json.dumps(row))
         return 0
+    if args.cmd == "resume-seed":
+        ids = _read_ids(args.tasks_file)
+        build = (args.build or "").strip() or resolve_resume_build(args.workdir)
+        done = completed_units(args.workdir, ids, args.n_rollouts, build=build)
+        assigned_pairs = parse_pairs(",".join(done))
+        remaining = remaining_questions(ids, args.n_rollouts, assigned_pairs)
+        print(f"RESUME_BUILD={build}")
+        print(f"ASSIGNED={','.join(done)}")
+        print(f"RESUME_DONE={len(done)}")
+        print(f"RESUME_REMAINING={','.join(remaining)}")
+        # #region agent log
+        _debug_log(
+            "H4",
+            "eval_slots.py:main.resume-seed",
+            "resume_seed",
+            {
+                "build": build or None,
+                "done": len(done),
+                "remaining_n": len(remaining),
+                "remaining_head": remaining[:8],
+            },
+        )
+        # #endregion
+        return 0
     if args.cmd == "report":
         ids = _read_ids(args.tasks_file)
         measured = noted_peak_gb(args.workdir, measure_container_gb()) if cap else None
+        upcoming = ids[0] if ids else ""
+        # Prefer history for the first question; ignore stale global peak.
+        estimated = (
+            estimate_container_gb(
+                args.workdir,
+                args.benchmark,
+                question=upcoming,
+                measured_gb=measure_container_gb() if cap else None,
+            )
+            if cap
+            else None
+        )
+        del measured
         slots, _cpus = eval_slots(
             args.cpu,
             args.benchmark,
             args.workdir,
             resource_cap=cap,
+            container_gb=estimated,
+            question=upcoming,
         )
         print(
             parallel_report_line(
@@ -504,8 +874,8 @@ def main() -> int:
                 args.n_rollouts,
                 slots,
                 mem_available_kb(),
-                measured,
-                None,
+                estimated,
+                budget_gb(args.benchmark, estimated) if cap else None,
             )
         )
         return 0

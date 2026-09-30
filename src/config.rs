@@ -219,23 +219,37 @@ pub struct JenkinsJobConfig {
     /// First N sorted questions when `default_task` and `default_tasks` are empty.
     #[serde(default = "default_n_tasks_one")]
     pub default_n_tasks: u32,
+    /// Harbor attempts per question (`N_ROLLOUTS` job param default).
+    #[serde(default = "default_n_rollouts_four")]
+    pub default_n_rollouts: u32,
     /// Explicit question ids (`mac-k3d set --tasks a,b`). Overrides N and single TASK.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub default_tasks: Vec<String>,
+    /// Git ref kind for job param default: `branch` | `tag` | `commit` | `pr`.
+    #[serde(default = "default_icode_git_ref_kind_pr")]
+    pub default_icode_git_ref_kind: String,
 }
 
 fn default_n_tasks_one() -> u32 {
     1
 }
 
+fn default_n_rollouts_four() -> u32 {
+    4
+}
+
+fn default_icode_git_ref_kind_pr() -> String {
+    "pr".into()
+}
+
 impl Default for JenkinsJobConfig {
     fn default() -> Self {
         Self {
-            default_task: "ruff_1".into(),
-            default_eval_mode: "binary".into(),
+            default_task: String::new(),
+            default_eval_mode: "git".into(),
             default_icode_release: String::new(),
-            default_icode_git_url: String::new(),
-            default_icode_git_ref: "main".into(),
+            default_icode_git_url: "https://gitcode.com/michaelling/jiuwenicode".into(),
+            default_icode_git_ref: "2".into(),
             default_icode_args: String::new(),
             default_binary_target: String::new(),
             default_honeyc_bin: String::new(),
@@ -246,7 +260,9 @@ impl Default for JenkinsJobConfig {
             default_deepseek_model: String::new(),
             default_benchmark: String::new(),
             default_n_tasks: 1,
+            default_n_rollouts: 4,
             default_tasks: Vec::new(),
+            default_icode_git_ref_kind: "pr".into(),
         }
     }
 }
