@@ -12,6 +12,9 @@ Used by `mac-k3d eval` and Jenkins jobs `deepswe_one_task`, `lolbench_one_task`,
 | `anticheat_similarity.py` | Line and path Jaccard of a patch against `solution/solution.patch`, over added non-test, non-generated, non-trivial lines |
 | `anticheat_transcript.py` | Rule scan of `events.jsonl` tool calls (plain or gzipped); excerpts of at most 200 characters with secrets masked |
 | `anticheat_verdict.py` | P7: `agent/anticheat.json` per trial and `anticheat/{summary.json,report.md}`; `--run-dir` rescores an old run into `artifact.anticheat.json`. Rules in `../config/anticheat-v1.json` |
+| `canary_harbor_agent.py` | Harbor `CanaryAgent(ICodeAgent)`: same mounts, env and flags as iCode, runs `canary_probe.sh` instead of the model (P5 `CANARY`, `../stages/p5c_canary.sh`) |
+| `canary_probe.sh` | Runs in the task container: `home <tag>`, `probe` (egress, gold-file search, mount write, repo history, env names) and `mount` (as root); writes facts to `/logs/agent/canary*.json`, always exits 0 |
+| `canary_verdict.py` | `spec`: host lists and gold file names for one task (never gold content). `summarize`: pass/warn/fail per check and task into `summary.json` and `report.md`; exit 2 on a failed task. Rules in `../config/canary-v1.json` |
 | `harness_labels.py` | Loads `../config/harness/icode-pr2-eea9d66.yaml` (`tuned_on`, `hinted`); `generate` rebuilds it from the improve loop and iCode's matchers, read-only |
 | `eval_slots.py` | P5/P6 slot count, per-question history mem cap, resume-seed, one-question-at-a-time order ([optimization.md](../../docs/optimization.md)) |
 | `eval_progress.py` | P5 `progress.json` and the 60s heartbeat (`done/needed`, inflight, slots) |

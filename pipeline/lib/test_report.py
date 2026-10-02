@@ -48,6 +48,16 @@ def valid_isolation() -> dict:
             "statuses": {"clean": 1},
             "report_sha256": "c" * 64,
         },
+        "canary": {
+            "version": "mac-k3d-canary-v1",
+            "status": "pass",
+            "node": "worker-1",
+            "tasks": ["alpha"],
+            "failed_tasks": [],
+            "warn_tasks": [],
+            "counts": {"tasks": 1, "pass": 1, "fail": 0},
+            "summary_sha256": "d" * 64,
+        },
     }
 
 
@@ -2944,6 +2954,18 @@ class ProvenanceTests(unittest.TestCase):
         del iso["leak_scan"]
         self.assertTrue(any("missing eval_protocol.isolation.leak_scan" in err for err in official_isolation_errors(iso)))
 
+    def test_official_isolation_requires_passing_canary(self):
+        from check_report import official_isolation_errors
+
+        self.assertEqual(official_isolation_errors(valid_isolation()), [])
+        iso = valid_isolation()
+        del iso["canary"]
+        self.assertTrue(any("missing eval_protocol.isolation.canary" in err for err in official_isolation_errors(iso)))
+        iso = valid_isolation()
+        iso["canary"]["status"] = "fail"
+        iso["canary"]["failed_tasks"] = ["alpha"]
+        self.assertTrue(any("canary.status must be pass" in err for err in official_isolation_errors(iso)))
+
 
 class AgentIsolationTests(unittest.TestCase):
     SENTINEL_KEY = "sk-sentinel-deepseek-0000"
@@ -3151,6 +3173,42 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertEqual(merged["leak_scan"]["statuses"], {"clean": 1, "hit": 2})
             self.assertEqual(len(merged["leak_scan"]["report_sha256"]), 64)
 
+    def test_record_canary_merges_summary_into_isolation(self):
+        from provenance import isolation_lines, isolation_view, record_canary
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "inputs.json"
+            inputs.write_text(json.dumps({"isolation": {"mode": "git", "leak_scan": {"scanner": "s"}}}), encoding="utf-8")
+            summary = Path(tmp) / "summary.json"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "schema": "mac-k3d-canary-v1",
+                        "config_version": "mac-k3d-canary-v1",
+                        "node": "worker-1",
+                        "status": "pass",
+                        "counts": {"tasks": 2, "pass": 2, "fail": 0},
+                        "failed_tasks": [],
+                        "warn_tasks": ["cpython_5"],
+                        "tasks": {"fastapi_1": {}, "cpython_5": {}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            merged = record_canary(inputs, summary)["isolation"]
+            self.assertEqual(merged["leak_scan"], {"scanner": "s"})
+            canary = merged["canary"]
+            self.assertEqual(canary["status"], "pass")
+            self.assertEqual(canary["tasks"], ["cpython_5", "fastapi_1"])
+            self.assertEqual(canary["warn_tasks"], ["cpython_5"])
+            self.assertEqual(canary["counts"], {"tasks": 2, "pass": 2, "fail": 0})
+            self.assertEqual(len(canary["summary_sha256"]), 64)
+            lines = isolation_lines(isolation_view(merged))
+            self.assertIn(
+                "Canary: mac-k3d-canary-v1 · pass · tasks cpython_5, fastapi_1 · failed none · warnings cpython_5",
+                lines,
+            )
+
     def test_sanitizer_skips_tree_without_sandbox(self):
         from icode_sanitize import sanitize_tree
 
@@ -3290,7 +3348,9 @@ class AgentIsolationTests(unittest.TestCase):
             inside.mkdir()
             self.assertTrue(any("overlaps" in err for err in check_mounts(build_mounts(inside), inside, forbid)))
 
-    def _run_p5_dry(self, tmp: Path, host_root: Path | None = None) -> tuple[subprocess.CompletedProcess[str], Path]:
+    def _run_p5_dry(
+        self, tmp: Path, host_root: Path | None = None, extra_env: dict | None = None
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
         work = tmp / "eval"
         task = work / "deep-swe" / "tasks" / "alpha"
         self._write(task / "task.toml", 'docker_image = "example/alpha:1"\n')
@@ -3329,6 +3389,8 @@ class AgentIsolationTests(unittest.TestCase):
             "MAC_K3D_GITHUB_PAT",
             "MAC_K3D_GITCODE_PAT",
             "MAC_K3D_EVAL_OUTPUT",
+            "CANARY",
+            "CANARY_ALLOW_HOST",
         ):
             env.pop(key, None)
         env.update(
@@ -3347,6 +3409,7 @@ class AgentIsolationTests(unittest.TestCase):
                 "MAC_K3D_P5_DRY_RUN": "1",
             }
         )
+        env.update(extra_env or {})
         proc = subprocess.run(
             ["bash", str(ROOT / "pipeline" / "stages" / "p5_harness.sh")],
             capture_output=True,
@@ -3385,6 +3448,78 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertEqual(isolation["leak_scan"]["statuses"], {"too_small": 1})
         stage = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertIn("unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT", stage)
+
+    @staticmethod
+    def _dry_line(stdout: str, prefix: str) -> list[str]:
+        line = next((ln for ln in stdout.splitlines() if ln.startswith(prefix)), "")
+        return line.split(": ", 1)[1].split() if ": " in line else []
+
+    @staticmethod
+    def _without(tokens: list[str], flags: dict[str, int]) -> list[str]:
+        out, skip = [], 0
+        for tok in tokens:
+            if skip:
+                skip -= 1
+                continue
+            if tok in flags:
+                skip = flags[tok]
+                continue
+            out.append(tok)
+        return out
+
+    def test_p5_canary_runs_with_icode_flags_mounts_and_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, work = self._run_p5_dry(Path(tmp), extra_env={"CANARY": "only"})
+            output = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 0, output)
+            icode = self._dry_line(proc.stdout, "P5 harbor dry-run")
+            canary = self._dry_line(proc.stdout, "P5 canary dry-run")
+            self.assertTrue(icode and canary, output)
+            self.assertIn("canary_harbor_agent:CanaryAgent", canary)
+            self.assertIn("--disable-verification", canary)
+            self.assertIn("DEEPSEEK_API_KEY=***", canary)
+            self.assertNotIn(self.SENTINEL_KEY, output)
+            spec_arg = canary[canary.index("--ak") + 1]
+            self.assertTrue(spec_arg.startswith("spec="), spec_arg)
+            spec = json.loads(Path(spec_arg[len("spec="):]).read_text(encoding="utf-8"))
+            self.assertEqual(spec["task"], "alpha")
+            self.assertIn({"kind": "model", "host": "api.deepseek.com"}, spec["hosts"])
+            self.assertIn("jenkins-dry", spec_arg)
+            differ = {"-a": 1, "--job-name": 1, "--jobs-dir": 1}
+            self.assertEqual(
+                self._without(canary, {**differ, "--ak": 1, "--disable-verification": 0}),
+                self._without(icode, differ),
+                "the canary must get exactly iCode's flags, mounts and agent env",
+            )
+            self.assertTrue((work / "canary" / "jenkins-dry" / "alpha" / "canary_spec.json").is_file())
+
+    def test_p5_canary_off_prints_no_canary_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, _ = self._run_p5_dry(Path(tmp))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertNotIn("P5 canary dry-run", proc.stdout)
+
+    def test_p5_canary_allow_host_opens_one_host_for_the_canary_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, _ = self._run_p5_dry(Path(tmp), extra_env={"CANARY": "on", "CANARY_ALLOW_HOST": "github.com"})
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            icode = self._dry_line(proc.stdout, "P5 harbor dry-run")
+            canary = self._dry_line(proc.stdout, "P5 canary dry-run")
+            self.assertIn("github.com", canary)
+            self.assertNotIn("github.com", icode)
+
+    def test_p5_official_refuses_canary_off_and_allow_host(self):
+        cases = (
+            ({"OFFICIAL": "1", "CANARY": "off"}, "OFFICIAL=1 runs the isolation canary"),
+            ({"OFFICIAL": "1", "CANARY_ALLOW_HOST": "github.com"}, "OFFICIAL=1 refuses it"),
+            ({"CANARY": "sometimes"}, "CANARY must be official, on, only or off"),
+        )
+        for extra, message in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                proc, _ = self._run_p5_dry(Path(tmp), extra_env=extra)
+                self.assertNotEqual(proc.returncode, 0, (extra, proc.stdout))
+                self.assertIn(message, proc.stderr, extra)
+                self.assertNotIn("P5 harbor dry-run", proc.stdout)
 
     def test_p5_refuses_icode_root_that_contains_benchmark(self):
         with tempfile.TemporaryDirectory() as tmp:

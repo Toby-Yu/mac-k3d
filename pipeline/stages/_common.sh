@@ -63,6 +63,24 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# Isolation canary (P0.6). CANARY=official (default) runs it on official runs only;
+# on runs it once before the rollouts; only runs it on every selected task and
+# stops after P5.
+canary_mode() {
+  local raw
+  raw="$(printf '%s' "${CANARY:-official}" | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    official)
+      case "$(printf '%s' "${OFFICIAL:-0}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) echo on ;;
+        *) echo off ;;
+      esac
+      ;;
+    on|only|off) echo "$raw" ;;
+    *) return 1 ;;
+  esac
+}
+
 # Check out url at sha. A directory already at that commit is kept.
 # Any other commit is fetched and force-detached so the pin cannot drift.
 pin_benchmark_sha() {

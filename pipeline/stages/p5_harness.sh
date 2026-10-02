@@ -78,6 +78,12 @@ PY
 }
 
 progress 55 "P5: Harbor+iCode harness arm (benchmark=${BENCHMARK:-deepswe} n=$N_TASKS)"
+CANARY_MODE="$(canary_mode)" || die "CANARY must be official, on, only or off (got ${CANARY:-})"
+if icode_official_enabled; then
+  [ "$CANARY_MODE" != off ] || die "OFFICIAL=1 runs the isolation canary; remove CANARY=off"
+  [ -z "${CANARY_ALLOW_HOST:-}" ] || die "CANARY_ALLOW_HOST breaks isolation on purpose; OFFICIAL=1 refuses it"
+fi
+CANARY_DIR="$WORKDIR/canary/jenkins-${BUILD_NUMBER:-local}"
 TASKS_DIR="$(benchmark_tasks_dir)"
 [ -d "$TASKS_DIR" ] || die "run P2 first (missing $TASKS_DIR)"
 [ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
@@ -348,29 +354,66 @@ unit_jobs=""
 unit_run_dir=""
 unit_task_path=""
 unit_log=""
+
+# LoLBench runs Harbor from its checkout with a relative task path.
+unit_location() {
+  unit_run_dir="$WORKDIR"
+  unit_task_path="$TASKS_DIR/$1"
+  if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
+    unit_run_dir="$LOLBENCH_DIR"
+    unit_task_path="harbor_tasks/$1"
+  fi
+}
+
 build_unit_cmd() {
   local tid="$1" attempt="$2" job_name att_tag
   unit_jobs="$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}/${tid}"
   att_tag="$(printf '%02d' "$attempt")"
   job_name="${tid}_icode_${BUILD_NUMBER:-local}_a${att_tag}"
-  unit_run_dir="$WORKDIR"
-  unit_task_path="$TASKS_DIR/$tid"
   if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
     job_name="${tid}_icode_union_${BUILD_NUMBER:-local}_a${att_tag}"
-    unit_run_dir="$LOLBENCH_DIR"
-    unit_task_path="harbor_tasks/${tid}"
   fi
+  unit_location "$tid"
   unit_log="$unit_jobs/harbor-a${att_tag}.log"
   cmd=(harbor run)
   cmd+=(-p "$unit_task_path")
   cmd+=(-a "icode_harbor_agent:ICodeAgent")
+  cmd+=(--job-name "$job_name")
+  cmd+=(--jobs-dir "$unit_jobs")
+  cmd+=(--no-delete)
+  append_agent_flags "$tid"
+}
+
+# The canary (P0.6) runs in iCode's sandbox: only the agent, job location, its
+# spec and the skipped verifier differ. CANARY_ALLOW_HOST opens one more host for
+# the canary alone, to prove that it notices.
+build_canary_cmd() {
+  local tid="$1" spec="$2"
+  unit_location "$tid"
+  unit_jobs="$CANARY_DIR/$tid"
+  unit_log="$unit_jobs/harbor.log"
+  cmd=(harbor run)
+  cmd+=(-p "$unit_task_path")
+  cmd+=(-a "canary_harbor_agent:CanaryAgent")
+  cmd+=(--job-name "${tid}_canary_${BUILD_NUMBER:-local}")
+  cmd+=(--jobs-dir "$unit_jobs")
+  cmd+=(--no-delete)
+  append_agent_flags "$tid"
+  cmd+=(--ak "spec=$spec")
+  cmd+=(--disable-verification)
+  if [ -n "${CANARY_ALLOW_HOST:-}" ]; then
+    cmd+=(--allow-agent-host "$CANARY_ALLOW_HOST")
+  fi
+}
+
+# Everything the agent sees: model, egress allowlist, resources, env file,
+# verifier env, mounts and agent env. Shared by iCode and the canary.
+append_agent_flags() {
+  local tid="$1"
   cmd+=(-m "${DEEPSEEK_MODEL}")
   cmd+=(--allow-agent-host api.deepseek.com)
   cmd+=(--allow-agent-host api.deepseek.ai)
   cmd+=(--agent-setup-timeout-multiplier 10)
-  cmd+=(--job-name "$job_name")
-  cmd+=(--jobs-dir "$unit_jobs")
-  cmd+=(--no-delete)
   cmd+=(-n 1)
   cmd+=(-k 1)
   cmd+=(--override-cpus "$EVAL_CPUS_EACH")
@@ -561,18 +604,96 @@ reap_finished() {
   return "$waited"
 }
 
-# MAC_K3D_P5_DRY_RUN=1: print the first unit's harbor command with secret values masked; run nothing.
-if [ "${MAC_K3D_P5_DRY_RUN:-0}" = 1 ]; then
-  live_slots || die "eval_slots.py failed"
-  build_unit_cmd "${TASK_IDS[0]}" 1
-  masked=()
+masked_cmd() {
+  local arg
+  local -a masked=()
   for arg in "${cmd[@]}"; do
     case "$arg" in
       *_API_KEY=* | *_TOKEN=* | *_PAT=*) arg="${arg%%=*}=***" ;;
     esac
     masked+=("$arg")
   done
-  echo "P5 harbor dry-run (cwd $unit_run_dir): ${masked[*]}"
+  printf '%s' "${masked[*]}"
+}
+
+# Host lists and gold file names for one task; never gold content.
+canary_spec() {
+  local tid="$1" spec="$CANARY_DIR/$1/canary_spec.json"
+  mkdir -p "$CANARY_DIR/$tid"
+  python3 "$PIPELINE_LIB/canary_verdict.py" spec \
+    --task-dir "$TASKS_DIR/$tid" \
+    --benchmark "${BENCHMARK:-deepswe}" \
+    --out "$spec" >&2 || die "canary spec failed for $tid"
+  printf '%s\n' "$spec"
+}
+
+# One canary trial per target task, one after another. A failure stops the run.
+run_canary() {
+  local tid spec rc
+  local -a targets=() expect=()
+  if [ "$CANARY_MODE" = only ]; then
+    targets=("${TASK_IDS[@]}")
+  else
+    targets=("${TASK_IDS[0]}")
+  fi
+  rm -rf "$CANARY_DIR"
+  mkdir -p "$CANARY_DIR"
+  if [ -n "${CANARY_ALLOW_HOST:-}" ]; then
+    echo "WARNING: CANARY_ALLOW_HOST=$CANARY_ALLOW_HOST opens that host for the canary only; the canary must fail"
+  fi
+  live_slots || die "eval_slots.py failed"
+  for tid in "${targets[@]}"; do
+    ensure_task_ready "$tid"
+    spec="$(canary_spec "$tid")"
+    build_canary_cmd "$tid" "$spec"
+    echo "P5 canary: task=$tid -a canary_harbor_agent:CanaryAgent (iCode's flags, mounts and env) log=$unit_log"
+    set +e
+    (
+      cd "$unit_run_dir"
+      export PYTHONPATH="$PIPELINE_LIB${PYTHONPATH:+:$PYTHONPATH}"
+      export PYTHONUNBUFFERED=1
+      "${cmd[@]}"
+    ) >"$unit_log" 2>&1
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+      echo "WARNING: canary harbor run exited $rc for $tid (see $unit_log)"
+    fi
+    expect+=(--task "$tid")
+  done
+  set +e
+  python3 "$PIPELINE_LIB/canary_verdict.py" summarize \
+    --jobs-dir "$CANARY_DIR" \
+    --out-dir "$CANARY_DIR" \
+    "${expect[@]}"
+  rc=$?
+  set -e
+  case "$rc" in
+    0 | 2) ;;
+    *) die "canary verdict failed (exit $rc)" ;;
+  esac
+  python3 "$PIPELINE_LIB/provenance.py" record-canary --inputs "$PROTOCOL_INPUTS" --summary "$CANARY_DIR/summary.json"
+  [ "$rc" = 0 ] || die "isolation canary failed (see $CANARY_DIR/report.md); the run stops here"
+  echo "P5 canary: pass (${#targets[@]} tasks, report $CANARY_DIR/report.md)"
+}
+
+# MAC_K3D_P5_DRY_RUN=1: print the first unit's harbor command with secret values masked; run nothing.
+if [ "${MAC_K3D_P5_DRY_RUN:-0}" = 1 ]; then
+  live_slots || die "eval_slots.py failed"
+  build_unit_cmd "${TASK_IDS[0]}" 1
+  echo "P5 harbor dry-run (cwd $unit_run_dir): $(masked_cmd)"
+  if [ "$CANARY_MODE" != off ]; then
+    build_canary_cmd "${TASK_IDS[0]}" "$(canary_spec "${TASK_IDS[0]}")"
+    echo "P5 canary dry-run (cwd $unit_run_dir): $(masked_cmd)"
+  fi
+  exit 0
+fi
+
+if [ "$CANARY_MODE" != off ]; then
+  run_canary
+fi
+if [ "$CANARY_MODE" = only ]; then
+  progress 70 "P5 canary only: pass; no rollouts (report $CANARY_DIR/report.md)"
   exit 0
 fi
 

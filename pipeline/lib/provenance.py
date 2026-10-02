@@ -390,6 +390,31 @@ def record_leakscan(inputs: Path, report: Path) -> dict:
     return doc
 
 
+def canary_record(summary: Path) -> dict:
+    doc = _load_json(summary)
+    counts = doc.get("counts") if isinstance(doc.get("counts"), dict) else {}
+    tasks = doc.get("tasks") if isinstance(doc.get("tasks"), dict) else {}
+    return {
+        "version": str(doc.get("config_version") or ""),
+        "status": str(doc.get("status") or ""),
+        "node": str(doc.get("node") or ""),
+        "tasks": sorted(str(tid) for tid in tasks),
+        "failed_tasks": sorted(str(t) for t in doc.get("failed_tasks") or []),
+        "warn_tasks": sorted(str(t) for t in doc.get("warn_tasks") or []),
+        "counts": {k: v for k, v in counts.items() if isinstance(v, int) and not isinstance(v, bool)},
+        "summary_sha256": sha256_file(summary) if summary.is_file() else "",
+    }
+
+
+def record_canary(inputs: Path, summary: Path) -> dict:
+    doc = _load_json(inputs)
+    isolation = doc.get("isolation") if isinstance(doc.get("isolation"), dict) else {}
+    isolation["canary"] = canary_record(summary)
+    doc["isolation"] = isolation
+    _write_json(inputs, doc)
+    return doc
+
+
 def write_protocol_inputs(
     *,
     out: Path,
@@ -454,6 +479,7 @@ def isolation_view(isolation: object) -> dict | None:
     leak = isolation.get("leak_scan") if isinstance(isolation.get("leak_scan"), dict) else {}
     statuses = leak.get("statuses") if isinstance(leak.get("statuses"), dict) else {}
     hits = leak.get("hit_tasks") if isinstance(leak.get("hit_tasks"), list) else []
+    canary = isolation.get("canary") if isinstance(isolation.get("canary"), dict) else {}
     count = mount.get("count")
     return {
         "mode": str(isolation.get("mode") or ""),
@@ -468,6 +494,11 @@ def isolation_view(isolation: object) -> dict | None:
         "leak_scanner": str(leak.get("scanner") or ""),
         "leak_hits": [str(tid) for tid in hits],
         "leak_statuses": ", ".join(f"{name} {num}" for name, num in sorted(statuses.items())),
+        "canary_version": str(canary.get("version") or ""),
+        "canary_status": str(canary.get("status") or ""),
+        "canary_tasks": [str(t) for t in canary.get("tasks") or []],
+        "canary_failed": [str(t) for t in canary.get("failed_tasks") or []],
+        "canary_warn": [str(t) for t in canary.get("warn_tasks") or []],
     }
 
 
@@ -485,6 +516,14 @@ def isolation_lines(view: dict | None) -> list[str]:
     if view["leak_scanner"]:
         hits = ", ".join(view["leak_hits"]) if view["leak_hits"] else "none"
         lines.append(f"Leak scan: {view['leak_scanner']} · hit tasks {hits} · {_cell(view['leak_statuses'])}")
+    if view.get("canary_version"):
+        tasks = ", ".join(view["canary_tasks"]) or "-"
+        failed = ", ".join(view["canary_failed"]) or "none"
+        warned = ", ".join(view["canary_warn"]) or "none"
+        lines.append(
+            f"Canary: {view['canary_version']} · {_cell(view['canary_status'])} · tasks {tasks} · "
+            f"failed {failed} · warnings {warned}"
+        )
     return lines
 
 
@@ -620,6 +659,10 @@ def main(argv: list[str] | None = None) -> int:
     leak.add_argument("--inputs", required=True)
     leak.add_argument("--report", required=True)
 
+    canary = sub.add_parser("record-canary")
+    canary.add_argument("--inputs", required=True)
+    canary.add_argument("--summary", required=True)
+
     args = parser.parse_args(argv)
     if args.cmd == "assert-count":
         assert_task_count(Path(args.tasks_dir), args.expected)
@@ -646,6 +689,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "record-leakscan":
         record_leakscan(Path(args.inputs), Path(args.report))
+        return 0
+    if args.cmd == "record-canary":
+        record_canary(Path(args.inputs), Path(args.summary))
         return 0
     record_task_image(Path(args.inputs), args.task_id, Path(args.task_toml))
     return 0

@@ -31,13 +31,25 @@ A score measures the iCode harness only if every run sees the same rules. So eve
 | Leak scan | Gold lines of every selected task are searched in the mounted tree (`anticheat_leakscan.json`). `OFFICIAL=1` stops on a hit; smoke runs warn | `anticheat_leakscan.py` |
 | Secrets | Only `DEEPSEEK_API_KEY` reaches the agent. Clone tokens are unset before Harbor and never written to `.harbor-env` | `p5_harness.sh` |
 | Anti-cheat verdict | P7 gives every rollout `clean`, `flagged` or `rejected` from line/path Jaccard against the gold patch and a transcript scan (mounted-runtime reads, filesystem searches, network and retrieval tools, git archaeology, gold and grader paths). P8 scores `rejected` as unresolved with F2P/P2P zeroed, so `artifact["icode"]` is official and `artifact["icode_raw"]` keeps the raw numbers. Thresholds and rules: `pipeline/config/anticheat-v1.json`; reviewer decisions: `anticheat_overrides.json`. `OFFICIAL=1` requires the verdicts | `anticheat_verdict.py` |
+| Isolation canary | Before the rollouts, P5 runs `CanaryAgent` with iCode's exact mounts, env and Harbor flags, but no model. In each task container it probes 13 source hosts (must be blocked), the model API (must answer), the task's declared hosts (a reached one warns), a filesystem search for the task's gold file names outside the repo, writes to `/opt/icode-host` as the agent and as root, git history beyond `HEAD`, env names that look like secrets, `PYTHONPATH`/`VIRTUAL_ENV`, and the iCode home before and after install. Any failed check stops the run before a token is spent. `OFFICIAL=1` requires it | `canary_verdict.py`, `canary_probe.sh` |
 | Model protocol | Same `ICODE_PROVIDER`, `ICODE_REASONING_EFFORT` and `ICODE_API_BASE` defaults for every suite | `p5_harness.sh` |
 
 `ICODE_SOURCELESS_STDLIB` defaults to on. Setting it to `0`/`false`/`no`/`off` is only for a non-official debugging run: P5 prints a warning that the run is not comparable, and `OFFICIAL=1` refuses it. Any other value keeps sourceless on.
 
+The canary runs on the Jenkins parameter `CANARY`:
+
+- `official` (default): on when `OFFICIAL=1`, off for smoke runs.
+- `on`: run it on the first selected task, then the rollouts.
+- `only`: run it on every selected task, then stop with no rollouts and no model tokens. `bash pipeline/stages/p5c_canary.sh` does the same from a worker shell.
+- `off`: skip it. `OFFICIAL=1` refuses this.
+
+`CANARY_ALLOW_HOST=<host>` is a test switch that opens one host for the canary only, to prove the canary fails. `OFFICIAL=1` refuses it. The report is `eval-runs/canary/jenkins-<BUILD_NUMBER>/report.md`; each failure prints a `CANARY FAIL task=… check=…` line. Rules and host lists: `pipeline/config/canary-v1.json`.
+
+The canary skips one check: iCode PR 2 has no command that lists its enabled tools, so `tool_list` is `skip`. Web tools are still covered by the network check and by the P0.5 transcript scan.
+
 ### Recorded proof: `eval_protocol.isolation`
 
-Every run records the controls above in `eval_protocol.isolation` (in `artifact.json`, and as the Isolation, Agent mount and Leak scan lines under Provenance in `summary.md` and `report.html`). P5 hashes the tree itself when it records them, so the values describe the runtime the agent actually got rather than what the sanitizer claimed.
+Every run records the controls above in `eval_protocol.isolation` (in `artifact.json`, and as the Isolation, Agent mount, Leak scan and Canary lines under Provenance in `summary.md` and `report.html`). P5 hashes the tree itself when it records them, so the values describe the runtime the agent actually got rather than what the sanitizer claimed.
 
 | Field | Meaning |
 |---|---|
@@ -50,10 +62,11 @@ Every run records the controls above in `eval_protocol.isolation` (in `artifact.
 | `manifest_matches_tree` | `true` when both fingerprints still equal what the sanitizer wrote, so nothing changed the tree after sanitizing |
 | `mount` | Count, target and `read_only` of the agent mounts |
 | `leak_scan` | Scanner version, `hit_tasks`, task counts per status, and the sha256 of `anticheat_leakscan.json` |
+| `canary` | Canary rules version, `status`, the tasks it ran on, `failed_tasks`, `warn_tasks`, worker node, and the sha256 of its `summary.json`. Missing when the canary was off |
 
 `runtime_sha256` reads the clone path as `/opt/icode-host` and leaves out what the container never uses: `pyvenv.cfg`, `__pycache__/`, links that leave the tree, and install bookkeeping (`*.dist-info/RECORD`, `uv_cache.json`). Stdlib bytecode is compiled with hash-based invalidation and container paths, so it is byte-identical on every clone. Two independent PR 2 clones (the DeepSWE and LoLBench Jenkins workspaces) gave the same `runtime_sha256`.
 
-**Two runs are comparable** only when they have the same iCode commit, `sanitizer`, `runtime_sha256` and model protocol, with `sourceless: true`, `manifest_matches_tree: true`, one read-only mount and no leak hits. With `OFFICIAL=1`, `check_report.py` rejects an artifact whose own record breaks a per-run rule (git mode, sourceless, both fingerprints present, manifest still matching, one read-only mount, leak scan present with no hits). Matching `runtime_sha256` between runs is checked by comparing their artifacts.
+**Two runs are comparable** only when they have the same iCode commit, `sanitizer`, `runtime_sha256` and model protocol, with `sourceless: true`, `manifest_matches_tree: true`, one read-only mount and no leak hits. With `OFFICIAL=1`, `check_report.py` rejects an artifact whose own record breaks a per-run rule (git mode, sourceless, both fingerprints present, manifest still matching, one read-only mount, leak scan present with no hits, canary present with `status: pass`). Matching `runtime_sha256` between runs is checked by comparing their artifacts.
 
 A tree sanitized by an older sanitizer version has already lost its stdlib sources, so it cannot be re-sanitized in place. P3/P5 then copy the sandbox CPython again from the host interpreter and sanitize it fresh (the console prints `re-embedding … for the current sanitizer`). Paths already removed outside the sandbox stay listed in the manifest.
 
@@ -64,7 +77,9 @@ A tree sanitized by an older sanitizer version has already lost its stdlib sourc
 - Release mode (`ICODE_MODE=release`) mounts only the binary, so there is no sandbox CPython to strip. Official runs use git mode.
 - SWE-bench Pro has no gold patch, so its verdicts rest on the transcript scan alone (`similarity.status: no_gold`).
 - Rescore an old run without changing it: `python3 pipeline/lib/anticheat_verdict.py --run-dir output/<suite>/<run> [--harbor-runs <jenkins harbor_runs/jenkins-N>]`. It writes `artifact.anticheat.json` and `anticheat/report.md` next to the original. Runs from before P0.5 keep their transcripts only in the Jenkins workspace, hence `--harbor-runs`.
-- Still open and tracked in the integration report: the isolation canary (P0.6) and honoring each task's declared CPUs (P0.9).
+- The canary proves isolation on the tasks it ran on, on that worker. `CANARY=on` covers only the first selected task; run `CANARY=only` on the whole suite after a Harbor, Docker or kernel change.
+- LoLBench task allowlists declare `openrouter.ai`, `api.openai.com` and `api.anthropic.com` for the agent phase. The canary warns when they are reachable; closing them needs a versioned task overlay (tracked in the integration log).
+- Still open and tracked in the integration report: honoring each task's declared CPUs (P0.9).
 
 ## Where a run is stored
 

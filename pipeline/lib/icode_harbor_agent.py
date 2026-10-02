@@ -61,13 +61,8 @@ class ICodeAgent(BaseInstalledAgent):
             env=self.extra_env,
         )
 
-    @override
-    async def run(
-        self,
-        instruction: str,
-        environment: BaseEnvironment,
-        context: AgentContext,
-    ) -> None:
+    def run_env(self) -> dict[str, str]:
+        """Environment of the iCode run; CanaryAgent probes with the same one."""
         env = dict(self.extra_env)
         env.setdefault("ICODE_API_BASE", DEEPSEEK_BASE_URL)
         base = str(env.get("ICODE_API_BASE") or "").lower()
@@ -77,6 +72,16 @@ class ICodeAgent(BaseInstalledAgent):
         )
         env.setdefault("ICODE_REASONING_EFFORT", "high")
         env.setdefault("ICODE_MODEL", DEFAULT_MODEL)
+        return env
+
+    @override
+    async def run(
+        self,
+        instruction: str,
+        environment: BaseEnvironment,
+        context: AgentContext,
+    ) -> None:
+        env = self.run_env()
 
         await self.exec_as_agent(
             environment,

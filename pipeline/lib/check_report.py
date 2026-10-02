@@ -87,6 +87,11 @@ def official_isolation_errors(isolation: object) -> list[str]:
         errors.append(f"missing {loc}.leak_scan")
     elif leak.get("hit_tasks") != []:
         errors.append(f"{loc}.leak_scan.hit_tasks must be empty")
+    canary = isolation.get("canary") if isinstance(isolation.get("canary"), dict) else {}
+    if not _nonempty_str(canary.get("version")) or not _nonempty_str(canary.get("summary_sha256")):
+        errors.append(f"missing {loc}.canary (P5 isolation canary)")
+    elif canary.get("status") != "pass":
+        errors.append(f"{loc}.canary.status must be pass")
     return errors
 
 

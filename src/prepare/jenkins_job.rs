@@ -15,6 +15,8 @@ const DESC_ICODE_GIT_URL: &str = "Git: https URL on github.com or gitcode.com. R
 const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-request number when KIND is pr. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
 const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, commit, or pr (no auto). For pr, REF is the pull-request number. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
 const DESC_TASKS: &str = "Comma-separated question ids. This field wins over TASK and N_TASKS. Example: ruff_1,fastapi_1. Leave empty to use TASK or N_TASKS.";
+const DESC_CANARY: &str = "Isolation canary (P0.6). official: on when OFFICIAL=1, off otherwise. on: canary on the first task, then the rollouts. only: canary on every selected task and no rollouts (no tokens). off: smoke runs only; OFFICIAL=1 refuses it. A canary failure stops the build.";
+const DESC_CANARY_ALLOW_HOST: &str = "Test only: open this host (for example github.com) for the canary alone, to prove the canary fails when isolation is broken. Leave empty. OFFICIAL=1 refuses it.";
 const DESC_RESUME: &str = "After agent death or an aborted full suite: set true and keep the same TASK/TASKS/N_TASKS. P5 seeds from the aborted harbor_runs/jenkins-* tree (override with RESUME_FROM=jenkins-N) and continues units that lack reward.json. Works for LoLBench and DeepSWE.";
 
 fn benchmark_label(job_benchmark: &str) -> &'static str {
@@ -600,6 +602,8 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     let icode_git_ref_kind_desc_g = groovy_escape(DESC_ICODE_GIT_REF_KIND);
     let tasks_desc_g = groovy_escape(DESC_TASKS);
     let resume_desc_g = groovy_escape(DESC_RESUME);
+    let canary_desc_g = groovy_escape(DESC_CANARY);
+    let canary_allow_desc_g = groovy_escape(DESC_CANARY_ALLOW_HOST);
     let n_tasks_desc_g = groovy_escape(&n_tasks_param_description(job_benchmark));
     format!(
         r#"pipeline {{
@@ -631,6 +635,8 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     string(name: 'LOLBENCH_REF', defaultValue: '1b10d10bb4a10cea54374ac34b8f76b69dc8ce75', description: 'LoLBench commit pinned by P2.')
     string(name: 'ICODE_EXPECT_SHA', defaultValue: '', description: 'When set, P3 fails unless the iCode checkout SHA equals this value.')
     string(name: 'OFFICIAL', defaultValue: '0', description: '1 requires full provenance and the pinned iCode commit. 0 is a smoke run.')
+    choice(name: 'CANARY', choices: ['official', 'only', 'on', 'off'], description: '{canary_desc_g}')
+    string(name: 'CANARY_ALLOW_HOST', defaultValue: '', description: '{canary_allow_desc_g}')
     choice(name: 'DEEPSEEK_MODEL', choices: [{model_g}], description: 'DeepSeek Chat Completions model id (catalog)')
   }}
 
@@ -718,6 +724,8 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             export LOLBENCH_REF="${{LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75}}"
             export ICODE_EXPECT_SHA="${{ICODE_EXPECT_SHA:-}}"
             export OFFICIAL="${{OFFICIAL:-0}}"
+            export CANARY="${{CANARY:-official}}"
+            export CANARY_ALLOW_HOST="${{CANARY_ALLOW_HOST:-}}"
             export HARNESS="${{HARNESS:-{harness_fb}}}"
             export LLM="${{LLM:-{llm_fb}}}"
             export BENCHMARK="${{BENCHMARK:-{bench}}}"
@@ -835,6 +843,8 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
     let icode_git_ref_kind_desc_xml = xml_escape(DESC_ICODE_GIT_REF_KIND);
     let tasks_desc_xml = xml_escape(DESC_TASKS);
     let resume_desc_xml = xml_escape(DESC_RESUME);
+    let canary_desc_xml = xml_escape(DESC_CANARY);
+    let canary_allow_desc_xml = xml_escape(DESC_CANARY_ALLOW_HOST);
     let n_tasks_desc_xml = xml_escape(&n_tasks_param_description(job_benchmark));
     format!(
         r#"<?xml version='1.0' encoding='UTF-8'?>
@@ -976,6 +986,24 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
           <name>OFFICIAL</name>
           <description>1 requires full provenance and the pinned iCode commit. 0 is a smoke run.</description>
           <defaultValue>0</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <name>CANARY</name>
+          <description>{canary_desc_xml}</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>official</string>
+              <string>only</string>
+              <string>on</string>
+              <string>off</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>CANARY_ALLOW_HOST</name>
+          <description>{canary_allow_desc_xml}</description>
+          <defaultValue></defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
@@ -1358,6 +1386,10 @@ mod tests {
         assert!(jf.contains("LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75"));
         assert!(jf.contains("ICODE_EXPECT_SHA:-"));
         assert!(jf.contains("OFFICIAL:-0"));
+        assert!(jf.contains("choice(name: 'CANARY', choices: ['official', 'only', 'on', 'off']"));
+        assert!(jf.contains("CANARY:-official"));
+        assert!(jf.contains("string(name: 'CANARY_ALLOW_HOST', defaultValue: ''"));
+        assert!(jf.contains("CANARY_ALLOW_HOST:-"));
         assert!(jf.contains("upload ICODE_RELEASE_FILE"));
         assert!(jf.contains("icode"));
         assert!(jf.contains("lock(label: 'CPU_CORES'"));
@@ -1394,6 +1426,11 @@ mod tests {
         assert!(xml.contains("<name>ICODE_EXPECT_SHA</name>"));
         assert!(xml.contains("<name>OFFICIAL</name>"));
         assert!(xml.contains("<defaultValue>0</defaultValue>"));
+        assert!(xml.contains("<name>CANARY</name>"));
+        assert!(xml.contains("<string>official</string>"));
+        assert!(xml.contains("<string>only</string>"));
+        assert!(xml.contains("<name>CANARY_ALLOW_HOST</name>"));
+        assert!(xml.contains("OFFICIAL=1 refuses it"));
         assert!(xml.contains("StashedFileParameterDefinition"));
         assert!(
             !xml.contains("<name>ICODE_RELEASE</name>"),

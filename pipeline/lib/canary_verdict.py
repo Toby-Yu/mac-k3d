@@ -1,0 +1,449 @@
+#!/usr/bin/env python3
+"""Isolation canary verdicts (report P0.6): did the sandbox block what it should?
+
+canary_probe.sh records facts inside the task container; this module turns them
+into pass, warn, fail or skip per check, and pass or fail per task. Rules live in
+pipeline/config/canary-v1.json. Stdlib only, so the unit tests need no Harbor.
+
+Spec for one task (host lists and gold file names, never gold content):
+    canary_verdict.py spec --task-dir T --benchmark B --out spec.json
+
+Verdict of every canary trial under a jobs dir (<jobs>/<task>/<job>/<trial>/agent):
+    canary_verdict.py summarize --jobs-dir D --out-dir O
+
+Exit codes: 0 pass, 2 a task failed, 1 error. Output names hosts, paths and
+variable names only, never values.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+import socket
+import sys
+import tomllib
+from collections import Counter
+from pathlib import Path
+
+from anticheat_leakscan import is_test_path
+from anticheat_similarity import generated_globs, is_generated, parse_patch
+from anticheat_similarity import load_config as load_anticheat_config
+
+CONFIG_FILE = Path(__file__).resolve().parents[1] / "config" / "canary-v1.json"
+SCHEMA = "mac-k3d-canary-v1"
+CHECKS = (
+    "network",
+    "model_api",
+    "declared_hosts",
+    "filesystem",
+    "mount",
+    "history",
+    "env_names",
+    "python_env",
+    "icode_home",
+    "tool_list",
+)
+FACT_FILES = {
+    "probe": "canary.json",
+    "root": "canary_root.json",
+    "home_pre": "canary_home_pre.json",
+    "home_post": "canary_home_post.json",
+    "host": "canary_host.json",
+}
+
+
+def load_config(path: Path | None = None) -> dict:
+    return json.loads(Path(path or CONFIG_FILE).read_text(encoding="utf-8"))
+
+
+def _load_json(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _gold_text(task_dir: Path) -> str:
+    sol = task_dir / "solution"
+    path = sol / "solution.patch"
+    if not path.is_file():
+        found = sorted(sol.glob("*.patch")) if sol.is_dir() else []
+        if not found:
+            return ""
+        path = found[0]
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _declared_hosts(task_dir: Path) -> list[str]:
+    try:
+        doc = tomllib.loads((task_dir / "task.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    agent = doc.get("agent") if isinstance(doc.get("agent"), dict) else {}
+    hosts = agent.get("allowed_hosts")
+    return [str(h).strip().lower() for h in hosts if str(h).strip()] if isinstance(hosts, list) else []
+
+
+def gold_file_patterns(gold_text: str, globs: list[str]) -> tuple[list[str], list[str]]:
+    """find -name / -path patterns for files the gold patch creates (last two path parts)."""
+    names: set[str] = set()
+    paths: set[str] = set()
+    for path, info in parse_patch(gold_text).items():
+        if not info["new"] or is_test_path(path) or is_generated(path, globs):
+            continue
+        parts = [p for p in path.split("/") if p]
+        if len(parts) >= 2:
+            paths.add("*/" + "/".join(parts[-2:]))
+        elif parts:
+            names.add(parts[0])
+    return sorted(names), sorted(paths)
+
+
+def build_spec(task_dir: Path, benchmark: str, config: dict | None = None) -> dict:
+    config = config or load_config()
+    model = [h.lower() for h in config.get("model_hosts") or []]
+    skip = set(model) | {h.lower() for h in config.get("model_host_aliases") or []}
+    sources = [h.lower() for h in config.get("source_hosts") or []]
+    hosts = [{"kind": "source", "host": h} for h in sources]
+    hosts += [{"kind": "model", "host": h} for h in model]
+    for host in _declared_hosts(task_dir):
+        if host not in skip and host not in sources and "*" not in host:
+            hosts.append({"kind": "declared", "host": host})
+    globs = generated_globs(load_anticheat_config(), benchmark)
+    gold_names, gold_paths = gold_file_patterns(_gold_text(task_dir), globs)
+    return {
+        "version": config.get("version", ""),
+        "task": task_dir.name,
+        "benchmark": benchmark,
+        "hosts": hosts,
+        "names": sorted(set(config.get("gold_names") or []) | set(gold_names)),
+        "paths": sorted(set(config.get("gold_paths") or []) | set(gold_paths)),
+        "prune": list(config.get("prune") or []),
+        "mount": config.get("mount", "/opt/icode-host"),
+        "timeouts": dict(config.get("timeouts") or {}),
+    }
+
+
+def render_spec(spec: dict) -> str:
+    """canary_spec.txt for canary_probe.sh: one "<key> <value...>" per line."""
+    lines = [f"host {h['kind']} {h['host']}" for h in spec.get("hosts") or []]
+    lines += [f"name {n}" for n in spec.get("names") or []]
+    lines += [f"path {p}" for p in spec.get("paths") or []]
+    lines += [f"prune {p}" for p in spec.get("prune") or []]
+    lines += [f"timeout {k} {int(v)}" for k, v in sorted((spec.get("timeouts") or {}).items())]
+    return "\n".join(lines) + "\n"
+
+
+def load_facts(agent_dir: Path) -> dict:
+    return {key: _load_json(agent_dir / name) for key, name in FACT_FILES.items()}
+
+
+def _check(status: str, detail: str = "") -> dict:
+    return {"status": status, "detail": detail}
+
+
+def _reached(entry: dict) -> bool:
+    code = str(entry.get("http_code") or "").strip()
+    return bool(code) and code != "000"
+
+
+def _blocked_detail(entry: dict) -> str:
+    code = entry.get("http_code")
+    return f"{entry.get('host')} reached (HTTP {code})"
+
+
+def check_network(probe: dict) -> tuple[dict, dict, dict]:
+    if probe.get("curl") is not True:
+        missing = _check("fail", "curl is missing in the container, so egress was not tested")
+        return missing, missing, _check("skip", "curl missing")
+    entries = [e for e in probe.get("network") or [] if isinstance(e, dict)]
+    by_kind: dict[str, list[dict]] = {}
+    for entry in entries:
+        by_kind.setdefault(str(entry.get("kind") or ""), []).append(entry)
+    sources = by_kind.get("source", [])
+    leaked = [e for e in sources if _reached(e)]
+    if not sources:
+        network = _check("fail", "no source host was probed")
+    elif leaked:
+        network = _check("fail", "; ".join(_blocked_detail(e) for e in leaked))
+    else:
+        network = _check("pass", f"{len(sources)} source hosts blocked")
+    models = by_kind.get("model", [])
+    down = [e for e in models if not _reached(e)]
+    if not models:
+        model = _check("fail", "no model host was probed")
+    elif down:
+        model = _check(
+            "fail",
+            "; ".join(f"{e.get('host')} unreachable (curl exit {e.get('curl_exit')}: {e.get('error') or '-'})" for e in down),
+        )
+    else:
+        model = _check("pass", ", ".join(f"{e.get('host')} HTTP {e.get('http_code')}" for e in models))
+    declared = by_kind.get("declared", [])
+    open_declared = [e for e in declared if _reached(e)]
+    if not declared:
+        extra = _check("pass", "task allowlist declares no other hosts")
+    elif open_declared:
+        extra = _check(
+            "warn",
+            "task allowlist lets the agent reach " + ", ".join(str(e.get("host")) for e in open_declared),
+        )
+    else:
+        extra = _check("pass", f"{len(declared)} declared hosts blocked")
+    return network, model, extra
+
+
+def check_filesystem(probe: dict, config: dict) -> dict:
+    fs = probe.get("filesystem") if isinstance(probe.get("filesystem"), dict) else None
+    if fs is None:
+        return _check("fail", "no filesystem search recorded")
+    if fs.get("timed_out") is True:
+        return _check("fail", "filesystem search timed out")
+    ignore = list(config.get("filesystem_ignore") or [])
+    hits = [str(h) for h in fs.get("hits") or [] if not any(fnmatch.fnmatchcase(str(h), g) for g in ignore)]
+    if hits:
+        more = " (list capped)" if len(fs.get("hits") or []) >= int(fs.get("max_hits") or 0) > 0 else ""
+        return _check("fail", "gold-like files outside the repo: " + ", ".join(hits[:10]) + more)
+    return _check("pass", f"{fs.get('patterns', 0)} patterns, nothing found outside the repo")
+
+
+def check_mount(probe: dict, root: dict | None) -> dict:
+    mount = probe.get("mount") if isinstance(probe.get("mount"), dict) else None
+    if mount is None or mount.get("present") is not True:
+        return _check("fail", "the iCode mount is missing")
+    problems = []
+    if mount.get("read_only") is not True:
+        problems.append(f"mount options {mount.get('options') or 'unknown'} are not ro")
+    if mount.get("touch_exit") == 0:
+        problems.append("the agent user wrote into the mount")
+    if root is None:
+        problems.append("no root write test recorded")
+    elif root.get("touch_exit") == 0:
+        problems.append("root wrote into the mount")
+    elif root.get("read_only_error") is not True:
+        problems.append("root write failed without a read-only error")
+    if problems:
+        return _check("fail", "; ".join(problems))
+    return _check("pass", f"{mount.get('path')} is read-only")
+
+
+def check_history(probe: dict) -> dict:
+    repo = probe.get("repo") if isinstance(probe.get("repo"), dict) else None
+    if repo is None:
+        return _check("fail", "no repo history recorded")
+    if repo.get("error"):
+        return _check("fail", str(repo.get("error")))
+    problems = []
+    all_count, head_count = repo.get("all_count"), repo.get("head_count")
+    if not isinstance(all_count, int) or not isinstance(head_count, int):
+        problems.append("commit counts unavailable")
+    elif all_count != head_count:
+        problems.append(f"{all_count - head_count} commits reachable from refs but not from HEAD")
+    if repo.get("fsck_timed_out") is True:
+        problems.append("git fsck timed out")
+    if repo.get("unreachable"):
+        problems.append(f"{repo.get('unreachable')} unreachable objects")
+    if repo.get("remotes"):
+        problems.append("remotes " + ", ".join(str(r) for r in repo.get("remotes")))
+    if repo.get("stash"):
+        problems.append(f"{repo.get('stash')} stash entries")
+    if problems:
+        return _check("fail", f"{repo.get('path')}: " + "; ".join(problems))
+    return _check("pass", f"{repo.get('path')}: {head_count} commits, all reachable from HEAD")
+
+
+def secret_like(name: str, rules: dict) -> bool:
+    upper = name.upper()
+    if any(part in upper for part in rules.get("contains") or []):
+        return True
+    return any(upper.endswith(suffix) for suffix in rules.get("suffix") or [])
+
+
+def check_env(probe: dict, config: dict) -> dict:
+    names = probe.get("env_names")
+    if not isinstance(names, list):
+        return _check("fail", "no environment names recorded")
+    rules = config.get("secret_names") or {}
+    allowed = set(rules.get("allowed") or [])
+    forbidden = set(rules.get("forbidden") or [])
+    bad = sorted({str(n) for n in names if str(n) in forbidden or (secret_like(str(n), rules) and str(n) not in allowed)})
+    if bad:
+        return _check("fail", "secret-like variables in the agent environment: " + ", ".join(bad))
+    return _check("pass", f"{len(names)} names, only the model key is secret-like")
+
+
+def check_python_env(probe: dict, mount: str) -> dict:
+    env = probe.get("python_env") if isinstance(probe.get("python_env"), dict) else None
+    if env is None:
+        return _check("fail", "no PYTHONPATH / VIRTUAL_ENV recorded")
+    bad = [key for key in ("PYTHONPATH", "VIRTUAL_ENV") if mount in str(env.get(key) or "")]
+    if bad:
+        return _check("fail", " and ".join(bad) + f" point into {mount}")
+    return _check("pass", f"neither PYTHONPATH nor VIRTUAL_ENV points into {mount}")
+
+
+def check_icode_home(pre: dict | None, post: dict | None, host: dict | None) -> dict:
+    if pre is None or post is None:
+        return _check("fail", "iCode home state not recorded before and after install")
+    problems = []
+    if pre.get("mcp_json") or post.get("mcp_json"):
+        problems.append(f"{post.get('icode_home') or pre.get('icode_home')}/mcp.json exists")
+    if pre.get("settings_json"):
+        problems.append("the image ships an iCode settings.json")
+    if pre.get("agents_home_exists"):
+        problems.append(f"the image ships {pre.get('agents_home')}")
+    if pre.get("research_subagent") or post.get("research_subagent"):
+        problems.append("OPENJIUWEN_CLI_RESEARCH_SUBAGENT is on")
+    servers = host.get("task_mcp_servers") if isinstance(host, dict) else None
+    if isinstance(servers, int) and servers > 0:
+        problems.append(f"the task declares {servers} MCP servers")
+    if problems:
+        return _check("fail", "; ".join(problems))
+    return _check("pass", f"no MCP config; {pre.get('icode_home')} is fresh")
+
+
+def check_tool_list(host: dict | None) -> dict:
+    tools = host.get("tool_list") if isinstance(host, dict) and isinstance(host.get("tool_list"), dict) else {}
+    status = str(tools.get("status") or "")
+    if status == "ok":
+        enabled = [str(t) for t in tools.get("web_tools") or []]
+        if enabled:
+            return _check("fail", "web tools enabled: " + ", ".join(enabled))
+        return _check("pass", "no web search or fetch tool enabled")
+    return _check("skip", str(tools.get("reason") or "iCode tool list unavailable; the P0.5 transcript scan covers web tools"))
+
+
+def verdict(facts: dict, config: dict | None = None) -> dict:
+    config = config or load_config()
+    probe = facts.get("probe")
+    if not isinstance(probe, dict):
+        checks = {name: _check("fail", "canary.json missing or unreadable") for name in CHECKS}
+        checks["tool_list"] = check_tool_list(facts.get("host"))
+        return {"status": "fail", "checks": checks}
+    network, model, declared = check_network(probe)
+    checks = {
+        "network": network,
+        "model_api": model,
+        "declared_hosts": declared,
+        "filesystem": check_filesystem(probe, config),
+        "mount": check_mount(probe, facts.get("root")),
+        "history": check_history(probe),
+        "env_names": check_env(probe, config),
+        "python_env": check_python_env(probe, str(config.get("mount") or "/opt/icode-host")),
+        "icode_home": check_icode_home(facts.get("home_pre"), facts.get("home_post"), facts.get("host")),
+        "tool_list": check_tool_list(facts.get("host")),
+    }
+    status = "fail" if any(c["status"] == "fail" for c in checks.values()) else "pass"
+    return {"status": status, "checks": checks}
+
+
+def canary_trials(task_dir: Path) -> list[Path]:
+    """Harbor trial dirs under <jobs>/<task>: <job>/<trial>/agent, oldest first."""
+    found = [p.parent for p in task_dir.glob("*/*/agent") if p.is_dir()]
+    return sorted(found, key=lambda p: p.stat().st_mtime)
+
+
+def summarize(jobs_dir: Path, config: dict | None = None, tasks: list[str] | None = None) -> dict:
+    config = config or load_config()
+    ids = tasks if tasks else sorted(p.name for p in jobs_dir.iterdir() if p.is_dir()) if jobs_dir.is_dir() else []
+    results: dict[str, dict] = {}
+    for tid in ids:
+        trials = canary_trials(jobs_dir / tid)
+        if not trials:
+            checks = {name: _check("fail", "no canary trial") for name in CHECKS}
+            results[tid] = {"status": "fail", "trial": None, "checks": checks}
+            continue
+        trial = trials[-1]
+        result = verdict(load_facts(trial / "agent"), config)
+        results[tid] = {"status": result["status"], "trial": str(trial), "checks": result["checks"]}
+    counts = Counter(r["status"] for r in results.values())
+    warned = sorted(t for t, r in results.items() if any(c["status"] == "warn" for c in r["checks"].values()))
+    return {
+        "schema": SCHEMA,
+        "config_version": config.get("version", ""),
+        "node": socket.gethostname(),
+        "jobs_dir": str(jobs_dir),
+        "status": "pass" if ids and not counts["fail"] else "fail",
+        "counts": {"tasks": len(ids), "pass": counts["pass"], "fail": counts["fail"]},
+        "failed_tasks": sorted(t for t, r in results.items() if r["status"] == "fail"),
+        "warn_tasks": warned,
+        "tasks": results,
+    }
+
+
+def report_markdown(summary: dict) -> str:
+    counts = summary.get("counts") or {}
+    lines = [
+        "# Isolation canary",
+        "",
+        f"- Rules: `{summary.get('config_version')}` · node `{summary.get('node')}`",
+        f"- Status: **{summary.get('status')}** · tasks {counts.get('tasks', 0)} · "
+        f"pass {counts.get('pass', 0)} · fail {counts.get('fail', 0)}",
+        "",
+        "| Task | Status | " + " | ".join(CHECKS) + " |",
+        "| --- | --- | " + " | ".join("---" for _ in CHECKS) + " |",
+    ]
+    for tid, result in sorted((summary.get("tasks") or {}).items()):
+        cells = [result["checks"].get(name, {}).get("status", "-") for name in CHECKS]
+        lines.append(f"| {tid} | {result['status']} | " + " | ".join(cells) + " |")
+    notes = []
+    for tid, result in sorted((summary.get("tasks") or {}).items()):
+        for name in CHECKS:
+            check = result["checks"].get(name) or {}
+            if check.get("status") in ("fail", "warn"):
+                notes.append(f"- `{tid}` {name} **{check['status']}**: {check.get('detail') or '-'}")
+    if notes:
+        lines += ["", "## Failures and warnings", "", *notes]
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Isolation canary spec and verdicts")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    spec = sub.add_parser("spec")
+    spec.add_argument("--task-dir", required=True)
+    spec.add_argument("--benchmark", default="deepswe")
+    spec.add_argument("--out", required=True)
+    spec.add_argument("--config", default="")
+    summ = sub.add_parser("summarize")
+    summ.add_argument("--jobs-dir", required=True)
+    summ.add_argument("--out-dir", required=True)
+    summ.add_argument("--task", action="append", default=[], help="expected task id (default: every dir)")
+    summ.add_argument("--config", default="")
+    args = parser.parse_args(argv)
+    try:
+        config = load_config(Path(args.config) if args.config else None)
+        if args.cmd == "spec":
+            task_dir = Path(args.task_dir)
+            if not task_dir.is_dir():
+                raise FileNotFoundError(f"missing task dir {task_dir}")
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(build_spec(task_dir, args.benchmark, config), indent=2) + "\n", encoding="utf-8")
+            return 0
+        summary = summarize(Path(args.jobs_dir), config, args.task or None)
+        out_dir = Path(args.out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        (out_dir / "report.md").write_text(report_markdown(summary), encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: canary: {exc}", file=sys.stderr)
+        return 1
+    for tid, result in sorted(summary["tasks"].items()):
+        print(f"canary: {tid} {result['status']}")
+        for name in CHECKS:
+            check = result["checks"][name]
+            if check["status"] in ("fail", "warn"):
+                print(f"CANARY {check['status'].upper()} task={tid} check={name}: {check['detail']}")
+    counts = summary["counts"]
+    print(
+        f"canary {summary['status']}: tasks={counts['tasks']} pass={counts['pass']} fail={counts['fail']} "
+        f"report={Path(args.out_dir) / 'report.md'}"
+    )
+    return 0 if summary["status"] == "pass" else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

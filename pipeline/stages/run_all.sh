@@ -18,6 +18,10 @@ bash "$DIR/p2_deepswe.sh"
 bash "$DIR/p3_icode.sh"
 bash "$DIR/p4_agent.sh"
 bash "$DIR/p5_harness.sh"
+if [ "$(canary_mode || true)" = only ]; then
+  progress 100 "canary only: no rollouts to score (report $WORKDIR/canary/jenkins-${BUILD_NUMBER:-local}/report.md)"
+  exit 0
+fi
 bash "$DIR/p7_score.sh"
 bash "$DIR/p8_output.sh"
 progress 100 "full local eval finished"
