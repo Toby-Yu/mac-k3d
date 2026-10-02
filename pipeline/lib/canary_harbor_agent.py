@@ -83,6 +83,7 @@ class CanaryAgent(ICodeAgent):
             "agent": self.name(),
             "spec_version": spec.get("version", ""),
             "task": spec.get("task", ""),
+            "allow_host": spec.get("allow_host"),
             "task_mcp_servers": len(self.mcp_servers),
             "tool_list": {"status": "unavailable", "reason": TOOL_LIST_REASON},
         }

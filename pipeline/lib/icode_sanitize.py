@@ -5,6 +5,9 @@ icode_input.sh calls this after icode_embed_sandbox_cpython. Only the packaged
 runtime under .venv changes; iCode's tracked files stay as shipped.
 
 - tomllib, test/ and idlelib/idle_test leave the sandbox stdlib.
+- tomllib comes back as a .pyc-only stub: alembic (iCode's memory store) imports
+  it at startup on Python 3.11+, but nothing on iCode's run path parses TOML.
+  The stub imports and raises TOMLDecodeError on load/loads.
 - zoneinfo stays importable (pydantic imports it at startup) but as .pyc only.
 - Vendored tomli and backports.zoneinfo leave every site-packages under .venv.
 - --sourceless compiles the sandbox stdlib to legacy .pyc and deletes its .py
@@ -29,11 +32,26 @@ from pathlib import Path
 
 from agent_mounts import ICODE_TARGET
 
-SANITIZER_VERSION = "mac-k3d-icode-sanitize-v2"
+SANITIZER_VERSION = "mac-k3d-icode-sanitize-v3"
 MANIFEST_NAME = "SANITIZED_MANIFEST.json"
 EXIT_STALE = 3
 STDLIB_REMOVE = ("tomllib", "test", "idlelib/idle_test")
 STDLIB_BYTECODE_ONLY = ("zoneinfo",)
+STUB_MARKER = "mac-k3d sanitizer stub"
+# No line here may equal a line of the cpython_5 gold patch (the real tomllib).
+STDLIB_STUBS = {
+    "tomllib": f'''"""{STUB_MARKER}: the real tomllib is a task deliverable and is not mounted."""
+
+TOMLDecodeError = type("TOMLDecodeError", (ValueError,), {{"__module__": "tomllib"}})
+
+
+def _unavailable(*_args, **_kwargs):
+    raise TOMLDecodeError("TOML parsing is not available in the mounted iCode runtime ({STUB_MARKER})")
+
+
+load = loads = _unavailable
+''',
+}
 _SITE_PACKAGES_RX = r"[/\\]site-packages([/\\]|$)"
 
 
@@ -91,6 +109,25 @@ def _remove(path: Path) -> None:
         shutil.rmtree(path)
     else:
         path.unlink()
+
+
+def _stub_wanted(stdlib: Path) -> bool:
+    """tomllib joined the stdlib in 3.11; older runtimes import tomli instead."""
+    try:
+        minor = int(stdlib.name.split(".", 1)[1])
+    except (IndexError, ValueError):
+        return False
+    return minor >= 11
+
+
+def is_stub(pkg: Path) -> bool:
+    """pkg holds only the compiled sanitizer stub."""
+    if not pkg.is_dir() or pkg.is_symlink():
+        return False
+    names = sorted(p.name for p in pkg.iterdir())
+    if names != ["__init__.pyc"]:
+        return False
+    return STUB_MARKER.encode("utf-8") in (pkg / "__init__.pyc").read_bytes()
 
 
 class StaleManifestError(RuntimeError):
@@ -261,6 +298,7 @@ def sanitize_tree(
     if interp is None:
         raise RuntimeError(f"no sandbox python under {sandbox}/bin")
     removed: list[Path] = []
+    stubbed: list[Path] = []
     sourceless_removed: list[Path] = []
     kept: list[Path] = []
 
@@ -268,9 +306,23 @@ def sanitize_tree(
     for stdlib in stdlibs:
         for rel in STDLIB_REMOVE:
             path = stdlib / rel
+            if rel in STDLIB_STUBS and is_stub(path):
+                continue
             if path.exists() or path.is_symlink():
                 _remove(path)
                 removed.append(path)
+        for rel, text in STDLIB_STUBS.items():
+            pkg = stdlib / rel
+            if not _stub_wanted(stdlib):
+                continue
+            if not is_stub(pkg):
+                pkg.mkdir(parents=True, exist_ok=True)
+                (pkg / "__init__.py").write_text(text, encoding="utf-8")
+                _compile(interp, tree, pkg, exclude_site_packages=False)
+                _dropped, left = _drop_compiled_sources(pkg, stdlib)
+                if left or not is_stub(pkg):
+                    raise RuntimeError(f"could not compile the {rel} stub in {pkg}")
+            stubbed.append(pkg)
         for rel in STDLIB_BYTECODE_ONLY:
             pkg = stdlib / rel
             if not pkg.is_dir():
@@ -300,6 +352,7 @@ def sanitize_tree(
     doc = {
         "sanitizer": SANITIZER_VERSION,
         "removed": sorted(rels | {str(item) for item in prev_removed}),
+        "stubbed": sorted(p.relative_to(tree).as_posix() for p in stubbed),
         "sourceless": bool(sourceless or prev.get("sourceless") is True),
         "sourceless_removed": prev_count + len(sourceless_removed),
         "sourceless_kept": (

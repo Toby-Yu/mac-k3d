@@ -28,5 +28,6 @@
   "prune": ["/proc", "/sys", "/dev", "/logs/agent", "/installed-agent"],
   "filesystem_ignore": [],
   "mount": "/opt/icode-host",
-  "timeouts": {"curl": 10, "find": 300, "git": 300}
+  "timeouts": {"curl": 10, "model": 30, "find": 300, "git": 300},
+  "model_attempts": 3
 }

@@ -143,6 +143,38 @@ class VerdictFixtureTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail")
         self.assertTrue(all(result["checks"][c]["status"] == "fail" for c in CHECKS if c != "tool_list"))
 
+    def test_missing_probe_names_why_the_trial_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trial = Path(tmp) / "cpython_5__abc"
+            (trial / "agent").mkdir(parents=True)
+            message = (
+                "Command failed (exit 127): set -euo pipefail; icode --help GITCODE_TOKEN=gc-secret-value\n"
+                "stdout: total 672\n"
+                "/home/agent/.local/bin/icode: 16: exec: /opt/icode-host/.venv/sandbox-cpython/bin/python3.13: not found\n"
+                "stderr: None"
+            )
+            (trial / "result.json").write_text(
+                json.dumps({"exception_info": {"exception_type": "NonZeroAgentExitCodeError", "exception_message": message}}),
+                encoding="utf-8",
+            )
+            detail = verdict(load_facts(trial / "agent"), self.config)["checks"]["network"]["detail"]
+        self.assertIn("the trial stopped before the probe: NonZeroAgentExitCodeError: exit 127", detail)
+        self.assertIn("python3.13: not found", detail)
+        self.assertNotIn("gc-secret-value", detail)
+
+    def test_allow_host_negative_test_fails_either_way_and_says_which(self):
+        facts = facts_for("pass")
+        facts["host"]["allow_host"] = "pypi.org"
+        network = verdict(facts, self.config)["checks"]["network"]
+        self.assertEqual(network["status"], "fail")
+        self.assertIn("negative test inconclusive: CANARY_ALLOW_HOST=pypi.org was opened but did not answer", network["detail"])
+        self.assertIn("(pypi.org unreachable (curl exit", network["detail"])
+        for entry in facts["probe"]["network"]:
+            if entry["host"] == "pypi.org":
+                entry.update({"curl_exit": 0, "http_code": "200", "error": None})
+        network = verdict(facts, self.config)["checks"]["network"]
+        self.assertEqual(network, {"status": "fail", "detail": "pypi.org reached (HTTP 200)"})
+
     def test_pythonpath_into_mount_fails(self):
         facts = facts_for("pass")
         facts["probe"]["python_env"]["PYTHONPATH"] = "/opt/icode-host/lib/python3.12/site-packages"
@@ -212,6 +244,18 @@ class SpecTests(unittest.TestCase):
         self.assertNotIn(GOLD_LINE, text)
         self.assertNotIn(GOLD_LINE, json.dumps(spec))
         self.assertNotIn("README.md", text)
+
+    def test_spec_probes_the_allowed_host_once_as_a_source(self):
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            task = write_task(Path(tmp))
+            extra = build_spec(task, "deepswe", config, "Example.org")
+            known = build_spec(task, "deepswe", config, "gitee.com")
+        self.assertEqual(extra["hosts"][0], {"kind": "source", "host": "example.org"})
+        self.assertEqual(extra["allow_host"], "example.org")
+        self.assertEqual([h["host"] for h in known["hosts"]].count("gitee.com"), 1)
+        self.assertIn("attempts model 3\n", render_spec(known))
+        self.assertIn("timeout model 30\n", render_spec(known))
 
     def test_spec_cli_writes_json(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -368,6 +412,35 @@ exec {shutil.which("touch")} "$@"
         self.assertIn("DEEPSEEK_API_KEY", probe["env_names"])
         self.assertNotIn("sk-canary-sentinel-0000", (self.logs / "canary.json").read_text(encoding="utf-8"))
         self.assertTrue(json.loads((self.logs / "canary_root.json").read_text(encoding="utf-8"))["read_only_error"])
+
+    def test_model_host_is_retried_until_it_answers(self):
+        count = self.tmp / "model_tries"
+        self._stub(
+            "curl",
+            f"""#!/bin/sh
+for a in "$@"; do url=$a; done
+if [ "$url" = "https://{self.MODEL}/" ]; then
+  n=$(cat '{count}' 2>/dev/null || echo 0); n=$((n + 1)); echo $n >'{count}'
+  [ "$n" -ge 3 ] && {{ printf 401; exit 0; }}
+  echo "curl: (28) SSL connection timeout" >&2; printf 000; exit 28
+fi
+echo "curl: (35) blocked" >&2
+printf 000
+exit 35
+""",
+        )
+        result = self._run_all()
+        self.assertEqual(result["checks"]["model_api"]["status"], "pass", result["checks"]["model_api"])
+        probe = json.loads((self.logs / "canary.json").read_text(encoding="utf-8"))
+        model = [e for e in probe["network"] if e["kind"] == "model"][0]
+        self.assertEqual((model["attempts"], model["http_code"]), (3, "401"))
+        self.assertTrue(all(e["attempts"] == 1 for e in probe["network"] if e["kind"] == "source"))
+
+    def test_model_host_down_after_all_attempts_fails(self):
+        self._stub("curl", "#!/bin/sh\necho 'curl: (28) SSL connection timeout' >&2\nprintf 000\nexit 28\n")
+        detail = self._run_all()["checks"]["model_api"]
+        self.assertEqual(detail["status"], "fail")
+        self.assertIn("api.deepseek.com unreachable after 3 attempts (curl exit 28", detail["detail"])
 
     def test_planted_gold_patch_fails_filesystem(self):
         (self.root / "tmp").mkdir()

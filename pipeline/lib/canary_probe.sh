@@ -5,7 +5,8 @@
 # Runs inside the Harbor task container and needs only bash, coreutils, find,
 # git and curl. CanaryAgent uploads it to /installed-agent/canary_probe.sh with
 # the rendered spec (canary_spec.txt: "host <kind> <name>", "name <glob>",
-# "path <glob>", "prune <path>", "timeout <curl|find|git> <seconds>").
+# "path <glob>", "prune <path>", "timeout <curl|model|find|git> <seconds>",
+# "attempts model <n>").
 #
 #   canary_probe.sh home <tag>   iCode home state -> canary_home_<tag>.json
 #   canary_probe.sh probe        As the agent user: egress, filesystem search,
@@ -24,6 +25,8 @@ MOUNT=${CANARY_MOUNT:-/opt/icode-host}
 MOUNTS_FILE=${CANARY_MOUNTS_FILE:-/proc/mounts}
 CAPTURE=${CANARY_CAPTURE:-/installed-agent/icode_capture.sh}
 CURL_TIMEOUT=10
+MODEL_TIMEOUT=30
+MODEL_ATTEMPTS=3
 FIND_TIMEOUT=300
 GIT_TIMEOUT=300
 MAX_HITS=50
@@ -109,8 +112,14 @@ load_spec() {
       timeout)
         case "$a:$b" in
           curl:[0-9]*) CURL_TIMEOUT=$b ;;
+          model:[0-9]*) MODEL_TIMEOUT=$b ;;
           find:[0-9]*) FIND_TIMEOUT=$b ;;
           git:[0-9]*) GIT_TIMEOUT=$b ;;
+        esac
+        ;;
+      attempts)
+        case "$a:$b" in
+          model:[1-9]*) MODEL_ATTEMPTS=$b ;;
         esac
         ;;
     esac
@@ -154,8 +163,10 @@ cmd_home() {
   } | write_json "canary_home_${tag}.json"
 }
 
+# The model host must answer, so it gets a longer timeout and retries; a host
+# that must stay blocked gets one short try.
 probe_network() {
-  local first=1 entry kind host code rc errf
+  local first=1 entry kind host code rc errf secs tries n
   errf=$(mktemp)
   printf '['
   for entry in ${HOSTS[@]+"${HOSTS[@]}"}; do
@@ -163,17 +174,31 @@ probe_network() {
     host=${entry#* }
     code=""
     rc=""
+    n=0
+    secs=$CURL_TIMEOUT
+    tries=1
+    if [ "$kind" = model ]; then
+      secs=$MODEL_TIMEOUT
+      tries=$MODEL_ATTEMPTS
+    fi
     : >"$errf"
     if have curl; then
-      code=$(bounded $((CURL_TIMEOUT * 2 + 5)) curl -sS -o /dev/null -w '%{http_code}' \
-        --connect-timeout "$CURL_TIMEOUT" --max-time $((CURL_TIMEOUT * 2)) "https://$host/" 2>"$errf")
-      rc=$?
+      while [ "$n" -lt "$tries" ]; do
+        n=$((n + 1))
+        code=$(bounded $((secs * 2 + 5)) curl -sS -o /dev/null -w '%{http_code}' \
+          --connect-timeout "$secs" --max-time $((secs * 2)) "https://$host/" 2>"$errf")
+        rc=$?
+        case "$code" in
+          '' | 000) ;;
+          *) break ;;
+        esac
+      done
     fi
     [ "$first" = 1 ] || printf ', '
     first=0
-    printf '{"kind": %s, "host": %s, "curl_exit": %s, "http_code": %s, "error": %s}' \
+    printf '{"kind": %s, "host": %s, "curl_exit": %s, "http_code": %s, "attempts": %s, "error": %s}' \
       "$(json_str "$kind")" "$(json_str "$host")" "$(json_int_or_null "$rc")" \
-      "$(json_or_null "$code")" "$(json_or_null "$(first_line "$errf")")"
+      "$(json_or_null "$code")" "$(json_int_or_null "$n")" "$(json_or_null "$(first_line "$errf")")"
   done
   printf ']'
   rm -f "$errf"

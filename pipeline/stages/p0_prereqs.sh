@@ -10,6 +10,7 @@ ensure_eval_preflight
 
 have docker || die "docker not on PATH"
 docker info >/dev/null 2>&1 || die "docker info failed (no Server / permission). Log out/in on Linux or open Docker Desktop on macOS."
+warn_docker_mtu
 # shellcheck source=./ensure_compose.sh
 source "$(cd "$(dirname "$0")" && pwd)/ensure_compose.sh"
 ensure_docker_compose

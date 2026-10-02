@@ -23,10 +23,10 @@ A score measures the iCode harness only if every run sees the same rules. So eve
 | Control | What P3/P5 does | Code |
 |---|---|---|
 | Pinned iCode | `OFFICIAL=1` requires `ICODE_MODE=git` at the pinned commit; iCode is evaluated unmodified | `icode_input.sh` (`icode_apply_official_pin`) |
-| Runtime stripped of deliverables | Removes `tomllib`, `test/`, `idlelib/idle_test`, vendored `tomli` and `backports.zoneinfo`; `zoneinfo` stays importable as `.pyc` only | `icode_sanitize.py` |
+| Runtime stripped of deliverables | Removes `test/`, `idlelib/idle_test`, vendored `tomli` and `backports.zoneinfo`. Replaces the stdlib `tomllib` (the `cpython_5` deliverable) with a `.pyc`-only stub that imports but refuses to parse, because iCode's `alembic` imports `tomllib` on Python 3.11+. `zoneinfo` stays importable as `.pyc` only | `icode_sanitize.py` |
 | Sourceless stdlib | The mounted sandbox CPython keeps `.pyc` only, so no stdlib `.py` is readable at `/opt/icode-host`. On for every benchmark | `ICODE_SOURCELESS_STDLIB` (see below) |
 | No iCode Python paths in the agent's shell | The launcher exports no `PYTHONPATH` or `VIRTUAL_ENV`; iCode's own interpreter gets its paths from `icode-host.pth` | `icode_input.sh` |
-| Runtime still starts | Host probe: `icode --help` and a pydantic model build on the sanitized tree, before any rollout | `icode_probe_sandbox` |
+| Runtime still starts | Host probe on the sanitized tree, before any rollout: `icode --help`, a pydantic model build, and an import of the modules `icode run` loads (`agent.factory`, `host.bootstrap`) | `icode_probe_sandbox` |
 | One read-only mount | The only agent mount is the iCode tree at `/opt/icode-host`, `read_only: true`. P5 refuses a tree that is, contains or sits inside a benchmark or tasks folder | `agent_mounts.py` |
 | Leak scan | Gold lines of every selected task are searched in the mounted tree (`anticheat_leakscan.json`). `OFFICIAL=1` stops on a hit; smoke runs warn | `anticheat_leakscan.py` |
 | Secrets | Only `DEEPSEEK_API_KEY` reaches the agent. Clone tokens are unset before Harbor and never written to `.harbor-env` | `p5_harness.sh` |
@@ -43,7 +43,7 @@ The canary runs on the Jenkins parameter `CANARY`:
 - `only`: run it on every selected task, then stop with no rollouts and no model tokens. `bash pipeline/stages/p5c_canary.sh` does the same from a worker shell.
 - `off`: skip it. `OFFICIAL=1` refuses this.
 
-`CANARY_ALLOW_HOST=<host>` is a test switch that opens one host for the canary only, to prove the canary fails. `OFFICIAL=1` refuses it. The report is `eval-runs/canary/jenkins-<BUILD_NUMBER>/report.md`; each failure prints a `CANARY FAIL task=… check=…` line. Rules and host lists: `pipeline/config/canary-v1.json`.
+`CANARY_ALLOW_HOST=<host>` is a test switch that opens one host for the canary only, to prove the canary fails. `OFFICIAL=1` refuses it. The canary then fails either way: `<host> reached (HTTP …)` is the proof, while `negative test inconclusive` means the opened host never answered, so choose a host this worker can reach. The model API gets 3 tries of 30 s each before `model_api` fails. If it still fails, test HTTPS from a plain container: a VPN tunnel with a smaller MTU than Docker's bridge stalls every TLS handshake, and P0/P5 print `WARNING: egress via … has MTU …` when they detect one. The report is `eval-runs/canary/jenkins-<BUILD_NUMBER>/report.md`; each failure prints a `CANARY FAIL task=… check=…` line. Rules and host lists: `pipeline/config/canary-v1.json`.
 
 The canary skips one check: iCode PR 2 has no command that lists its enabled tools, so `tool_list` is `skip`. Web tools are still covered by the network check and by the P0.5 transcript scan.
 
@@ -54,7 +54,7 @@ Every run records the controls above in `eval_protocol.isolation` (in `artifact.
 | Field | Meaning |
 |---|---|
 | `mode` | `git` (sanitized sandbox CPython) or `release` (binary only, nothing to sanitize) |
-| `sanitizer` | Sanitizer version, for example `mac-k3d-icode-sanitize-v2` |
+| `sanitizer` | Sanitizer version, for example `mac-k3d-icode-sanitize-v3` |
 | `sourceless` | `true` when the mounted stdlib has no `.py` files |
 | `removed` | How many deliverable paths the sanitizer removed |
 | `runtime_sha256` | Fingerprint of the mounted runtime that is the same for every clone of one iCode commit, whatever the workspace path or file times. **Compare this one across runs** |

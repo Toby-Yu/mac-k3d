@@ -460,6 +460,20 @@ if importlib.util.find_spec("pydantic"):
     rm -rf "$tmp"
     die "sanitized iCode runtime cannot build a pydantic model (stdlib module missing?)"
   fi
+  # icode run imports the agent stack that --help skips (alembic needs tomllib on 3.11+).
+  # A layout without these modules is skipped; any other missing module fails.
+  if ! (cd "$tmp" && env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${dest}${site:+:$site}" \
+    "$py" -c 'import importlib
+for name in ("openjiuwen_icode.agent.factory", "openjiuwen_icode.host.bootstrap"):
+    try:
+        importlib.import_module(name)
+    except ModuleNotFoundError as exc:
+        if not exc.name or not (name == exc.name or name.startswith(exc.name + ".")):
+            raise') >"$tmp/probe.log" 2>&1; then
+    tail -n 20 "$tmp/probe.log" >&2 || true
+    rm -rf "$tmp"
+    die "sanitized iCode runtime cannot import its run path (stdlib module missing?)"
+  fi
   rm -rf "$tmp"
   echo "OK sanitized iCode runtime starts ($py)" >&2
 }

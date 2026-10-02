@@ -88,6 +88,7 @@ TASKS_DIR="$(benchmark_tasks_dir)"
 [ -d "$TASKS_DIR" ] || die "run P2 first (missing $TASKS_DIR)"
 [ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
 have harbor || die "harbor not on PATH (run P1)"
+warn_docker_mtu
 [ -f "$PIPELINE_LIB/icode_harbor_agent.py" ] || die "missing pipeline/lib/icode_harbor_agent.py"
 [ -f "$PIPELINE_LIB/icode_capture.sh" ] || die "missing pipeline/lib/icode_capture.sh"
 [ -f "$WORKDIR/icode_bin_path.txt" ] || bash "$(dirname "$0")/p3_icode.sh"
@@ -292,7 +293,7 @@ ensure_task_ready() {
   printf '%s\n' "$jobs" >"$HARNESS_DIR/harbor_jobs_dir.txt"
   if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
     local task_toml="$TASKS_DIR/${tid}/task.toml"
-    local image env_dir leftover
+    local image
     image="$(
       python3 - "$task_toml" "$tid" <<'PY'
 import re, sys
@@ -302,20 +303,7 @@ m = re.search(r'^docker_image\s*=\s*"([^"]+)"', text, re.M)
 print(m.group(1) if m else f"smartdub26/lolbench:{tid}-1.0.0")
 PY
     )"
-    env_dir="$TASKS_DIR/${tid}/environment"
-    if docker image inspect "$image" >/dev/null 2>&1; then
-      echo "P5 harbor: using local image $image"
-    else
-      leftover="$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^${tid}__.*__env-main" | head -n 1 || true)"
-      if [ -n "$leftover" ]; then
-        echo "P5 harbor: retag $leftover -> $image (skip Harbor force build; it hangs after tagging)"
-        docker tag "$leftover" "$image"
-      else
-        [ -f "$env_dir/Dockerfile" ] || die "missing $env_dir/Dockerfile and no local $image"
-        echo "P5 harbor: Hub tag is arm64-only; docker build --progress=plain $image"
-        docker build --progress=plain -t "$image" "$env_dir"
-      fi
-    fi
+    ensure_task_image "$tid" "$image" "$TASKS_DIR/${tid}/environment"
   fi
   TASK_READY[$tid]=1
 }
@@ -623,6 +611,7 @@ canary_spec() {
   python3 "$PIPELINE_LIB/canary_verdict.py" spec \
     --task-dir "$TASKS_DIR/$tid" \
     --benchmark "${BENCHMARK:-deepswe}" \
+    --allow-host "${CANARY_ALLOW_HOST:-}" \
     --out "$spec" >&2 || die "canary spec failed for $tid"
   printf '%s\n' "$spec"
 }

@@ -63,6 +63,58 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# Docker daemon architecture in image terms (amd64 / arm64); empty if unknown.
+docker_host_arch() {
+  case "$(docker info --format '{{.Architecture}}' 2>/dev/null || true)" in
+    x86_64 | amd64) echo amd64 ;;
+    aarch64 | arm64) echo arm64 ;;
+  esac
+}
+
+# LoLBench task image: local tag, else Harbor's leftover build, else docker build.
+# A local tag for another architecture is rebuilt: the x86-64 iCode runtime cannot
+# exec in an emulated arm64 image (no ld-linux-x86-64), and some Hub tags are arm64-only.
+ensure_task_image() {
+  local tid="$1" image="$2" env_dir="$3" leftover image_arch host_arch
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    image_arch="$(docker image inspect "$image" --format '{{.Architecture}}' 2>/dev/null || true)"
+    host_arch="$(docker_host_arch)"
+    if [ -z "$image_arch" ] || [ -z "$host_arch" ] || [ "$image_arch" = "$host_arch" ]; then
+      echo "P5 harbor: using local image $image"
+      return 0
+    fi
+    [ -f "$env_dir/Dockerfile" ] || die "local $image is $image_arch, this worker is $host_arch, and $env_dir/Dockerfile is missing"
+    echo "P5 harbor: local $image is $image_arch, this worker is $host_arch; docker build --progress=plain $image"
+    docker build --progress=plain -t "$image" "$env_dir"
+    return 0
+  fi
+  leftover="$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^${tid}__.*__env-main" | head -n 1 || true)"
+  if [ -n "$leftover" ]; then
+    echo "P5 harbor: retag $leftover -> $image (skip Harbor force build; it hangs after tagging)"
+    docker tag "$leftover" "$image"
+    return 0
+  fi
+  [ -f "$env_dir/Dockerfile" ] || die "missing $env_dir/Dockerfile and no local $image"
+  echo "P5 harbor: Hub tag is arm64-only; docker build --progress=plain $image"
+  docker build --progress=plain -t "$image" "$env_dir"
+}
+
+# A VPN tunnel (WireGuard etc.) with a smaller MTU than Docker's bridge black-holes
+# large TLS replies: containers connect, then every HTTPS handshake times out
+# (model API, canary hosts). Warns only; a host that clamps TCP MSS is fine.
+warn_docker_mtu() {
+  local dev host_mtu docker_mtu
+  have ip || return 0
+  dev="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1 || true)"
+  [ -n "$dev" ] || return 0
+  host_mtu="$(ip -o link show dev "$dev" 2>/dev/null | sed -n 's/.* mtu \([0-9]*\).*/\1/p' || true)"
+  docker_mtu="$(docker network inspect bridge --format '{{index .Options "com.docker.network.driver.mtu"}}' 2>/dev/null || true)"
+  docker_mtu="${docker_mtu:-1500}"
+  [ "$host_mtu" -lt "$docker_mtu" ] 2>/dev/null || return 0
+  echo "WARNING: egress via $dev has MTU $host_mtu but Docker's bridge uses $docker_mtu; HTTPS from containers (model API, canary) will time out." >&2
+  echo "WARNING: disconnect the VPN, or set \"mtu\": $host_mtu and \"default-network-opts\": {\"bridge\": {\"com.docker.network.driver.mtu\": \"$host_mtu\"}} in /etc/docker/daemon.json and restart Docker." >&2
+}
+
 # Isolation canary (P0.6). CANARY=official (default) runs it on official runs only;
 # on runs it once before the rollouts; only runs it on every selected task and
 # stops after P5.

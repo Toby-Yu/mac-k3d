@@ -35,7 +35,7 @@ FIXTURE = LIB / "testdata" / "report-min.json"
 def valid_isolation() -> dict:
     return {
         "mode": "git",
-        "sanitizer": "mac-k3d-icode-sanitize-v2",
+        "sanitizer": "mac-k3d-icode-sanitize-v3",
         "sourceless": True,
         "removed": 9,
         "tree_sha256": "a" * 64,
@@ -1224,7 +1224,10 @@ exit 0
         self.assertIn("api.deepseek.com", text)
         self.assertIn("ICODE_MODEL", text)
         self.assertIn("reward.json", text)
-        self.assertIn("docker build --progress=plain", text)
+        self.assertIn('ensure_task_image "$tid" "$image"', text)
+        common = (ROOT / "pipeline" / "stages" / "_common.sh").read_text(encoding="utf-8")
+        image_fn = common[common.index("ensure_task_image() {"):]
+        self.assertIn('docker build --progress=plain -t "$image" "$env_dir"', image_fn[: image_fn.index("\n}\n")])
         self.assertIn("--mounts", text)
         self.assertIn("eval_progress.py", text)
         self.assertIn("heartbeat", text)
@@ -3022,7 +3025,8 @@ class AgentIsolationTests(unittest.TestCase):
             doc = sanitize_tree(tree)
             self.assertIsNotNone(doc)
             for gone in (
-                stdlib / "tomllib",
+                stdlib / "tomllib" / "__init__.py",
+                stdlib / "tomllib" / "_parser.py",
                 stdlib / "test",
                 stdlib / "idlelib" / "idle_test",
                 stdlib / "zoneinfo" / "__init__.py",
@@ -3036,6 +3040,16 @@ class AgentIsolationTests(unittest.TestCase):
                 self.assertFalse(gone.exists(), gone)
             self.assertTrue((stdlib / "zoneinfo" / "__init__.pyc").is_file())
             self.assertTrue((stdlib / "zoneinfo" / "_common.pyc").is_file())
+            self.assertEqual(sorted(p.name for p in (stdlib / "tomllib").iterdir()), ["__init__.pyc"])
+            probe = (
+                "import sys; sys.path.insert(0, sys.argv[1]); import tomllib; print(tomllib.__file__)\n"
+                "try:\n    tomllib.loads('a = 1')\nexcept tomllib.TOMLDecodeError:\n    print('refused')"
+            )
+            stub = subprocess.run(
+                [sys.executable, "-I", "-c", probe, str(stdlib)], capture_output=True, text=True, check=False
+            )
+            self.assertEqual(stub.returncode, 0, stub.stderr)
+            self.assertEqual(stub.stdout.split(), [str(stdlib / "tomllib" / "__init__.pyc"), "refused"])
             for kept in (
                 stdlib / "idlelib" / "editor.py",
                 stdlib / "typing.py",
@@ -3049,6 +3063,7 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertEqual(manifest["sanitizer"], SANITIZER_VERSION)
             self.assertFalse(manifest["sourceless"])
             self.assertIn(".venv/sandbox-cpython/lib/python3.13/tomllib", manifest["removed"])
+            self.assertEqual(manifest["stubbed"], [".venv/sandbox-cpython/lib/python3.13/tomllib"])
             self.assertIn(".venv/lib/python3.13/site-packages/setuptools/_vendor/tomli", manifest["removed"])
             self.assertEqual(len(manifest["tree_sha256"]), 64)
 
@@ -3080,6 +3095,35 @@ class AgentIsolationTests(unittest.TestCase):
         self._write(venv / "pyvenv.cfg", f"home = {home}\n")
         (venv / "bin" / "python").symlink_to(f"{home}/bin/python3.13")
         return tree
+
+    def test_startup_probe_imports_the_run_path(self):
+        """--help skips the agent stack; build 47/48 crashed there on a removed stdlib module."""
+        cases = (
+            ("import missing_stdlib_module_for_probe\n", 1, "cannot import its run path"),
+            ("VALUE = 1\n", 0, "OK sanitized iCode runtime starts"),
+            (None, 0, "OK sanitized iCode runtime starts"),
+        )
+        for factory, rc, message in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                tree = Path(tmp) / "icode-src"
+                (tree / ".venv" / "sandbox-cpython" / "bin").mkdir(parents=True)
+                (tree / ".venv" / "sandbox-cpython" / "bin" / "python3").symlink_to(sys.executable)
+                self._write(tree / ".venv" / "bin" / "icode", "import sys\nsys.exit(0)\n")
+                (tree / ".venv" / "bin" / "icode").chmod(0o755)
+                self._write(tree / "openjiuwen_icode" / "__init__.py", "")
+                if factory is not None:
+                    self._write(tree / "openjiuwen_icode" / "agent" / "__init__.py", "")
+                    self._write(tree / "openjiuwen_icode" / "agent" / "factory.py", factory)
+                    self._write(tree / "openjiuwen_icode" / "host" / "__init__.py", "")
+                    self._write(tree / "openjiuwen_icode" / "host" / "bootstrap.py", "VALUE = 1\n")
+                proc = subprocess.run(
+                    ["bash", "-c", 'source "$1"; icode_probe_sandbox "$2"', "_", str(LIB / "icode_input.sh"), str(tree)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, rc, (factory, proc.stderr))
+                self.assertIn(message, proc.stderr, factory)
 
     def test_runtime_sha256_is_the_same_for_every_workspace(self):
         import shutil
@@ -3449,6 +3493,84 @@ class AgentIsolationTests(unittest.TestCase):
         stage = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertIn("unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT", stage)
 
+    def test_lolbench_image_of_another_arch_is_rebuilt(self):
+        cases = (
+            ("arm64", "x86_64", True, 0, "local img:1 is arm64, this worker is amd64; docker build"),
+            ("amd64", "x86_64", True, 0, "using local image img:1"),
+            ("arm64", "aarch64", True, 0, "using local image img:1"),
+            ("arm64", "x86_64", False, 1, "Dockerfile is missing"),
+        )
+        for image_arch, host_arch, dockerfile, rc, message in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                bindir = tmp_path / "bin"
+                bindir.mkdir()
+                log = tmp_path / "docker.log"
+                (bindir / "docker").write_text(
+                    "#!/bin/sh\n"
+                    f"printf '%s\\n' \"$*\" >>'{log}'\n"
+                    'case "$1" in\n'
+                    f"  info) echo {host_arch} ;;\n"
+                    f"  image) case \"$*\" in *--format*) echo {image_arch} ;; esac ;;\n"
+                    "esac\nexit 0\n",
+                    encoding="utf-8",
+                )
+                (bindir / "docker").chmod(0o755)
+                env_dir = tmp_path / "environment"
+                env_dir.mkdir()
+                if dockerfile:
+                    (env_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+                env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+                           MAC_K3D_EVAL_WORKDIR=str(tmp_path / "work"))
+                proc = subprocess.run(
+                    ["bash", "-c", 'source "$1"; ensure_task_image cpython_5 img:1 "$2"', "_",
+                     str(ROOT / "pipeline" / "stages" / "_common.sh"), str(env_dir)],
+                    capture_output=True, text=True, check=False, env=env,
+                )
+                self.assertEqual(proc.returncode, rc, (image_arch, host_arch, proc.stderr))
+                self.assertIn(message, proc.stdout + proc.stderr)
+                built = any(line.startswith("build ") for line in log.read_text(encoding="utf-8").splitlines())
+                self.assertEqual(built, rc == 0 and "docker build" in message, (image_arch, host_arch))
+
+    def test_vpn_mtu_below_docker_bridge_warns(self):
+        cases = (
+            ("1280", "1500", True),
+            ("1280", "", True),
+            ("1500", "1500", False),
+            ("1280", "1280", False),
+            ("", "1500", False),
+        )
+        for tunnel_mtu, bridge_mtu, warns in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                bindir = tmp_path / "bin"
+                bindir.mkdir()
+                route = "1.1.1.1 dev surfshark_wg table 300000 src 10.14.0.2" if tunnel_mtu else ""
+                (bindir / "ip").write_text(
+                    "#!/bin/sh\n"
+                    'case "$*" in\n'
+                    f"  'route get 1.1.1.1') [ -n '{route}' ] || exit 2; echo '{route}' ;;\n"
+                    f"  *link*) echo '7: surfshark_wg: <POINTOPOINT,UP> mtu {tunnel_mtu} qdisc noqueue' ;;\n"
+                    "esac\n",
+                    encoding="utf-8",
+                )
+                (bindir / "docker").write_text(f"#!/bin/sh\necho '{bridge_mtu}'\n", encoding="utf-8")
+                for name in ("ip", "docker"):
+                    (bindir / name).chmod(0o755)
+                env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+                           MAC_K3D_EVAL_WORKDIR=str(tmp_path / "work"))
+                proc = subprocess.run(
+                    ["bash", "-c", 'source "$1"; warn_docker_mtu', "_",
+                     str(ROOT / "pipeline" / "stages" / "_common.sh")],
+                    capture_output=True, text=True, check=False, env=env,
+                )
+                self.assertEqual(proc.returncode, 0, (tunnel_mtu, bridge_mtu, proc.stderr))
+                self.assertEqual("MTU 1280 but Docker's bridge uses 1500" in proc.stderr, warns,
+                                 (tunnel_mtu, bridge_mtu, proc.stderr))
+                self.assertEqual("daemon.json" in proc.stderr, warns)
+        for stage in ("p0_prereqs.sh", "p5_harness.sh"):
+            self.assertIn("\nwarn_docker_mtu\n", (ROOT / "pipeline" / "stages" / stage).read_text(encoding="utf-8"))
+
     @staticmethod
     def _dry_line(stdout: str, prefix: str) -> list[str]:
         line = next((ln for ln in stdout.splitlines() if ln.startswith(prefix)), "")
@@ -3507,6 +3629,9 @@ class AgentIsolationTests(unittest.TestCase):
             canary = self._dry_line(proc.stdout, "P5 canary dry-run")
             self.assertIn("github.com", canary)
             self.assertNotIn("github.com", icode)
+            spec_arg = canary[canary.index("--ak") + 1]
+            spec = json.loads(Path(spec_arg[len("spec="):]).read_text(encoding="utf-8"))
+            self.assertEqual(spec["allow_host"], "github.com")
 
     def test_p5_official_refuses_canary_off_and_allow_host(self):
         cases = (

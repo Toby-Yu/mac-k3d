@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import re
 import socket
 import sys
 import tomllib
@@ -101,11 +102,15 @@ def gold_file_patterns(gold_text: str, globs: list[str]) -> tuple[list[str], lis
     return sorted(names), sorted(paths)
 
 
-def build_spec(task_dir: Path, benchmark: str, config: dict | None = None) -> dict:
+def build_spec(task_dir: Path, benchmark: str, config: dict | None = None, allow_host: str = "") -> dict:
+    """allow_host: CANARY_ALLOW_HOST, a host opened on purpose; it is probed as a source host."""
     config = config or load_config()
     model = [h.lower() for h in config.get("model_hosts") or []]
     skip = set(model) | {h.lower() for h in config.get("model_host_aliases") or []}
     sources = [h.lower() for h in config.get("source_hosts") or []]
+    allow_host = allow_host.strip().lower()
+    if allow_host and allow_host not in sources:
+        sources.insert(0, allow_host)
     hosts = [{"kind": "source", "host": h} for h in sources]
     hosts += [{"kind": "model", "host": h} for h in model]
     for host in _declared_hosts(task_dir):
@@ -123,6 +128,8 @@ def build_spec(task_dir: Path, benchmark: str, config: dict | None = None) -> di
         "prune": list(config.get("prune") or []),
         "mount": config.get("mount", "/opt/icode-host"),
         "timeouts": dict(config.get("timeouts") or {}),
+        "model_attempts": int(config.get("model_attempts") or 1),
+        "allow_host": allow_host or None,
     }
 
 
@@ -133,11 +140,38 @@ def render_spec(spec: dict) -> str:
     lines += [f"path {p}" for p in spec.get("paths") or []]
     lines += [f"prune {p}" for p in spec.get("prune") or []]
     lines += [f"timeout {k} {int(v)}" for k, v in sorted((spec.get("timeouts") or {}).items())]
+    lines.append(f"attempts model {int(spec.get('model_attempts') or 1)}")
     return "\n".join(lines) + "\n"
 
 
+_SECRET_RX = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|_PAT)[A-Z0-9_]*=)\S+")
+_KEY_RX = re.compile(r"\b(sk-|ghp_|gho_|glpat-)[A-Za-z0-9_\-]{6,}")
+_REASON_RX = re.compile(r"not found|No module named|No such file|Permission denied|Error:", re.I)
+
+
+def trial_error(trial: Path) -> str:
+    """Why a Harbor trial stopped, in one line with secret-like values masked; '' if it did not."""
+    result = _load_json(trial / "result.json") or {}
+    info = result.get("exception_info") if isinstance(result.get("exception_info"), dict) else {}
+    kind = str(info.get("exception_type") or "")
+    if not kind:
+        return ""
+    message = str(info.get("exception_message") or "")
+    parts = [kind]
+    code = re.search(r"\(exit (\d+)\)", message)
+    if code:
+        parts.append(f"exit {code.group(1)}")
+    reason = next((ln.strip() for ln in message.splitlines()[1:] if _REASON_RX.search(ln)), "")
+    if reason:
+        parts.append(reason[:200])
+    text = ": ".join(parts)
+    return _KEY_RX.sub(r"\1***", _SECRET_RX.sub(r"\1***", text))
+
+
 def load_facts(agent_dir: Path) -> dict:
-    return {key: _load_json(agent_dir / name) for key, name in FACT_FILES.items()}
+    facts = {key: _load_json(agent_dir / name) for key, name in FACT_FILES.items()}
+    facts["trial_error"] = trial_error(agent_dir.parent)
+    return facts
 
 
 def _check(status: str, detail: str = "") -> dict:
@@ -154,7 +188,14 @@ def _blocked_detail(entry: dict) -> str:
     return f"{entry.get('host')} reached (HTTP {code})"
 
 
-def check_network(probe: dict) -> tuple[dict, dict, dict]:
+def _unreached_detail(entry: dict) -> str:
+    tries = entry.get("attempts")
+    tries = f" after {tries} attempts" if isinstance(tries, int) and tries > 1 else ""
+    return f"{entry.get('host')} unreachable{tries} (curl exit {entry.get('curl_exit')}: {entry.get('error') or '-'})"
+
+
+def check_network(probe: dict, allow_host: str | None = None) -> tuple[dict, dict, dict]:
+    """allow_host: CANARY_ALLOW_HOST. The run must fail either way; the detail says whether it proved anything."""
     if probe.get("curl") is not True:
         missing = _check("fail", "curl is missing in the container, so egress was not tested")
         return missing, missing, _check("skip", "curl missing")
@@ -164,10 +205,18 @@ def check_network(probe: dict) -> tuple[dict, dict, dict]:
         by_kind.setdefault(str(entry.get("kind") or ""), []).append(entry)
     sources = by_kind.get("source", [])
     leaked = [e for e in sources if _reached(e)]
+    opened = next((e for e in sources if allow_host and str(e.get("host")) == allow_host), None)
     if not sources:
         network = _check("fail", "no source host was probed")
     elif leaked:
         network = _check("fail", "; ".join(_blocked_detail(e) for e in leaked))
+    elif allow_host:
+        why = f" ({_unreached_detail(opened)})" if opened else " (not probed)"
+        network = _check(
+            "fail",
+            f"negative test inconclusive: CANARY_ALLOW_HOST={allow_host} was opened but did not answer{why}; "
+            "use a host this worker can reach",
+        )
     else:
         network = _check("pass", f"{len(sources)} source hosts blocked")
     models = by_kind.get("model", [])
@@ -177,7 +226,9 @@ def check_network(probe: dict) -> tuple[dict, dict, dict]:
     elif down:
         model = _check(
             "fail",
-            "; ".join(f"{e.get('host')} unreachable (curl exit {e.get('curl_exit')}: {e.get('error') or '-'})" for e in down),
+            "; ".join(_unreached_detail(e) for e in down)
+            + ". iCode would not reach the model either; check HTTPS from a plain container first"
+            " (a VPN tunnel with a smaller MTU than Docker's bridge stalls every TLS handshake)",
         )
     else:
         model = _check("pass", ", ".join(f"{e.get('host')} HTTP {e.get('http_code')}" for e in models))
@@ -319,10 +370,14 @@ def verdict(facts: dict, config: dict | None = None) -> dict:
     config = config or load_config()
     probe = facts.get("probe")
     if not isinstance(probe, dict):
-        checks = {name: _check("fail", "canary.json missing or unreadable") for name in CHECKS}
+        why = "canary.json missing or unreadable"
+        if facts.get("trial_error"):
+            why += f"; the trial stopped before the probe: {facts['trial_error']}"
+        checks = {name: _check("fail", why) for name in CHECKS}
         checks["tool_list"] = check_tool_list(facts.get("host"))
         return {"status": "fail", "checks": checks}
-    network, model, declared = check_network(probe)
+    host = facts.get("host") if isinstance(facts.get("host"), dict) else {}
+    network, model, declared = check_network(probe, str(host.get("allow_host") or "") or None)
     checks = {
         "network": network,
         "model_api": model,
@@ -406,6 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     spec.add_argument("--task-dir", required=True)
     spec.add_argument("--benchmark", default="deepswe")
     spec.add_argument("--out", required=True)
+    spec.add_argument("--allow-host", default="", help="CANARY_ALLOW_HOST (test only)")
     spec.add_argument("--config", default="")
     summ = sub.add_parser("summarize")
     summ.add_argument("--jobs-dir", required=True)
@@ -421,7 +477,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise FileNotFoundError(f"missing task dir {task_dir}")
             out = Path(args.out)
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps(build_spec(task_dir, args.benchmark, config), indent=2) + "\n", encoding="utf-8")
+            doc = build_spec(task_dir, args.benchmark, config, args.allow_host)
+            out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
             return 0
         summary = summarize(Path(args.jobs_dir), config, args.task or None)
         out_dir = Path(args.out_dir)
@@ -433,10 +490,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     for tid, result in sorted(summary["tasks"].items()):
         print(f"canary: {tid} {result['status']}")
-        for name in CHECKS:
-            check = result["checks"][name]
-            if check["status"] in ("fail", "warn"):
-                print(f"CANARY {check['status'].upper()} task={tid} check={name}: {check['detail']}")
+        noted = [(n, c) for n, c in ((n, result["checks"][n]) for n in CHECKS) if c["status"] in ("fail", "warn")]
+        if len(noted) > 1 and len({(c["status"], c["detail"]) for _, c in noted}) == 1:
+            noted = [("all", noted[0][1])]
+        for name, check in noted:
+            print(f"CANARY {check['status'].upper()} task={tid} check={name}: {check['detail']}")
     counts = summary["counts"]
     print(
         f"canary {summary['status']}: tasks={counts['tasks']} pass={counts['pass']} fail={counts['fail']} "
