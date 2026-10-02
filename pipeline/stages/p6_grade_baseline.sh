@@ -27,6 +27,13 @@ print(json.dumps([{"type": "bind", "source": sys.argv[1], "target": "/opt/baseli
 PY
 )"
   local log="$dest/harbor.log"
+  local declared repo_decl="" base_decl=""
+  local -a capture_ae=()
+  declared="$(python3 "$PIPELINE_LIB/capture_receipt.py" declared-repo \
+    --task-dir "$TASKS_DIR/$tid" --benchmark "${BENCHMARK:-deepswe}")" || declared=""
+  { read -r repo_decl; read -r base_decl; } <<<"$declared" || true
+  if [ -n "$repo_decl" ]; then capture_ae+=(--ae "MAC_K3D_REPO=$repo_decl"); fi
+  if [ -n "$base_decl" ]; then capture_ae+=(--ae "MAC_K3D_BASE_COMMIT=$base_decl"); fi
   echo "P6 grade: $tid $(basename "$dest") cpus=$EVAL_CPUS_EACH"
   set +e
   (
@@ -45,7 +52,8 @@ PY
       -y \
       --mounts "$mounts" \
       --ae "MAC_K3D_BENCHMARK=${BENCHMARK:-deepswe}" \
-      --ae "PYTHONDONTWRITEBYTECODE=1"
+      --ae "PYTHONDONTWRITEBYTECODE=1" \
+      ${capture_ae[@]+"${capture_ae[@]}"}
   ) >"$log" 2>&1
   local rc=$?
   set -e

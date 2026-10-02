@@ -28,6 +28,9 @@ _TRIAL_FILES = {
     "timing.json",
     "agent.patch",
     "model.patch",
+    "capture.json",
+    "capture_flags.json",
+    "base_sha.txt",
 }
 
 

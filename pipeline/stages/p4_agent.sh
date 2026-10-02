@@ -17,8 +17,8 @@ case "$shebang" in
     ;;
 esac
 PYTHONPATH="$PIPELINE_LIB${PYTHONPATH:+:$PYTHONPATH}" "$py" -c \
-  "from icode_harbor_agent import ICodeAgent; assert ICodeAgent.name() == 'icode'" \
-  || die "icode_harbor_agent:ICodeAgent did not import"
+  "from icode_harbor_agent import CAPTURE_SRC, ICodeAgent; from patch_harbor_agent import PatchAgent; assert ICodeAgent.name() == 'icode' and CAPTURE_SRC.is_file()" \
+  || die "icode_harbor_agent:ICodeAgent, patch_harbor_agent:PatchAgent or icode_capture.sh missing"
 
 echo "OK Harbor adapter $PIPELINE_LIB/icode_harbor_agent.py (icode_harbor_agent:ICodeAgent)"
 progress 50 "P4 complete"

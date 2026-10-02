@@ -83,6 +83,7 @@ TASKS_DIR="$(benchmark_tasks_dir)"
 [ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
 have harbor || die "harbor not on PATH (run P1)"
 [ -f "$PIPELINE_LIB/icode_harbor_agent.py" ] || die "missing pipeline/lib/icode_harbor_agent.py"
+[ -f "$PIPELINE_LIB/icode_capture.sh" ] || die "missing pipeline/lib/icode_capture.sh"
 [ -f "$WORKDIR/icode_bin_path.txt" ] || bash "$(dirname "$0")/p3_icode.sh"
 ICODE_BIN="$(cat "$WORKDIR/icode_bin_path.txt")"
 [ -n "$ICODE_BIN" ] && [ -f "$ICODE_BIN" ] || die "P3 did not resolve an icode binary (needed for Harbor bind-mount)"
@@ -391,6 +392,17 @@ build_unit_cmd() {
   cmd+=(--ae "DEEPSEEK_MODEL=${DEEPSEEK_MODEL}")
   cmd+=(--ae "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")
   cmd+=(--ae "MAC_K3D_BENCHMARK=${BENCHMARK:-deepswe}")
+  capture_declared_ae "$TASKS_DIR/$tid"
+}
+
+# Appends the repo and base the task declares; icode_capture.sh checks them.
+capture_declared_ae() {
+  local declared repo_decl="" base_decl=""
+  declared="$(python3 "$PIPELINE_LIB/capture_receipt.py" declared-repo \
+    --task-dir "$1" --benchmark "${BENCHMARK:-deepswe}")" || declared=""
+  { read -r repo_decl; read -r base_decl; } <<<"$declared" || true
+  if [ -n "$repo_decl" ]; then cmd+=(--ae "MAC_K3D_REPO=$repo_decl"); fi
+  if [ -n "$base_decl" ]; then cmd+=(--ae "MAC_K3D_BASE_COMMIT=$base_decl"); fi
 }
 
 start_unit() {

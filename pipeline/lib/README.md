@@ -7,6 +7,8 @@ Used by `mac-k3d eval` and Jenkins jobs `deepswe_one_task`, `lolbench_one_task`,
 | `icode_input.sh` | P3 iCode inputs: Jenkins upload / local `*-full-*`, or git clone; leftover `icode-src` wipe via Docker |
 | `icode_pier_agent.py` | Pier 0.3.1 `ICodeAgent` (`--agent-import-path icode_pier_agent:ICodeAgent`) |
 | `icode_harbor_agent.py` | Harbor `ICodeAgent` for all three benchmarks; worker iCode tree bind-mounted at `/opt/icode-host` |
+| `icode_capture.sh` | Runs in the task container for `ICodeAgent` and `PatchAgent`. `base` records the base commit before work; `capture` removes runtime output, diffs against that base, hands the patch to the suite's grader (LoLBench: `lolbench-submit` before the commit, replaced by the standard patch when they differ; DeepSWE / SWE-bench Pro: their `verifier.collect` hook), commits, and writes `/logs/agent/capture.json` |
+| `capture_receipt.py` | `declared-repo`: repo and base a task declares (P5/P6 pass them as `MAC_K3D_REPO` / `MAC_K3D_BASE_COMMIT`). `annotate`: P7 compares the patch each grader read with the receipt and writes `agent/capture_flags.json` (`capture_mismatch`, `capture_missing`, `capture_error`, `patch_oversize`) |
 | `eval_slots.py` | P5/P6 slot count, per-question history mem cap, resume-seed, one-question-at-a-time order ([optimization.md](../../docs/optimization.md)) |
 | `eval_progress.py` | P5 `progress.json` and the 60s heartbeat (`done/needed`, inflight, slots) |
 | `pier-agent-icode/` | Unused by the current runner. Kept from the Pier path. |

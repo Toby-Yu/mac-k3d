@@ -7,6 +7,7 @@ and this lab does not store a GitCode PAT on Jenkins.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import override
 
 from harbor.agents.installed.base import BaseInstalledAgent
@@ -16,6 +17,14 @@ from harbor.models.agent.context import AgentContext
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-v4-pro"
 ICODE_HOST = "/opt/icode-host"
+CAPTURE_SRC = Path(__file__).with_name("icode_capture.sh")
+CAPTURE = "/installed-agent/icode_capture.sh"
+
+
+async def install_capture(agent: BaseInstalledAgent, environment: BaseEnvironment) -> None:
+    """Upload the capture script every agent shares: `base` before work, `capture` after."""
+    await environment.upload_file(CAPTURE_SRC, CAPTURE)
+    await agent.exec_as_root(environment, command=f"chmod 755 {CAPTURE}")
 
 
 class ICodeAgent(BaseInstalledAgent):
@@ -33,6 +42,7 @@ class ICodeAgent(BaseInstalledAgent):
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         await self.ensure_system_dependencies(environment, ("git", "curl"))
+        await install_capture(self, environment)
         await self.exec_as_agent(
             environment,
             command=(
@@ -76,41 +86,24 @@ class ICodeAgent(BaseInstalledAgent):
             ),
         )
 
-        submit = ""
-        if str(env.get("MAC_K3D_BENCHMARK") or "").strip().lower() == "lolbench":
-            submit = 'lolbench-submit "$repo" || true; '
         # Harbor prefixes this script with `set -o pipefail`. iCode exits 1 when
         # the turn is not ok (including a tool path that is too long). That exit
         # must not become NonZeroAgentExitCodeError; the verifier still grades
         # whatever patch was written. Turn pipefail off, keep iCode's status,
-        # and let the shell itself exit 0. Same command for every benchmark.
+        # and let the shell itself exit 0. Same command for every benchmark;
+        # icode_capture.sh hands the patch to each suite's grader. A declared
+        # repo that is not a git top-level stops the trial before iCode starts.
         command = (
             'export PATH="$HOME/.local/bin:$PATH"; '
-            'repo=""; '
-            'for root in /workspace /app; do '
-            '  [ -d "$root" ] || continue; '
-            '  hit=$(find "$root" -maxdepth 3 -type d -name .git 2>/dev/null | head -1 || true); '
-            '  if [ -n "$hit" ]; then repo=$(dirname "$hit"); break; fi; '
-            "done; "
-            'if [ -z "$repo" ]; then if [ -d /app ]; then repo=/app; else repo=/workspace; fi; fi; '
+            f"repo=$(bash {CAPTURE} base) || "
+            '{ echo "capture: repo check failed (see /logs/agent/capture.json)" >&2; exit 3; }; '
             'cd "$repo"; '
             "set +o pipefail; "
             "icode -p /logs/agent/icode-project "
             "run -t /tmp/icode_task.md "
             '-C "$repo" -a code --json 2>&1 | tee /logs/agent/icode.txt; '
             'printf "%s\\n" "${PIPESTATUS[0]}" > /logs/agent/icode-exit.txt; '
-            # DeepSWE grades git diff base HEAD. Commit dirty work before
-            # LoLBench submit so the scored tree matches what iCode wrote.
-            "if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then "
-            '  dirty_n=$(git status --porcelain 2>/dev/null | wc -l); '
-            '  if [ "${dirty_n:-0}" -gt 0 ]; then '
-            "    git add -A "
-            "      ':(exclude).agent_history' ':(exclude).agent_history/**' "
-            "      2>/dev/null || git add -A; "
-            "    git -c user.name=icode -c user.email=icode@local "
-            '      commit -q --no-verify -m "icode solution" || true; '
-            "  fi; "
-            "fi; "
-            f"{submit}"
+            f"bash {CAPTURE} capture; "
+            'printf "%s\\n" "$?" > /logs/agent/capture-exit.txt'
         )
         await self.exec_as_agent(environment, env=env, command=command)
