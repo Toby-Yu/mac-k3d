@@ -13,33 +13,21 @@ if [ -n "${BUILD_NUMBER:-}" ]; then
 fi
 
 repo_output_root() {
+  if [ -n "${MAC_K3D_BACKUP_ROOT:-}" ]; then
+    printf '%s\n' "$MAC_K3D_BACKUP_ROOT"
+    return
+  fi
   if [ -n "${MAC_K3D_OUTPUT_ROOT:-}" ]; then
     printf '%s\n' "$MAC_K3D_OUTPUT_ROOT"
     return
   fi
-  local root=""
-  if [ -n "${MAC_K3D_ROOT:-}" ] && [ -f "${MAC_K3D_ROOT}/Cargo.toml" ]; then
-    root="$MAC_K3D_ROOT"
-  fi
-  if [ -z "$root" ]; then
-    local script_root
-    script_root="$(cd "$(dirname "$0")/../.." && pwd)"
-    if [ -f "$script_root/Cargo.toml" ]; then
-      root="$script_root"
-    fi
-  fi
-  if [ -z "$root" ] && [ -n "${HOME:-}" ]; then
-    local cargo
-    cargo="$(find "$HOME" -maxdepth 4 -type f -path '*/mac-k3d/Cargo.toml' -print -quit 2>/dev/null || true)"
-    if [ -n "$cargo" ]; then
-      root="$(dirname "$cargo")"
-    fi
-  fi
-  if [ -n "$root" ]; then
-    printf '%s/output\n' "$root"
+  if [ -n "${MAC_K3D_ROOT:-}" ]; then
+    printf '%s/output\n' "$MAC_K3D_ROOT"
     return
   fi
-  printf '%s/output\n' "${HOME:-.}"
+  local script_root
+  script_root="$(cd "$(dirname "$0")/../.." && pwd)"
+  printf '%s/output\n' "$script_root"
 }
 
 FOLDER="$(
@@ -63,13 +51,28 @@ ART_DIR="$WORKDIR/output/${BENCHMARK}/${FOLDER}"
 BACKUP_ROOT="$(repo_output_root)"
 export MAC_K3D_OUTPUT_ROOT="$BACKUP_ROOT"
 
+API_BASE="${ICODE_API_BASE:-https://api.deepseek.com/v1}"
+if [ -f "$WORKDIR/eval_protocol_inputs.json" ]; then
+  protocol_base="$(
+    python3 - "$WORKDIR/eval_protocol_inputs.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+base = doc.get("api_base") if isinstance(doc, dict) else ""
+print(base if isinstance(base, str) else "")
+PY
+  )"
+  if [ -n "$protocol_base" ]; then
+    API_BASE="$protocol_base"
+  fi
+fi
+
 python3 "$PIPELINE_LIB/render_report.py" \
   --harness-dir "$HARNESS_DIR" \
   --baseline-dir "$BASELINE_DIR" \
   --task-file "$WORKDIR/selected_tasks.txt" \
   --suite "$BENCHMARK" \
   --model "${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
-  --api-base "https://api.deepseek.com/v1" \
+  --api-base "$API_BASE" \
   --run-id "$RUN_ID" \
   --n-rollouts "${N_ROLLOUTS:-1}" \
   --concurrency "${EVAL_PARALLEL:-1}" \

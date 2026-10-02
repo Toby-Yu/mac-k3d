@@ -1218,7 +1218,7 @@ exit 0
 
     def test_p1_requires_agent_import_path(self):
         text = (ROOT / "pipeline" / "stages" / "p1_pier.sh").read_text(encoding="utf-8")
-        self.assertIn("uv tool install harbor", text)
+        self.assertIn('uv tool install "harbor==${HARBOR_VERSION}"', text)
         self.assertIn("lolbench", text)
         self.assertIn("swebenchpro", text)
         self.assertIn("ensuring harbor", text)
@@ -2464,6 +2464,8 @@ class EvalReportTests(unittest.TestCase):
             backup = root / "backup"
             env = os.environ.copy()
             env.pop("BUILD_NUMBER", None)
+            env.pop("ICODE_API_BASE", None)
+            env.pop("OFFICIAL", None)
             env.update(
                 {
                     "MAC_K3D_EVAL_WORKDIR": str(work),
@@ -2603,6 +2605,282 @@ class CostTokenReportTests(unittest.TestCase):
             text = out.read_text(encoding="utf-8")
             self.assertIn("**~$0.90**", text)
             self.assertIn("~$1.80", text)  # peak 0% hit
+
+
+class ProvenanceTests(unittest.TestCase):
+    def _stub_bin(self, directory: Path, name: str, body: str) -> None:
+        path = directory / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+
+    def _run_p1(self, version_line: str) -> subprocess.CompletedProcess[str]:
+        tmp = Path(self._p1_tmp)
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        work = tmp / "work"
+        uv_log = tmp / "uv.log"
+        self._stub_bin(
+            bindir,
+            "uv",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$UV_LOG\"\nexit 0\n",
+        )
+        self._stub_bin(
+            bindir,
+            "harbor",
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--version\" ]; then\n"
+            f"  printf '%s\\n' '{version_line}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+        )
+        env = os.environ.copy()
+        env["HOME"] = str(tmp)
+        env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
+        env["MAC_K3D_EVAL_WORKDIR"] = str(work)
+        env["UV_LOG"] = str(uv_log)
+        env["HARBOR_VERSION"] = "0.22.0"
+        env["BENCHMARK"] = "deepswe"
+        env.pop("OFFICIAL", None)
+        return subprocess.run(
+            ["bash", str(ROOT / "pipeline" / "stages" / "p1_pier.sh")],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_p1_harbor_pin_rejects_wrong_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._p1_tmp = tmp
+            proc = self._run_p1("9.9.9")
+            log = Path(tmp) / "uv.log"
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("wanted 0.22.0", proc.stderr)
+            self.assertIn("harbor==0.22.0", log.read_text(encoding="utf-8"))
+            self.assertFalse((Path(tmp) / "work" / "harbor_version.txt").is_file())
+
+    def test_p1_harbor_pin_accepts_matching_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._p1_tmp = tmp
+            proc = self._run_p1("0.22.0")
+            log = Path(tmp) / "uv.log"
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("harbor==0.22.0", log.read_text(encoding="utf-8"))
+            recorded = (Path(tmp) / "work" / "harbor_version.txt").read_text(encoding="utf-8").strip()
+            self.assertEqual(recorded, "0.22.0")
+
+    def test_task_count_helper(self):
+        from provenance import assert_task_count, count_task_dirs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("a", "b", "c"):
+                (root / name).mkdir()
+            (root / "notes.txt").write_text("x", encoding="utf-8")
+            self.assertEqual(count_task_dirs(root), 3)
+            self.assertEqual(assert_task_count(root, 3), 3)
+            with self.assertRaises(SystemExit) as caught:
+                assert_task_count(root, 4)
+            self.assertEqual(caught.exception.code, 1)
+
+    def test_pin_benchmark_sha_checks_out_and_refuses_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            origin = root / "origin"
+            dest = root / "bench"
+            origin.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
+            subprocess.run(["git", "-C", str(origin), "config", "user.email", "t@t"], check=True)
+            subprocess.run(["git", "-C", str(origin), "config", "user.name", "t"], check=True)
+            (origin / "f").write_text("a\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(origin), "add", "f"], check=True)
+            subprocess.run(["git", "-C", str(origin), "commit", "-q", "-m", "base"], check=True)
+            first = subprocess.check_output(["git", "-C", str(origin), "rev-parse", "HEAD"], text=True).strip()
+            (origin / "f").write_text("b\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(origin), "commit", "-q", "-am", "next"], check=True)
+            second = subprocess.check_output(["git", "-C", str(origin), "rev-parse", "HEAD"], text=True).strip()
+            env = os.environ.copy()
+            env["MAC_K3D_EVAL_WORKDIR"] = str(root / "eval")
+            env.pop("OFFICIAL", None)
+            common = ROOT / "pipeline" / "stages" / "_common.sh"
+
+            def pin(sha: str) -> subprocess.CompletedProcess[str]:
+                script = f'source "{common}" && pin_benchmark_sha "{dest}" "{origin}" "{sha}" && git -C "{dest}" rev-parse HEAD'
+                return subprocess.run(
+                    ["bash", "-c", script],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+
+            first_pin = pin(first)
+            self.assertEqual(first_pin.returncode, 0, first_pin.stdout + first_pin.stderr)
+            self.assertEqual(first_pin.stdout.strip().splitlines()[-1], first)
+            (dest / "f").write_text("local\n", encoding="utf-8")
+            stay = pin(first)
+            self.assertEqual(stay.returncode, 0, stay.stdout + stay.stderr)
+            self.assertEqual((dest / "f").read_text(encoding="utf-8"), "local\n")
+            move = pin(second)
+            self.assertEqual(move.returncode, 0, move.stdout + move.stderr)
+            self.assertEqual(move.stdout.strip().splitlines()[-1], second)
+            self.assertEqual((dest / "f").read_text(encoding="utf-8"), "b\n")
+
+    def test_build_eval_protocol_copies_provenance(self):
+        from render_report import build_artifact, build_eval_protocol, demo_artifact, summary_markdown
+        from report_html import report_html
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            harness = work / "harness"
+            baseline = work / "baseline"
+            harness.mkdir()
+            baseline.mkdir()
+            (work / "icode_release.json").write_text(
+                json.dumps({"filename": "icode-full.tar.gz", "sha256": "abc123"}) + "\n",
+                encoding="utf-8",
+            )
+            (work / "eval_protocol_inputs.json").write_text(
+                json.dumps(
+                    {
+                        "model": "deepseek-flash",
+                        "api_base": "https://example.test/v1",
+                        "provider": "DeepSeek",
+                        "reasoning_effort": "high",
+                        "cpu_lock_qty": 4,
+                        "concurrency": 1,
+                        "cpus_each": 1,
+                        "harbor": {"version": "0.22.0"},
+                        "benchmark": {
+                            "url": "https://github.com/datacurve-ai/deep-swe",
+                            "sha": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+                            "task_count": 113,
+                            "tasks": {
+                                "alpha": {
+                                    "task_toml_sha256": "tomlhash",
+                                    "tests_list_sha256": "testshash",
+                                }
+                            },
+                        },
+                        "grader_overlay": {
+                            "marker": "mac-k3d-lolbench-fix-rewards-v1",
+                            "sha256": "overlayhash",
+                            "applied": False,
+                        },
+                        "images": {
+                            "alpha": {
+                                "image": "example:alpha",
+                                "id": "sha256:image",
+                                "repo_digests": ["example@sha256:image"],
+                            }
+                        },
+                        "worker": {
+                            "node": "worker-a",
+                            "nproc": 16,
+                            "memory_kb": 14000000,
+                            "docker_version": "27.0.0",
+                            "kernel": "7.0.0",
+                            "cpu_model": "Test CPU",
+                        },
+                        "requester": {"user": "unknown", "build_url": "unknown"},
+                        "pipeline": {"commit": "abcdef", "dirty": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            protocol = build_eval_protocol(
+                workdir=work,
+                model="deepseek-flash",
+                api_base="https://example.test/v1",
+                n_rollouts=1,
+                concurrency=1,
+                cpus_each=1,
+            )
+            self.assertEqual(protocol["harbor"]["version"], "0.22.0")
+            self.assertEqual(protocol["benchmark"]["sha"], "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea")
+            self.assertEqual(protocol["benchmark"]["tasks"]["alpha"]["task_toml_sha256"], "tomlhash")
+            self.assertEqual(protocol["grader_overlay"]["marker"], "mac-k3d-lolbench-fix-rewards-v1")
+            self.assertEqual(protocol["images"]["alpha"]["id"], "sha256:image")
+            self.assertEqual(protocol["worker"]["nproc"], 16)
+            self.assertEqual(protocol["requester"]["user"], "unknown")
+            self.assertEqual(protocol["pipeline"]["dirty"], False)
+            self.assertEqual(protocol["icode"]["release"]["sha256"], "abc123")
+            artifact = build_artifact(
+                suite="deepswe",
+                model="deepseek-flash",
+                api_base="https://example.test/v1",
+                task_ids=[],
+                harness_dir=harness,
+                baseline_dir=baseline,
+                n_rollouts=1,
+                concurrency=1,
+                cpus_each=1,
+                run_id="local-prov",
+                eval_protocol=protocol,
+            )
+            self.assertEqual(artifact["icode_release"]["filename"], "icode-full.tar.gz")
+            doc = demo_artifact()
+            doc["eval_protocol"] = protocol
+            text = summary_markdown(doc)
+            page = report_html(doc)
+            self.assertIn("Provenance", text)
+            self.assertIn("0.22.0", text)
+            self.assertIn("tomlhash", text)
+            self.assertIn("Provenance", page)
+            self.assertIn("sha256:image", page)
+
+    def test_official_missing_harbor_version_fails_check(self):
+        from render_report import demo_artifact
+
+        doc = demo_artifact()
+        doc["eval_protocol"] = {
+            "icode": {"mode": "git"},
+            "model_params": {
+                "provider": "DeepSeek",
+                "reasoning_effort": "high",
+                "thinking": {"type": "enabled"},
+            },
+            "resources": {},
+            "benchmark": {
+                "url": "https://github.com/datacurve-ai/deep-swe",
+                "sha": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+                "task_count": 113,
+                "tasks": {},
+            },
+            "grader_overlay": {"marker": "mac-k3d-lolbench-fix-rewards-v1", "sha256": "abc"},
+            "images": {},
+            "worker": {
+                "node": "n",
+                "nproc": 1,
+                "memory_kb": 1,
+                "docker_version": "27",
+                "kernel": "7",
+                "cpu_model": "cpu",
+            },
+            "requester": {"user": "unknown", "build_url": "unknown"},
+            "pipeline": {"commit": "abcdef", "dirty": False},
+        }
+        doc["icode_git"] = {
+            "url": "https://gitcode.com/michaelling/jiuwenicode",
+            "kind": "commit",
+            "ref": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
+            "sha": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
+        }
+        previous = os.environ.get("OFFICIAL")
+        os.environ.pop("OFFICIAL", None)
+        try:
+            self.assertEqual(validate(doc), [])
+            os.environ["OFFICIAL"] = "1"
+            errors = validate(doc)
+            self.assertTrue(any("eval_protocol.harbor.version" in err for err in errors), errors)
+            doc["eval_protocol"]["harbor"] = {"version": "0.22.0"}
+            self.assertEqual(validate(doc), [])
+        finally:
+            if previous is None:
+                os.environ.pop("OFFICIAL", None)
+            else:
+                os.environ["OFFICIAL"] = previous
 
 
 if __name__ == "__main__":

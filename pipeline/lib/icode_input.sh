@@ -137,6 +137,101 @@ open(path, "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
 PY
 }
 
+# Official runs pin iCode PR 2. Smoke runs leave ICODE_GIT_REF_KIND=pr alone.
+OFFICIAL_ICODE_URL="https://gitcode.com/michaelling/jiuwenicode"
+OFFICIAL_ICODE_SHA="eea9d66dd00f137c3400b79c1c8574d8ae7debd1"
+
+icode_official_enabled() {
+  case "$(printf '%s' "${OFFICIAL:-0}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+  esac
+  return 1
+}
+
+icode_apply_official_pin() {
+  local url kind ref
+  icode_official_enabled || return 0
+  [ "$(icode_normalize_mode)" = "git" ] || die "OFFICIAL=1 requires ICODE_MODE=git"
+  url="${ICODE_GIT_URL:-}"
+  url="${url%/}"
+  url="${url%.git}"
+  [ "$url" = "$OFFICIAL_ICODE_URL" ] || die "OFFICIAL=1 requires ICODE_GIT_URL=${OFFICIAL_ICODE_URL}"
+  ref="${ICODE_GIT_REF:-}"
+  kind="$(icode_normalize_ref_kind "${ICODE_GIT_REF_KIND:-commit}" "$ref")"
+  [ "$kind" = "commit" ] || die "OFFICIAL=1 requires ICODE_GIT_REF_KIND=commit"
+  [ "$ref" = "$OFFICIAL_ICODE_SHA" ] || die "OFFICIAL=1 requires ICODE_GIT_REF=${OFFICIAL_ICODE_SHA}"
+  if [ -z "${ICODE_EXPECT_SHA:-}" ]; then
+    export ICODE_EXPECT_SHA="$OFFICIAL_ICODE_SHA"
+  fi
+}
+
+icode_assert_expect_sha() {
+  local dest="$1" expect head
+  expect="$(printf '%s' "${ICODE_EXPECT_SHA:-}" | tr '[:upper:]' '[:lower:]')"
+  [ -n "$expect" ] || return 0
+  head="$(git -C "$dest" rev-parse HEAD 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  [ -n "$head" ] || die "ICODE_EXPECT_SHA is set but $dest has no HEAD"
+  [ "$head" = "$expect" ] || die "ICODE_EXPECT_SHA=$expect but checkout HEAD is $head"
+}
+
+icode_assert_recorded_sha() {
+  local expect head
+  expect="$(printf '%s' "${ICODE_EXPECT_SHA:-}" | tr '[:upper:]' '[:lower:]')"
+  [ -n "$expect" ] || return 0
+  if [ -s "${WORKDIR:-}/icode_git.json" ]; then
+    head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("sha",""))' "$WORKDIR/icode_git.json" | tr '[:upper:]' '[:lower:]')"
+  elif [ -n "${HOST_ROOT:-}" ] && [ -d "${HOST_ROOT}/.git" ]; then
+    head="$(git -C "$HOST_ROOT" rev-parse HEAD 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  else
+    die "ICODE_EXPECT_SHA is set but P3 did not record an iCode SHA"
+  fi
+  [ "$head" = "$expect" ] || die "ICODE_EXPECT_SHA=$expect but recorded SHA is $head"
+}
+
+# The generated launcher is the only file P3 may add. .venv is gitignored upstream.
+icode_assert_clean_checkout() {
+  local dest="$1" line
+  [ -n "$dest" ] && [ -d "$dest/.git" ] || return 0
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [ -n "$line" ] || continue
+    case "$line" in
+      "?? icode" | "?? ./icode") ;;
+      *) die "iCode checkout $dest is modified (${line}). Only the generated icode launcher may be untracked." ;;
+    esac
+  done < <(git -C "$dest" status --porcelain)
+}
+
+icode_sha256() {
+  python3 - "$1" <<'PY'
+import hashlib, sys
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+icode_record_release() {
+  local src="$1" name="$2" target hash
+  [ -n "${WORKDIR:-}" ] || die "WORKDIR is unset; cannot write icode_release.json"
+  target="$src"
+  if [ -d "$src" ]; then
+    target="$(find "$src" -type f -name icode -print -quit || true)"
+    [ -n "$target" ] || die "ICODE_MODE=release: no icode binary to checksum under $src"
+  fi
+  [ -f "$target" ] || die "ICODE_MODE=release: checksum target is not a file"
+  hash="$(icode_sha256 "$target")"
+  python3 - "$WORKDIR/icode_release.json" "$name" "$hash" <<'PY'
+import json, sys
+path, name, digest = sys.argv[1:4]
+doc = {"filename": name, "sha256": digest}
+open(path, "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
+PY
+  echo "OK icode_release file=${name} sha256=${hash}" >&2
+}
+
 icode_docker_platform() {
   case "$(uname -m)" in
     aarch64 | arm64) printf '%s\n' linux/arm64 ;;
@@ -238,6 +333,7 @@ icode_git_checkout() {
       icode_git "${git_cmd[@]}" -C "$dest" checkout -B "$ref" FETCH_HEAD || icode_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD || icode_git_clone_fail "$url" "$ref" "$tok"
       ;;
   esac
+  icode_assert_expect_sha "$dest"
 }
 
 icode_write_wrapper() {
@@ -431,7 +527,7 @@ icode_resolve_release_src() {
 
 # Official *-full-* path/URL/persist/discover. Prints ICODE_BIN path.
 get_release_icode() {
-  local unpack src bin
+  local unpack src bin rel_name
   if [ -z "${ICODE_RELEASE:-}" ] && [ "${ICODE_RELEASE_UPLOADED:-}" != 1 ]; then
     ICODE_RELEASE="$(icode_paths_get release || true)"
   fi
@@ -454,6 +550,18 @@ get_release_icode() {
       src="$(icode_resolve_release_src "$src")"
       ;;
   esac
+  rel_name=""
+  case "${ICODE_RELEASE:-}" in
+    http://* | https://*)
+      rel_name="${ICODE_RELEASE%%\?*}"
+      rel_name="${rel_name%/}"
+      rel_name="$(basename "$rel_name")"
+      ;;
+  esac
+  if [ -z "$rel_name" ]; then
+    rel_name="$(basename "$src")"
+  fi
+  icode_record_release "$src" "$rel_name"
   install_icode_release "$src" "$unpack"
   bin="$(find "$unpack" -type f -name icode -print -quit)"
   [ -n "$bin" ] || die "could not find icode inside release"
@@ -501,6 +609,7 @@ get_bin_icode() {
   [ -x "$dest/.venv/bin/icode" ] || die "uv sync did not produce $dest/.venv/bin/icode"
   icode_embed_sandbox_cpython "$dest"
   icode_write_wrapper "$dest/icode"
+  icode_assert_clean_checkout "$dest"
   icode_write_host_root "$dest"
   printf '%s\n' "$dest/icode"
 }

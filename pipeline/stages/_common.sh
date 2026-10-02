@@ -17,6 +17,16 @@ export OUTPUT_DIR="${MAC_K3D_EVAL_OUTPUT:-$WORKDIR/reports}"
 export DEEPSWE_DIR="${DEEPSWE_DIR:-$WORKDIR/deep-swe}"
 export LOLBENCH_DIR="${LOLBENCH_DIR:-$WORKDIR/lolbench}"
 export LOLBENCH_GIT_URL="${LOLBENCH_GIT_URL:-https://github.com/MichaelLing83/LoLBench-Preview.git}"
+# P0.2 pins. Checked out on this worker on 2026-10-02: Harbor 0.22.0,
+# DeepSWE 113 tasks, LoLBench 20 harbor tasks. Override per run; do not float.
+export HARBOR_VERSION="${HARBOR_VERSION:-0.22.0}"
+export DEEPSWE_GIT_URL="${DEEPSWE_GIT_URL:-https://github.com/datacurve-ai/deep-swe}"
+export DEEPSWE_REF="${DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea}"
+export DEEPSWE_TASK_COUNT="${DEEPSWE_TASK_COUNT:-113}"
+export LOLBENCH_REF="${LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75}"
+export LOLBENCH_TASK_COUNT="${LOLBENCH_TASK_COUNT:-20}"
+export ICODE_EXPECT_SHA="${ICODE_EXPECT_SHA:-}"
+export OFFICIAL="${OFFICIAL:-0}"
 export SWEBENCHPRO_DIR="${SWEBENCHPRO_DIR:-$WORKDIR/swebenchpro}"
 export SWEBENCHPRO_GIT_URL="${SWEBENCHPRO_GIT_URL:-https://github.com/scaleapi/SWE-bench_Pro-os}"
 export ICODE_MODE="${ICODE_MODE:-binary}"
@@ -51,6 +61,31 @@ die() {
 
 have() {
   command -v "$1" >/dev/null 2>&1
+}
+
+# Check out url at sha. A directory already at that commit is kept.
+# Any other commit is fetched and force-detached so the pin cannot drift.
+pin_benchmark_sha() {
+  local dir="$1" url="$2" sha="$3" head
+  [ -n "$dir" ] && [ -n "$url" ] && [ -n "$sha" ] || die "pin_benchmark_sha needs dir, url, and sha"
+  if [ ! -d "$dir/.git" ]; then
+    rm -rf "$dir"
+    mkdir -p "$dir"
+    git -c init.defaultBranch=main -c advice.defaultBranchName=false init -q "$dir"
+    git -C "$dir" remote add origin "$url"
+    GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch --depth 1 origin "$sha"
+    git -c advice.detachedHead=false -C "$dir" checkout --detach FETCH_HEAD
+  else
+    head="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
+    if [ "$head" != "$sha" ]; then
+      echo "P2: $dir is at ${head:-unknown}; fetching $sha"
+      GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch --depth 1 origin "$sha"
+      git -c advice.detachedHead=false -C "$dir" checkout --force --detach "$sha" \
+        || git -c advice.detachedHead=false -C "$dir" checkout --force --detach FETCH_HEAD
+    fi
+  fi
+  head="$(git -C "$dir" rev-parse HEAD)"
+  [ "$head" = "$sha" ] || die "benchmark $dir HEAD $head does not match pin $sha"
 }
 
 missing_deepseek_key_hint() {

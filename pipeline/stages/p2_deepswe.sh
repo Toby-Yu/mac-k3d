@@ -8,13 +8,11 @@ progress 25 "P2: clone benchmark=$BENCHMARK"
 have git || die "git required"
 case "${BENCHMARK:-deepswe}" in
   lolbench)
-    if [ ! -d "$LOLBENCH_DIR/harbor_tasks" ]; then
-      rm -rf "$LOLBENCH_DIR"
-      git clone --depth 1 "$LOLBENCH_GIT_URL" "$LOLBENCH_DIR"
-    fi
-    [ -d "$LOLBENCH_DIR/harbor_tasks" ] || die "missing $LOLBENCH_DIR/harbor_tasks after clone"
+    pin_benchmark_sha "$LOLBENCH_DIR" "$LOLBENCH_GIT_URL" "$LOLBENCH_REF"
+    [ -d "$LOLBENCH_DIR/harbor_tasks" ] || die "missing $LOLBENCH_DIR/harbor_tasks after pin $LOLBENCH_REF"
     # Ensure reward.json always carries integer F2P/P2P counts (DeepSWE-shaped).
     python3 "$PIPELINE_LIB/lolbench_fix_rewards.py" "$LOLBENCH_DIR/harbor_tasks"
+    python3 "$PIPELINE_LIB/provenance.py" assert-count "$LOLBENCH_DIR/harbor_tasks" "$LOLBENCH_TASK_COUNT"
     ;;
   swebenchpro)
     if [ ! -f "$SWEBENCHPRO_DIR/src/swe_bench_pro_eval.py" ] \
@@ -32,11 +30,9 @@ case "${BENCHMARK:-deepswe}" in
     [ -d "$SWEBENCHPRO_DIR/tasks" ] || die "missing $SWEBENCHPRO_DIR/tasks after materialize"
     ;;
   deepswe | "")
-    if [ ! -d "$DEEPSWE_DIR/tasks" ]; then
-      rm -rf "$DEEPSWE_DIR"
-      git clone --depth 1 https://github.com/datacurve-ai/deep-swe "$DEEPSWE_DIR"
-    fi
-    [ -d "$DEEPSWE_DIR/tasks" ] || die "missing $DEEPSWE_DIR/tasks after clone"
+    pin_benchmark_sha "$DEEPSWE_DIR" "$DEEPSWE_GIT_URL" "$DEEPSWE_REF"
+    [ -d "$DEEPSWE_DIR/tasks" ] || die "missing $DEEPSWE_DIR/tasks after pin $DEEPSWE_REF"
+    python3 "$PIPELINE_LIB/provenance.py" assert-count "$DEEPSWE_DIR/tasks" "$DEEPSWE_TASK_COUNT"
     ;;
   *)
     die "unknown BENCHMARK=${BENCHMARK} (use deepswe, lolbench, or swebenchpro)"

@@ -136,20 +136,29 @@ fi
 ensure_selected_tasks
 eval_parallel_degree || die "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1"
 echo "P5 harbor: n_rollouts=$N_ROLLOUTS slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
-python3 - "$WORKDIR/eval_protocol_inputs.json" <<PY
-import json, os, sys
-doc = {
-    "model": os.environ.get("ICODE_MODEL") or os.environ.get("DEEPSEEK_MODEL") or "",
-    "api_base": os.environ.get("ICODE_API_BASE") or "https://api.deepseek.com/v1",
-    "provider": os.environ.get("ICODE_PROVIDER") or "DeepSeek",
-    "reasoning_effort": os.environ.get("ICODE_REASONING_EFFORT") or "high",
-    "cpu_lock_qty": int(os.environ.get("CPU_LOCK_QTY") or "0"),
-    "concurrency": int(os.environ.get("EVAL_SLOTS") or os.environ.get("EVAL_PARALLEL") or "0"),
-    "cpus_each": int(os.environ.get("EVAL_CPUS_EACH") or "0"),
-    "n_rollouts": int(os.environ.get("N_ROLLOUTS") or "0"),
-}
-open(sys.argv[1], "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
-PY
+case "${BENCHMARK:-deepswe}" in
+  lolbench)
+    PROV_REPO="$LOLBENCH_DIR"
+    PROV_APPLIED=1
+    ;;
+  swebenchpro)
+    PROV_REPO="$SWEBENCHPRO_DIR/src"
+    PROV_APPLIED=0
+    ;;
+  *)
+    PROV_REPO="$DEEPSWE_DIR"
+    PROV_APPLIED=0
+    ;;
+esac
+python3 "$PIPELINE_LIB/provenance.py" write-inputs \
+  --out "$WORKDIR/eval_protocol_inputs.json" \
+  --repo-dir "$PROV_REPO" \
+  --tasks-dir "$TASKS_DIR" \
+  --selected "$WORKDIR/selected_tasks.txt" \
+  --overlay "$PIPELINE_LIB/lolbench_fix_rewards.py" \
+  --applied "$PROV_APPLIED" \
+  --workdir "$WORKDIR" \
+  --pipeline-root "$MAC_K3D_ROOT"
 python3 "$PIPELINE_LIB/eval_slots.py" report \
   --tasks-file "$WORKDIR/selected_tasks.txt" \
   --n-rollouts "$N_ROLLOUTS" \
@@ -485,6 +494,10 @@ reap_finished() {
         span="$((elapsed / 60))m $((elapsed % 60))s"
       fi
       echo "P5 harbor: question=$tid rollouts=${N_ROLLOUTS}/${N_ROLLOUTS} time=$span"
+      python3 "$PIPELINE_LIB/provenance.py" record-image \
+        --inputs "$WORKDIR/eval_protocol_inputs.json" \
+        --task-id "$tid" \
+        --task-toml "$TASKS_DIR/${tid}/task.toml" || true
       python3 "$PIPELINE_LIB/eval_slots.py" flush \
         --question "${spec%%:*}" \
         --slots "${EVAL_SLOTS:-0}" \

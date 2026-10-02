@@ -118,6 +118,24 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 else
   ok "skip docker leftover wipe (docker unavailable)"
 fi
+if ( ICODE_EXPECT_SHA="$BASE_SHA" icode_git_checkout "$KIND_TMP/c-expect-bad" "$ORIGIN" "$FEAT_SHA" commit ); then
+  fail "expected ICODE_EXPECT_SHA mismatch to fail"
+fi
+ok "reject ICODE_EXPECT_SHA mismatch"
+ICODE_EXPECT_SHA="$FEAT_SHA" icode_git_checkout "$KIND_TMP/c-expect-ok" "$ORIGIN" "$FEAT_SHA" commit
+[ "$(git -C "$KIND_TMP/c-expect-ok" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "expect sha checkout"
+unset ICODE_EXPECT_SHA
+ok "ICODE_EXPECT_SHA match"
+icode_git_checkout "$KIND_TMP/c-clean" "$ORIGIN" main branch
+icode_assert_clean_checkout "$KIND_TMP/c-clean"
+echo extra >"$KIND_TMP/c-clean/extra.txt"
+if ( icode_assert_clean_checkout "$KIND_TMP/c-clean" ); then
+  fail "dirty tree should fail"
+fi
+rm -f "$KIND_TMP/c-clean/extra.txt"
+printf '%s\n' '#!/bin/sh' >"$KIND_TMP/c-clean/icode"
+icode_assert_clean_checkout "$KIND_TMP/c-clean"
+ok "porcelain allows only the icode launcher"
 unset MAC_K3D_ICODE_GIT_ALLOW_FILE
 
 ICODE_MODE=binary bash "$IN" --normalize-mode | grep -qx release || fail "binary alias"

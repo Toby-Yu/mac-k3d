@@ -244,6 +244,7 @@ def build_eval_protocol(
     inputs: dict = {}
     bin_path = ""
     git_doc = None
+    release_doc = None
     if workdir is not None:
         inputs_path = workdir / "eval_protocol_inputs.json"
         loaded = load_json(inputs_path)
@@ -255,6 +256,12 @@ def build_eval_protocol(
         git_raw = load_json(workdir / "icode_git.json")
         if isinstance(git_raw, dict) and str(git_raw.get("sha") or "").strip():
             git_doc = git_raw
+        release_raw = load_json(workdir / "icode_release.json")
+        if isinstance(release_raw, dict) and str(release_raw.get("sha256") or "").strip():
+            release_doc = {
+                "filename": str(release_raw.get("filename") or ""),
+                "sha256": str(release_raw.get("sha256") or ""),
+            }
     effort = str(
         inputs.get("reasoning_effort")
         or os.environ.get("ICODE_REASONING_EFFORT")
@@ -282,11 +289,13 @@ def build_eval_protocol(
             "bin_path": bin_path,
             "source": bin_path,
         }
+    if release_doc:
+        icode["release"] = release_doc
     cpu_lock = inputs.get("cpu_lock_qty")
     if not isinstance(cpu_lock, int) or isinstance(cpu_lock, bool):
         raw_lock = os.environ.get("CPU_LOCK_QTY") or ""
         cpu_lock = int(raw_lock) if raw_lock.isdigit() else None
-    return {
+    protocol = {
         "icode": icode,
         "model_params": {
             "model": str(inputs.get("model") or model),
@@ -303,6 +312,18 @@ def build_eval_protocol(
             "harbor_agent_timeout_note": HARBOR_TIMEOUT_NOTE,
         },
     }
+    for key in (
+        "harbor",
+        "benchmark",
+        "grader_overlay",
+        "images",
+        "worker",
+        "requester",
+        "pipeline",
+    ):
+        if key in inputs:
+            protocol[key] = inputs[key]
+    return protocol
 
 
 def build_artifact(
@@ -353,6 +374,12 @@ def build_artifact(
         git = (eval_protocol.get("icode") or {}).get("git")
         if isinstance(git, dict) and git.get("sha"):
             doc["icode_git"] = git
+        release = (eval_protocol.get("icode") or {}).get("release")
+        if isinstance(release, dict) and release.get("sha256"):
+            doc["icode_release"] = {
+                "filename": str(release.get("filename") or ""),
+                "sha256": str(release.get("sha256") or ""),
+            }
     return doc
 
 
@@ -509,6 +536,9 @@ def summary_markdown(doc: dict) -> str:
         note = resources.get("harbor_agent_timeout_note")
         if isinstance(note, str) and note.strip():
             lines.append(f"- Agent timeout: {note}")
+        from provenance import provenance_markdown
+
+        lines.extend(provenance_markdown(protocol))
     lines.append("")
     arm = doc.get("icode")
     if isinstance(arm, dict):
@@ -702,23 +732,14 @@ def run_folder_name(utc: str, task_ids: list[str], build_number: str = "") -> st
 
 
 def default_backup_root() -> Path:
-    override = os.environ.get("MAC_K3D_OUTPUT_ROOT")
-    if override:
-        return Path(override)
-    repo = Path(__file__).resolve().parents[2]
-    if (repo / "Cargo.toml").is_file() and (repo / "pipeline").is_dir():
-        return repo / "output"
-    home = Path.home()
-    for pattern in (
-        "mac-k3d/Cargo.toml",
-        "*/mac-k3d/Cargo.toml",
-        "*/*/mac-k3d/Cargo.toml",
-        "*/*/*/mac-k3d/Cargo.toml",
-    ):
-        for cargo in home.glob(pattern):
-            if cargo.is_file() and (cargo.parent / "pipeline").is_dir():
-                return cargo.parent / "output"
-    return repo / "output"
+    for key in ("MAC_K3D_BACKUP_ROOT", "MAC_K3D_OUTPUT_ROOT"):
+        override = os.environ.get(key)
+        if override:
+            return Path(override)
+    root = os.environ.get("MAC_K3D_ROOT")
+    if root:
+        return Path(root) / "output"
+    return Path(__file__).resolve().parents[2] / "output"
 
 
 def _copy_trial_files(trial: Path, dest: Path) -> None:

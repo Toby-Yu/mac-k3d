@@ -626,6 +626,11 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'CPU cores reserved for this build. One question uses that many containers for its rollouts; the next question starts after they exit. Slots also shrink to fit free RAM; a question that still OOMs inside Docker is skipped.')
     string(name: 'MAC_K3D_ROOT', defaultValue: '', description: 'Dir with pipeline/stages/run_all.sh (optional)')
+    string(name: 'HARBOR_VERSION', defaultValue: '0.22.0', description: 'Harbor version installed in P1. A mismatch fails the stage.')
+    string(name: 'DEEPSWE_REF', defaultValue: '0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea', description: 'DeepSWE commit pinned by P2.')
+    string(name: 'LOLBENCH_REF', defaultValue: '1b10d10bb4a10cea54374ac34b8f76b69dc8ce75', description: 'LoLBench commit pinned by P2.')
+    string(name: 'ICODE_EXPECT_SHA', defaultValue: '', description: 'When set, P3 fails unless the iCode checkout SHA equals this value.')
+    string(name: 'OFFICIAL', defaultValue: '0', description: '1 requires full provenance and the pinned iCode commit. 0 is a smoke run.')
     choice(name: 'DEEPSEEK_MODEL', choices: [{model_g}], description: 'DeepSeek Chat Completions model id (catalog)')
   }}
 
@@ -708,6 +713,11 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
             export ICODE_GIT_URL="${{ICODE_GIT_URL:-}}"
             export ICODE_GIT_REF="${{ICODE_GIT_REF:-main}}"
             export ICODE_GIT_REF_KIND="${{ICODE_GIT_REF_KIND:-branch}}"
+            export HARBOR_VERSION="${{HARBOR_VERSION:-0.22.0}}"
+            export DEEPSWE_REF="${{DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea}}"
+            export LOLBENCH_REF="${{LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75}}"
+            export ICODE_EXPECT_SHA="${{ICODE_EXPECT_SHA:-}}"
+            export OFFICIAL="${{OFFICIAL:-0}}"
             export HARNESS="${{HARNESS:-{harness_fb}}}"
             export LLM="${{LLM:-{llm_fb}}}"
             export BENCHMARK="${{BENCHMARK:-{bench}}}"
@@ -936,6 +946,36 @@ fn one_task_job_xml(job_benchmark: &str, description: &str, opts: &JobOpts) -> S
         <hudson.model.StringParameterDefinition>
           <name>MAC_K3D_ROOT</name>
           <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>HARBOR_VERSION</name>
+          <description>Harbor version installed in P1. A mismatch fails the stage.</description>
+          <defaultValue>0.22.0</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>DEEPSWE_REF</name>
+          <description>DeepSWE commit pinned by P2.</description>
+          <defaultValue>0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>LOLBENCH_REF</name>
+          <description>LoLBench commit pinned by P2.</description>
+          <defaultValue>1b10d10bb4a10cea54374ac34b8f76b69dc8ce75</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>ICODE_EXPECT_SHA</name>
+          <description>When set, P3 fails unless the iCode checkout SHA equals this value.</description>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>OFFICIAL</name>
+          <description>1 requires full provenance and the pinned iCode commit. 0 is a smoke run.</description>
+          <defaultValue>0</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
@@ -1313,6 +1353,11 @@ mod tests {
         assert!(jf.contains("Vice versa"));
         assert!(jf.contains("ICODE_GIT_REF_KIND:-branch"));
         assert!(!jf.contains("ICODE_GIT_REF_KIND:-auto"));
+        assert!(jf.contains("HARBOR_VERSION:-0.22.0"));
+        assert!(jf.contains("DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea"));
+        assert!(jf.contains("LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75"));
+        assert!(jf.contains("ICODE_EXPECT_SHA:-"));
+        assert!(jf.contains("OFFICIAL:-0"));
         assert!(jf.contains("upload ICODE_RELEASE_FILE"));
         assert!(jf.contains("icode"));
         assert!(jf.contains("lock(label: 'CPU_CORES'"));
@@ -1339,6 +1384,16 @@ mod tests {
         assert!(xml.contains("<name>ICODE_GIT_REF</name>"));
         assert!(xml.contains("<name>ICODE_GIT_REF_KIND</name>"));
         assert!(xml.contains("<name>ICODE_RELEASE_FILE</name>"));
+        assert!(xml.contains("<name>HARBOR_VERSION</name>"));
+        assert!(xml.contains("<defaultValue>0.22.0</defaultValue>"));
+        assert!(xml.contains("<name>DEEPSWE_REF</name>"));
+        assert!(xml.contains(
+            "<defaultValue>0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea</defaultValue>"
+        ));
+        assert!(xml.contains("<name>LOLBENCH_REF</name>"));
+        assert!(xml.contains("<name>ICODE_EXPECT_SHA</name>"));
+        assert!(xml.contains("<name>OFFICIAL</name>"));
+        assert!(xml.contains("<defaultValue>0</defaultValue>"));
         assert!(xml.contains("StashedFileParameterDefinition"));
         assert!(
             !xml.contains("<name>ICODE_RELEASE</name>"),

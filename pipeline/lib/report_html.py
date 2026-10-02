@@ -337,6 +337,64 @@ def _minute_tick(value: float) -> str:
     return f"{value:.1f}"
 
 
+def _provenance_html(doc: dict) -> str:
+    from provenance import provenance_view
+
+    protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
+    view = provenance_view(protocol)
+    if view is None:
+        return ""
+
+    def cell(value: object) -> str:
+        if value is None or value == "":
+            return DASH
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    items = [
+        f"Harbor {_esc(cell(view['harbor_version']))}",
+        (
+            f"Benchmark {_esc(cell(view['benchmark_url']))} @ {_esc(cell(view['benchmark_sha']))}"
+            f" ({_esc(cell(view['task_count']))} tasks)"
+        ),
+        (
+            f"Grader overlay {_esc(cell(view['overlay_marker']))} {_esc(cell(view['overlay_sha256']))}"
+            f" applied {_esc(cell(view['overlay_applied']))}"
+        ),
+        f"Pipeline {_esc(cell(view['commit']))} dirty {_esc(cell(view['dirty']))}",
+        (
+            f"Worker node {_esc(cell(view['node']))}, nproc {_esc(cell(view['nproc']))},"
+            f" memory_kb {_esc(cell(view['memory_kb']))}, docker {_esc(cell(view['docker_version']))},"
+            f" kernel {_esc(cell(view['kernel']))}, cpu {_esc(cell(view['cpu_model']))}"
+        ),
+        f"Requester {_esc(cell(view['user']))} {_esc(cell(view['build_url']))}",
+    ]
+    icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
+    release = icode.get("release") if isinstance(icode.get("release"), dict) else None
+    if release and str(release.get("sha256") or ""):
+        items.append(
+            f"iCode release {_esc(cell(release.get('filename')))} {_esc(cell(release.get('sha256')))}"
+        )
+    bullets = "".join(f"<li>{item}</li>" for item in items)
+    table = ""
+    if view["tasks"]:
+        rows = [
+            [
+                row["task"],
+                row["image_id"] or DASH,
+                row["task_toml_sha256"] or DASH,
+                row["tests_list_sha256"] or DASH,
+            ]
+            for row in view["tasks"]
+        ]
+        table = _scroll(
+            _table(["Task", "Image id", "task.toml sha256", "tests list sha256"], rows, "provenance"),
+            len(rows),
+        )
+    return "<h2>Provenance</h2><ul>" + bullets + "</ul>" + table
+
+
 def report_html(doc: dict) -> str:
     arm = harness_arm(doc)
     tasks = _tasks(arm)
@@ -640,6 +698,7 @@ def report_html(doc: dict) -> str:
             + _scroll(_table(["Task", "unscored/n", "notes"], u_rows, "unscored"), len(u_rows))
         )
 
+    provenance_html = _provenance_html(doc)
     chip_html = "".join(f'<span class="chip">{_esc(chip)}</span>' for chip in chips)
     kpi_html = "".join(
         f'<div class="kpi"><div class="num">{_esc(number)}</div><div class="cap">{_esc(caption)}</div></div>'
@@ -705,6 +764,7 @@ table.outcomes th, table.outcomes td {{ white-space: nowrap; }}
 <div class="chips">{chip_html}</div>
 <p>{_esc(headline)}</p>
 <div class="kpis">{kpi_html}</div>
+{provenance_html}
 <h2>Pass@k ladder</h2>
 <p class="source">Pass@1..k (padded, missing=fail): missing attempt counts as not resolved; n is N_ROLLOUTS. Pass@1..k (scored-only, missing omitted): only attempts with reward.json. Macro Pass@1 = mean of c/n (padded) or c_scored/n_scored.</p>
 <div class="card">

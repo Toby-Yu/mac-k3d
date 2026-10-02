@@ -45,6 +45,66 @@ REQUIRED_TASK = (
 REQUIRED_BASELINE = ("reward", "tok_in", "tok_out", "dur_s", "dur_min")
 
 
+def official_enabled() -> bool:
+    raw = os.environ.get("OFFICIAL", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _nonempty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _present_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def official_provenance_errors(doc: dict) -> list[str]:
+    """Required when OFFICIAL=1. Smoke artifacts stay valid without these fields."""
+    if not official_enabled():
+        return []
+    errors: list[str] = []
+    protocol = doc.get("eval_protocol")
+    if not isinstance(protocol, dict):
+        protocol = {}
+    harbor = protocol.get("harbor") if isinstance(protocol.get("harbor"), dict) else {}
+    if not _nonempty_str(harbor.get("version")):
+        errors.append("missing eval_protocol.harbor.version")
+    bench = protocol.get("benchmark") if isinstance(protocol.get("benchmark"), dict) else {}
+    for key in ("url", "sha"):
+        if not _nonempty_str(bench.get(key)):
+            errors.append(f"missing eval_protocol.benchmark.{key}")
+    if not _present_int(bench.get("task_count")):
+        errors.append("missing eval_protocol.benchmark.task_count")
+    if not isinstance(bench.get("tasks"), dict):
+        errors.append("missing eval_protocol.benchmark.tasks")
+    overlay = protocol.get("grader_overlay") if isinstance(protocol.get("grader_overlay"), dict) else {}
+    for key in ("marker", "sha256"):
+        if not _nonempty_str(overlay.get(key)):
+            errors.append(f"missing eval_protocol.grader_overlay.{key}")
+    if not isinstance(protocol.get("images"), dict):
+        errors.append("missing eval_protocol.images")
+    worker = protocol.get("worker") if isinstance(protocol.get("worker"), dict) else {}
+    for key in ("node", "docker_version", "kernel", "cpu_model"):
+        if not _nonempty_str(worker.get(key)):
+            errors.append(f"missing eval_protocol.worker.{key}")
+    for key in ("nproc", "memory_kb"):
+        if not _present_int(worker.get(key)):
+            errors.append(f"missing eval_protocol.worker.{key}")
+    requester = protocol.get("requester") if isinstance(protocol.get("requester"), dict) else {}
+    for key in ("user", "build_url"):
+        if not _nonempty_str(requester.get(key)):
+            errors.append(f"missing eval_protocol.requester.{key}")
+    pipe = protocol.get("pipeline") if isinstance(protocol.get("pipeline"), dict) else {}
+    if not _nonempty_str(pipe.get("commit")):
+        errors.append("missing eval_protocol.pipeline.commit")
+    if not isinstance(pipe.get("dirty"), bool):
+        errors.append("missing eval_protocol.pipeline.dirty")
+    git = doc.get("icode_git")
+    if not isinstance(git, dict) or not _nonempty_str(git.get("sha")):
+        errors.append("missing icode_git")
+    return errors
+
+
 def _rate_error(loc: str, value: object) -> str | None:
     if value is None:
         return None
@@ -193,6 +253,7 @@ def validate_comparison(doc: dict) -> list[str]:
                     err = _rate_error(f"{arm_name}.tasks[{i}].{key}", task.get(key))
                     if err:
                         errors.append(err)
+    errors.extend(official_provenance_errors(doc))
     return errors
 
 
