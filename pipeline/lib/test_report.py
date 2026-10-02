@@ -2889,6 +2889,7 @@ class ProvenanceTests(unittest.TestCase):
             "pipeline": {"commit": "abcdef", "dirty": False},
             "isolation": valid_isolation(),
         }
+        doc["anticheat"] = {"status": "ok", "version": "mac-k3d-anticheat-v1"}
         doc["icode_git"] = {
             "url": "https://gitcode.com/michaelling/jiuwenicode",
             "kind": "commit",

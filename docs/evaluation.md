@@ -30,6 +30,7 @@ A score measures the iCode harness only if every run sees the same rules. So eve
 | One read-only mount | The only agent mount is the iCode tree at `/opt/icode-host`, `read_only: true`. P5 refuses a tree that is, contains or sits inside a benchmark or tasks folder | `agent_mounts.py` |
 | Leak scan | Gold lines of every selected task are searched in the mounted tree (`anticheat_leakscan.json`). `OFFICIAL=1` stops on a hit; smoke runs warn | `anticheat_leakscan.py` |
 | Secrets | Only `DEEPSEEK_API_KEY` reaches the agent. Clone tokens are unset before Harbor and never written to `.harbor-env` | `p5_harness.sh` |
+| Anti-cheat verdict | P7 gives every rollout `clean`, `flagged` or `rejected` from line/path Jaccard against the gold patch and a transcript scan (mounted-runtime reads, filesystem searches, network and retrieval tools, git archaeology, gold and grader paths). P8 scores `rejected` as unresolved with F2P/P2P zeroed, so `artifact["icode"]` is official and `artifact["icode_raw"]` keeps the raw numbers. Thresholds and rules: `pipeline/config/anticheat-v1.json`; reviewer decisions: `anticheat_overrides.json`. `OFFICIAL=1` requires the verdicts | `anticheat_verdict.py` |
 | Model protocol | Same `ICODE_PROVIDER`, `ICODE_REASONING_EFFORT` and `ICODE_API_BASE` defaults for every suite | `p5_harness.sh` |
 
 `ICODE_SOURCELESS_STDLIB` defaults to on. Setting it to `0`/`false`/`no`/`off` is only for a non-official debugging run: P5 prints a warning that the run is not comparable, and `OFFICIAL=1` refuses it. Any other value keeps sourceless on.
@@ -61,7 +62,9 @@ A tree sanitized by an older sanitizer version has already lost its stdlib sourc
 **Limits to keep in mind:**
 - SWE-bench Pro tasks carry no `solution/solution.patch`, so the leak scan reports them as `no_gold` and cannot prove them clean. Every other control still applies.
 - Release mode (`ICODE_MODE=release`) mounts only the binary, so there is no sandbox CPython to strip. Official runs use git mode.
-- Still open and tracked in the integration report: transcript-based cheat detection (P0.5), the isolation canary (P0.6) and honoring each task's declared CPUs (P0.9).
+- SWE-bench Pro has no gold patch, so its verdicts rest on the transcript scan alone (`similarity.status: no_gold`).
+- Rescore an old run without changing it: `python3 pipeline/lib/anticheat_verdict.py --run-dir output/<suite>/<run> [--harbor-runs <jenkins harbor_runs/jenkins-N>]`. It writes `artifact.anticheat.json` and `anticheat/report.md` next to the original. Runs from before P0.5 keep their transcripts only in the Jenkins workspace, hence `--harbor-runs`.
+- Still open and tracked in the integration report: the isolation canary (P0.6) and honoring each task's declared CPUs (P0.9).
 
 ## Where a run is stored
 

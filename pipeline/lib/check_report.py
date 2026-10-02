@@ -132,6 +132,9 @@ def official_provenance_errors(doc: dict) -> list[str]:
     if not isinstance(pipe.get("dirty"), bool):
         errors.append("missing eval_protocol.pipeline.dirty")
     errors.extend(official_isolation_errors(protocol.get("isolation")))
+    anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else {}
+    if anticheat.get("status") != "ok" or not _nonempty_str(anticheat.get("version")):
+        errors.append("anticheat must have run (P7 anticheat_verdict.py)")
     git = doc.get("icode_git")
     if not isinstance(git, dict) or not _nonempty_str(git.get("sha")):
         errors.append("missing icode_git")

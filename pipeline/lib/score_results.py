@@ -744,6 +744,9 @@ def main() -> int:
                     resolved = parse_reward_value(data.get("reward"))
                 elif "resolved" in data:
                     resolved = parse_reward_value(data.get("resolved"))
+            verdict = load_json(trial / "agent" / "anticheat.json")
+            if isinstance(verdict, dict) and verdict.get("verdict") == "rejected":
+                resolved = False
             usage = find_icode_usage(trial)
             row_rates = rates_for_trial(trial)
             if row_rates["f2p"] is None and row_rates["p2p"] is None and hdir is not None:

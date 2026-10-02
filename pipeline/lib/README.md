@@ -9,6 +9,10 @@ Used by `mac-k3d eval` and Jenkins jobs `deepswe_one_task`, `lolbench_one_task`,
 | `icode_harbor_agent.py` | Harbor `ICodeAgent` for all three benchmarks; worker iCode tree bind-mounted at `/opt/icode-host` |
 | `icode_capture.sh` | Runs in the task container for `ICodeAgent` and `PatchAgent`. `base` records the base commit before work; `capture` removes runtime output, diffs against that base, hands the patch to the suite's grader (LoLBench: `lolbench-submit` before the commit, replaced by the standard patch when they differ; DeepSWE / SWE-bench Pro: their `verifier.collect` hook), commits, and writes `/logs/agent/capture.json` |
 | `capture_receipt.py` | `declared-repo`: repo and base a task declares (P5/P6 pass them as `MAC_K3D_REPO` / `MAC_K3D_BASE_COMMIT`). `annotate`: P7 compares the patch each grader read with the receipt and writes `agent/capture_flags.json` (`capture_mismatch`, `capture_missing`, `capture_error`, `patch_oversize`) |
+| `anticheat_similarity.py` | Line and path Jaccard of a patch against `solution/solution.patch`, over added non-test, non-generated, non-trivial lines |
+| `anticheat_transcript.py` | Rule scan of `events.jsonl` tool calls (plain or gzipped); excerpts of at most 200 characters with secrets masked |
+| `anticheat_verdict.py` | P7: `agent/anticheat.json` per trial and `anticheat/{summary.json,report.md}`; `--run-dir` rescores an old run into `artifact.anticheat.json`. Rules in `../config/anticheat-v1.json` |
+| `harness_labels.py` | Loads `../config/harness/icode-pr2-eea9d66.yaml` (`tuned_on`, `hinted`); `generate` rebuilds it from the improve loop and iCode's matchers, read-only |
 | `eval_slots.py` | P5/P6 slot count, per-question history mem cap, resume-seed, one-question-at-a-time order ([optimization.md](../../docs/optimization.md)) |
 | `eval_progress.py` | P5 `progress.json` and the 60s heartbeat (`done/needed`, inflight, slots) |
 | `pier-agent-icode/` | Unused by the current runner. Kept from the Pier path. |

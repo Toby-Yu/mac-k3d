@@ -13,6 +13,15 @@ python3 "$PIPELINE_LIB/capture_receipt.py" annotate \
   --benchmark "${BENCHMARK:-deepswe}" \
   || echo "WARNING: capture receipt check failed; scoring continues"
 
+# Anti-cheat verdict per rollout. P8 scores rejected rollouts as unresolved.
+rm -rf "$HARNESS_DIR/anticheat"
+python3 "$PIPELINE_LIB/anticheat_verdict.py" \
+  --harness-dir "$HARNESS_DIR" \
+  --tasks-dir "$(benchmark_tasks_dir)" \
+  --task-file "$WORKDIR/selected_tasks.txt" \
+  --benchmark "${BENCHMARK:-deepswe}" \
+  || echo "WARNING: anti-cheat verdicts failed; artifact.json records anticheat not_run"
+
 python3 "$PIPELINE_LIB/score_results.py" \
   --harness-dir "$HARNESS_DIR" \
   --baseline-dir "$BASELINE_DIR" \

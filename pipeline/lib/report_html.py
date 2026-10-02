@@ -488,6 +488,17 @@ def report_html(doc: dict) -> str:
             f"reasoning_effort {params.get('reasoning_effort') or '-'}. "
             f"thinking.type {thinking.get('type') or '-'}."
         )
+    anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else None
+    if anticheat and anticheat.get("status") == "ok":
+        counts = anticheat.get("counts") if isinstance(anticheat.get("counts"), dict) else {}
+        clauses.append(
+            f"Anti-cheat {anticheat.get('version') or '-'}: {counts.get('clean', 0)} clean, "
+            f"{counts.get('flagged', 0)} flagged, {counts.get('rejected', 0)} rejected. "
+            f"Macro Pass@1 raw {_fmt_pct(_as_rate(anticheat.get('macro_pass@1_raw')))}, "
+            f"official {_fmt_pct(_as_rate(anticheat.get('macro_pass@1_official')))} (rejected counted unresolved)."
+        )
+    elif anticheat:
+        clauses.append("Anti-cheat not run.")
     if run_id is not None:
         clauses.append(f"Run {run_id}.")
 

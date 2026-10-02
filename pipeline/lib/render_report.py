@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import re
@@ -12,6 +13,7 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
+from anticheat_verdict import adjust_attempt
 from eval_metrics import mean_ci, summarize_arm
 from score_results import load_json, parse_reward_value, rates_for_trial
 from icode_usage import find_icode_usage
@@ -31,7 +33,10 @@ _TRIAL_FILES = {
     "capture.json",
     "capture_flags.json",
     "base_sha.txt",
+    "anticheat.json",
+    "trial.log",
 }
+_GZIP_TRIAL_FILES = {"events.jsonl"}
 
 
 def _resolved(data: dict) -> bool:
@@ -127,6 +132,9 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None) -> dict:
         row["started_at"] = started
     if isinstance(finished, str):
         row["finished_at"] = finished
+    verdict = load_json(trial / "agent" / "anticheat.json")
+    if isinstance(verdict, dict) and verdict.get("verdict"):
+        row["anticheat"] = str(verdict["verdict"])
     return row
 
 
@@ -345,8 +353,10 @@ def build_artifact(
     eval_protocol: dict | None = None,
 ) -> dict:
     del baseline_dir
-    icode_rows = [(tid, harness_task_attempts(harness_dir, tid, n_rollouts)) for tid in task_ids]
+    raw_rows = [(tid, harness_task_attempts(harness_dir, tid, n_rollouts)) for tid in task_ids]
+    icode_rows = [(tid, [adjust_attempt(row) for row in rows]) for tid, rows in raw_rows]
     arm = summarize_arm(icode_rows, n_rollouts, concurrency)
+    raw_arm = summarize_arm(raw_rows, n_rollouts, concurrency)
     progress_path = harness_dir / "progress.json"
     if progress_path.is_file():
         prog = load_json(progress_path)
@@ -372,6 +382,8 @@ def build_artifact(
         "concurrency": concurrency,
         "cpus_each": cpus_each,
         "icode": arm,
+        "icode_raw": {k: v for k, v in raw_arm.items() if k not in ("tasks", "unscored_tasks")},
+        "anticheat": anticheat_block(harness_dir, raw_arm, arm),
     }
     if eval_protocol:
         doc["eval_protocol"] = eval_protocol
@@ -385,6 +397,31 @@ def build_artifact(
                 "sha256": str(release.get("sha256") or ""),
             }
     return doc
+
+
+def anticheat_block(harness_dir: Path, raw_arm: dict, arm: dict) -> dict:
+    """P7's verdict summary plus raw and official macro Pass@1. ``not_run`` when P7 wrote none."""
+    found = load_json(harness_dir / "anticheat" / "summary.json")
+    block = dict(found) if isinstance(found, dict) else {"status": "not_run"}
+    block.setdefault("status", "ok")
+    block["macro_pass@1_raw"] = raw_arm.get("macro_pass@1")
+    block["macro_pass@1_official"] = arm.get("macro_pass@1")
+    return block
+
+
+def anticheat_line(doc: dict) -> str | None:
+    block = doc.get("anticheat")
+    if not isinstance(block, dict):
+        return None
+    if block.get("status") != "ok":
+        return "- Anti-cheat: **not run** (official metrics equal raw metrics)"
+    counts = block.get("counts") or {}
+    return (
+        f"- Anti-cheat `{block.get('version') or '-'}`: clean **{counts.get('clean', 0)}** · "
+        f"flagged **{counts.get('flagged', 0)}** · rejected **{counts.get('rejected', 0)}** · "
+        f"macro Pass@1 raw **{_pct(block.get('macro_pass@1_raw'))}** → official "
+        f"**{_pct(block.get('macro_pass@1_official'))}** (metrics below are official; see anticheat/report.md)"
+    )
 
 
 def _pct(value) -> str:
@@ -543,6 +580,9 @@ def summary_markdown(doc: dict) -> str:
         from provenance import provenance_markdown
 
         lines.extend(provenance_markdown(protocol))
+    ac_line = anticheat_line(doc)
+    if ac_line:
+        lines.append(ac_line)
     lines.append("")
     arm = doc.get("icode")
     if isinstance(arm, dict):
@@ -746,6 +786,20 @@ def default_backup_root() -> Path:
     return Path(__file__).resolve().parents[2] / "output"
 
 
+_KEY_SHAPED = re.compile(r"sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}")
+_SECRET_ENV = ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ICODE_API_KEY", "GITCODE_TOKEN", "GITHUB_TOKEN")
+
+
+def archive_transcript(src: Path, target: Path) -> None:
+    """Gzip a transcript, masking key-shaped values and this process's secret env values."""
+    secrets = [v for v in (os.environ.get(k) or "" for k in _SECRET_ENV) if len(v) >= 8]
+    with src.open("r", encoding="utf-8", errors="replace") as fh, gzip.open(target, "wt", encoding="utf-8") as out:
+        for line in fh:
+            for value in secrets:
+                line = line.replace(value, "***")
+            out.write(_KEY_SHAPED.sub("***", line))
+
+
 def _copy_trial_files(trial: Path, dest: Path) -> None:
     if not trial.is_dir():
         return
@@ -755,9 +809,14 @@ def _copy_trial_files(trial: Path, dest: Path) -> None:
             continue
         if path.name == ".harbor-env" or ".harbor-env" in path.parts:
             continue
+        target = dest / path.relative_to(trial)
+        if path.name in _GZIP_TRIAL_FILES:
+            target = target.with_name(target.name + ".gz")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            archive_transcript(path, target)
+            continue
         if path.name not in _TRIAL_FILES and path.suffix != ".patch":
             continue
-        target = dest / path.relative_to(trial)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
 
@@ -786,6 +845,9 @@ def backup_run(
         if src.is_file():
             shutil.copy2(src, dest / name)
     (dest / "tasks.txt").write_text("".join(f"{tid}\n" for tid in task_ids), encoding="utf-8")
+    verdicts = harness_dir / "anticheat"
+    if verdicts.is_dir():
+        shutil.copytree(verdicts, dest / "anticheat", dirs_exist_ok=True)
     from score_results import find_harbor_task_dir, trial_dirs
 
     for tid in task_ids:
