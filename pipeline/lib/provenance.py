@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from icode_sanitize import MANIFEST_NAME, runtime_sha256, tree_sha256
+
 OVERLAY_MARKER = "mac-k3d-lolbench-fix-rewards-v1"
 PROVENANCE_KEYS = (
     "harbor",
@@ -26,6 +28,7 @@ PROVENANCE_KEYS = (
     "worker",
     "requester",
     "pipeline",
+    "isolation",
 )
 _DOCKER_IMAGE = re.compile(r'^docker_image\s*=\s*"([^"]+)"', re.M)
 
@@ -320,6 +323,73 @@ def _write_json(path: Path, doc: dict) -> None:
     path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 
+def isolation_record(icode_root: Path | None, mounts: object) -> dict:
+    """The runtime the agent could read at /opt/icode-host, hashed now rather than trusted from the manifest."""
+    mount_list = mounts if isinstance(mounts, list) else []
+    first = mount_list[0] if mount_list and isinstance(mount_list[0], dict) else {}
+    record = {
+        "mode": "release",
+        "sanitizer": "",
+        "sourceless": None,
+        "removed": 0,
+        "tree_sha256": "",
+        "runtime_sha256": "",
+        "manifest_matches_tree": None,
+        "mount": {
+            "count": len(mount_list),
+            "target": str(first.get("target") or ""),
+            "read_only": first.get("read_only") is True,
+        },
+    }
+    if icode_root is None or not (icode_root / ".venv" / "sandbox-cpython").is_dir():
+        return record
+    venv = icode_root / ".venv"
+    manifest = _load_json(venv / MANIFEST_NAME)
+    tree = tree_sha256(venv)
+    runtime = runtime_sha256(icode_root)
+    removed = manifest.get("removed")
+    record.update(
+        {
+            "mode": "git",
+            "sanitizer": str(manifest.get("sanitizer") or ""),
+            "sourceless": manifest.get("sourceless") is True,
+            "removed": len(removed) if isinstance(removed, list) else 0,
+            "tree_sha256": tree,
+            "runtime_sha256": runtime,
+            "manifest_matches_tree": bool(manifest)
+            and manifest.get("tree_sha256") == tree
+            and manifest.get("runtime_sha256") == runtime,
+        }
+    )
+    return record
+
+
+def leakscan_record(report: Path) -> dict:
+    doc = _load_json(report)
+    tasks = doc.get("tasks") if isinstance(doc.get("tasks"), dict) else {}
+    statuses: dict[str, int] = {}
+    for entry in tasks.values():
+        status = str(entry.get("status") or "") if isinstance(entry, dict) else ""
+        if status:
+            statuses[status] = statuses.get(status, 0) + 1
+    hits = doc.get("hit_tasks")
+    return {
+        "scanner": str(doc.get("scanner") or ""),
+        "hit_tasks": sorted(str(tid) for tid in hits) if isinstance(hits, list) else [],
+        "statuses": dict(sorted(statuses.items())),
+        "report_sha256": sha256_file(report) if report.is_file() else "",
+    }
+
+
+def record_leakscan(inputs: Path, report: Path) -> dict:
+    doc = _load_json(inputs)
+    isolation = doc.get("isolation") if isinstance(doc.get("isolation"), dict) else {}
+    isolation["leak_scan"] = leakscan_record(report)
+    doc["isolation"] = isolation
+    _write_json(inputs, doc)
+    return doc
+
+
 def write_protocol_inputs(
     *,
     out: Path,
@@ -330,6 +400,8 @@ def write_protocol_inputs(
     applied: bool,
     workdir: Path,
     pipeline_root: Path,
+    icode_root: Path | None = None,
+    mounts: object = None,
 ) -> dict:
     prev = _load_json(out)
     prev_images = prev.get("images") if isinstance(prev.get("images"), dict) else {}
@@ -347,6 +419,7 @@ def write_protocol_inputs(
             "worker": worker_facts(),
             "requester": requester_facts(),
             "pipeline": pipeline_facts(pipeline_root),
+            "isolation": isolation_record(icode_root, mounts),
         }
     )
     _write_json(out, doc)
@@ -368,6 +441,51 @@ def _cell(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _bool_or_none(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def isolation_view(isolation: object) -> dict | None:
+    if not isinstance(isolation, dict):
+        return None
+    mount = isolation.get("mount") if isinstance(isolation.get("mount"), dict) else {}
+    leak = isolation.get("leak_scan") if isinstance(isolation.get("leak_scan"), dict) else {}
+    statuses = leak.get("statuses") if isinstance(leak.get("statuses"), dict) else {}
+    hits = leak.get("hit_tasks") if isinstance(leak.get("hit_tasks"), list) else []
+    count = mount.get("count")
+    return {
+        "mode": str(isolation.get("mode") or ""),
+        "sanitizer": str(isolation.get("sanitizer") or ""),
+        "sourceless": _bool_or_none(isolation.get("sourceless")),
+        "tree_sha256": str(isolation.get("tree_sha256") or ""),
+        "runtime_sha256": str(isolation.get("runtime_sha256") or ""),
+        "manifest_matches_tree": _bool_or_none(isolation.get("manifest_matches_tree")),
+        "mount_target": str(mount.get("target") or ""),
+        "mount_read_only": _bool_or_none(mount.get("read_only")),
+        "mount_count": count if isinstance(count, int) and not isinstance(count, bool) else None,
+        "leak_scanner": str(leak.get("scanner") or ""),
+        "leak_hits": [str(tid) for tid in hits],
+        "leak_statuses": ", ".join(f"{name} {num}" for name, num in sorted(statuses.items())),
+    }
+
+
+def isolation_lines(view: dict | None) -> list[str]:
+    """Plain-text isolation facts shared by summary.md and report.html."""
+    if not view:
+        return []
+    lines = [
+        f"Isolation: mode {_cell(view['mode'])} · sanitizer {_cell(view['sanitizer'])} · "
+        f"sourceless {_cell(view['sourceless'])} · runtime sha256 {_cell(view['runtime_sha256'])} · "
+        f"tree sha256 {_cell(view['tree_sha256'])} · manifest matches tree {_cell(view['manifest_matches_tree'])}",
+        f"Agent mount: {_cell(view['mount_target'])} read-only {_cell(view['mount_read_only'])} "
+        f"({_cell(view['mount_count'])} mount)",
+    ]
+    if view["leak_scanner"]:
+        hits = ", ".join(view["leak_hits"]) if view["leak_hits"] else "none"
+        lines.append(f"Leak scan: {view['leak_scanner']} · hit tasks {hits} · {_cell(view['leak_statuses'])}")
+    return lines
 
 
 def provenance_view(protocol: dict | None) -> dict | None:
@@ -402,6 +520,7 @@ def provenance_view(protocol: dict | None) -> dict | None:
     if not isinstance(applied, bool):
         applied = None
     return {
+        "isolation": isolation_view(protocol.get("isolation")),
         "harbor_version": str(harbor.get("version") or ""),
         "benchmark_url": str(bench.get("url") or ""),
         "benchmark_sha": str(bench.get("sha") or ""),
@@ -448,6 +567,8 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
         f"cpu `{_cell(view['cpu_model'])}`"
     )
     lines.append(f"- Requester: `{_cell(view['user'])}` `{_cell(view['build_url'])}`")
+    for line in isolation_lines(view["isolation"]):
+        lines.append(f"- {line}")
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
     release = icode.get("release") if isinstance(icode.get("release"), dict) else None
     if release and str(release.get("sha256") or ""):
@@ -487,11 +608,17 @@ def main(argv: list[str] | None = None) -> int:
     write.add_argument("--applied", default="0")
     write.add_argument("--workdir", required=True)
     write.add_argument("--pipeline-root", default=os.environ.get("MAC_K3D_ROOT", ""))
+    write.add_argument("--icode-root", default="", help="iCode host tree mounted at /opt/icode-host")
+    write.add_argument("--mounts", default="", help="JSON list passed to harbor --mounts")
 
     image = sub.add_parser("record-image")
     image.add_argument("--inputs", required=True)
     image.add_argument("--task-id", required=True)
     image.add_argument("--task-toml", required=True)
+
+    leak = sub.add_parser("record-leakscan")
+    leak.add_argument("--inputs", required=True)
+    leak.add_argument("--report", required=True)
 
     args = parser.parse_args(argv)
     if args.cmd == "assert-count":
@@ -499,6 +626,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "write-inputs":
         root = Path(args.pipeline_root) if args.pipeline_root else Path(args.workdir)
+        try:
+            mounts = json.loads(args.mounts) if args.mounts else []
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: --mounts is not JSON: {exc}", file=sys.stderr)
+            return 1
         write_protocol_inputs(
             out=Path(args.out),
             repo_dir=Path(args.repo_dir),
@@ -508,7 +640,12 @@ def main(argv: list[str] | None = None) -> int:
             applied=str(args.applied).strip().lower() in {"1", "true", "yes", "on"},
             workdir=Path(args.workdir),
             pipeline_root=root,
+            icode_root=Path(args.icode_root) if args.icode_root else None,
+            mounts=mounts,
         )
+        return 0
+    if args.cmd == "record-leakscan":
+        record_leakscan(Path(args.inputs), Path(args.report))
         return 0
     record_task_image(Path(args.inputs), args.task_id, Path(args.task_toml))
     return 0

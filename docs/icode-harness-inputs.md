@@ -93,6 +93,8 @@ mac-k3d eval --local --stage p3 --icode-mode git \
 
 P3 writes `icode_git.json` (`url`, `kind`, `ref`, resolved `sha`, `subject`). P7/P8 copy it into the report as `icode_git`. Console: `OK iCode git kind=…`. Private repos: gitignored `.env` (`GITCODE_TOKEN` / `GITHUB_TOKEN`) or Jenkins credentials `gitcode-pat` / `github-pat`.
 
+Before any rollout, P5 strips task deliverables from the clone's `.venv`, makes its sandbox stdlib sourceless, mounts it read-only and leak-scans it. This is the same for every benchmark and model; see [Same protocol for every benchmark and model](evaluation.md#same-protocol-for-every-benchmark-and-model). The clone's tracked files are not changed. Each run records the result in `eval_protocol.isolation`; compare `runtime_sha256` across runs ([Recorded proof](evaluation.md#recorded-proof-eval_protocolisolation)).
+
 The clone lives under the eval workdir (`eval-runs/icode-src`), not a permanent developer tree on the worker. A later git eval wipes that tree first. If Harbor left root/nobody files in `.venv`, P3 deletes it with Docker (`removing leftover … via docker`) — do not `sudo rm` by hand. Git-mode Jenkins also deletes a leftover `ICODE_RELEASE_FILE` and does not treat it as an upload.
 
 ## Jenkins Build with Parameters

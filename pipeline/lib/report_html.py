@@ -338,7 +338,7 @@ def _minute_tick(value: float) -> str:
 
 
 def _provenance_html(doc: dict) -> str:
-    from provenance import provenance_view
+    from provenance import isolation_lines, provenance_view
 
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
     view = provenance_view(protocol)
@@ -370,6 +370,7 @@ def _provenance_html(doc: dict) -> str:
         ),
         f"Requester {_esc(cell(view['user']))} {_esc(cell(view['build_url']))}",
     ]
+    items.extend(_esc(line) for line in isolation_lines(view["isolation"]))
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
     release = icode.get("release") if isinstance(icode.get("release"), dict) else None
     if release and str(release.get("sha256") or ""):

@@ -32,6 +32,25 @@ from score_results import (  # noqa: E402
 FIXTURE = LIB / "testdata" / "report-min.json"
 
 
+def valid_isolation() -> dict:
+    return {
+        "mode": "git",
+        "sanitizer": "mac-k3d-icode-sanitize-v2",
+        "sourceless": True,
+        "removed": 9,
+        "tree_sha256": "a" * 64,
+        "runtime_sha256": "b" * 64,
+        "manifest_matches_tree": True,
+        "mount": {"count": 1, "target": "/opt/icode-host", "read_only": True},
+        "leak_scan": {
+            "scanner": "mac-k3d-leakscan-v1",
+            "hit_tasks": [],
+            "statuses": {"clean": 1},
+            "report_sha256": "c" * 64,
+        },
+    }
+
+
 class OpenAICompatTests(unittest.TestCase):
     def test_parse_model_ids(self):
         ids = parse_model_ids(
@@ -2785,6 +2804,7 @@ class ProvenanceTests(unittest.TestCase):
                         },
                         "requester": {"user": "unknown", "build_url": "unknown"},
                         "pipeline": {"commit": "abcdef", "dirty": False},
+                        "isolation": valid_isolation(),
                     }
                 ),
                 encoding="utf-8",
@@ -2805,6 +2825,7 @@ class ProvenanceTests(unittest.TestCase):
             self.assertEqual(protocol["worker"]["nproc"], 16)
             self.assertEqual(protocol["requester"]["user"], "unknown")
             self.assertEqual(protocol["pipeline"]["dirty"], False)
+            self.assertEqual(protocol["isolation"]["runtime_sha256"], "b" * 64)
             self.assertEqual(protocol["icode"]["release"]["sha256"], "abc123")
             artifact = build_artifact(
                 suite="deepswe",
@@ -2827,8 +2848,12 @@ class ProvenanceTests(unittest.TestCase):
             self.assertIn("Provenance", text)
             self.assertIn("0.22.0", text)
             self.assertIn("tomlhash", text)
+            self.assertIn(f"runtime sha256 {'b' * 64}", text)
+            self.assertIn("Agent mount: /opt/icode-host read-only true (1 mount)", text)
+            self.assertIn("Leak scan: mac-k3d-leakscan-v1 · hit tasks none · clean 1", text)
             self.assertIn("Provenance", page)
             self.assertIn("sha256:image", page)
+            self.assertIn(f"runtime sha256 {'b' * 64}", page)
 
     def test_official_missing_harbor_version_fails_check(self):
         from render_report import demo_artifact
@@ -2860,6 +2885,7 @@ class ProvenanceTests(unittest.TestCase):
             },
             "requester": {"user": "unknown", "build_url": "unknown"},
             "pipeline": {"commit": "abcdef", "dirty": False},
+            "isolation": valid_isolation(),
         }
         doc["icode_git"] = {
             "url": "https://gitcode.com/michaelling/jiuwenicode",
@@ -2881,6 +2907,489 @@ class ProvenanceTests(unittest.TestCase):
                 os.environ.pop("OFFICIAL", None)
             else:
                 os.environ["OFFICIAL"] = previous
+
+    def test_official_isolation_rules(self):
+        from check_report import official_isolation_errors
+
+        self.assertEqual(official_isolation_errors(valid_isolation()), [])
+        self.assertEqual(official_isolation_errors(None), ["missing eval_protocol.isolation"])
+        cases = [
+            ("mode", "release", "mode must be git"),
+            ("sanitizer", "", "missing eval_protocol.isolation.sanitizer"),
+            ("sourceless", False, "sourceless must be true"),
+            ("tree_sha256", "short", "tree_sha256 must be a sha256"),
+            ("runtime_sha256", "", "runtime_sha256 must be a sha256"),
+            ("manifest_matches_tree", False, "manifest_matches_tree must be true"),
+        ]
+        for key, value, expected in cases:
+            iso = valid_isolation()
+            iso[key] = value
+            errors = official_isolation_errors(iso)
+            self.assertTrue(any(expected in err for err in errors), (key, errors))
+        for mount in (
+            {"count": 1, "target": "/opt/icode-host", "read_only": False},
+            {"count": 2, "target": "/opt/icode-host", "read_only": True},
+            {"count": 1, "target": "/elsewhere", "read_only": True},
+        ):
+            iso = valid_isolation()
+            iso["mount"] = mount
+            self.assertTrue(any("one read-only mount" in err for err in official_isolation_errors(iso)), mount)
+        iso = valid_isolation()
+        iso["leak_scan"]["hit_tasks"] = ["cpython_5"]
+        self.assertTrue(any("hit_tasks must be empty" in err for err in official_isolation_errors(iso)))
+        iso = valid_isolation()
+        del iso["leak_scan"]
+        self.assertTrue(any("missing eval_protocol.isolation.leak_scan" in err for err in official_isolation_errors(iso)))
+
+
+class AgentIsolationTests(unittest.TestCase):
+    SENTINEL_KEY = "sk-sentinel-deepseek-0000"
+    SENTINEL_TOKEN = "gc-sentinel-token-0000"
+
+    def _snapshot(self, root: Path) -> dict:
+        out = {}
+        for path in sorted(root.rglob("*")):
+            st = path.lstat()
+            data = b""
+            if path.is_file() and not path.is_symlink():
+                data = path.read_bytes()
+            out[path.relative_to(root).as_posix()] = (st.st_mtime_ns, st.st_size, data)
+        return out
+
+    def _write(self, path: Path, text: str = "VALUE = 1\n") -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_sanitizer_strips_deliverables_and_is_idempotent(self):
+        from icode_sanitize import MANIFEST_NAME, SANITIZER_VERSION, sanitize_tree
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp) / "icode-src"
+            sandbox = tree / ".venv" / "sandbox-cpython"
+            stdlib = sandbox / "lib" / "python3.13"
+            venv_site = tree / ".venv" / "lib" / "python3.13" / "site-packages"
+            (sandbox / "bin").mkdir(parents=True)
+            (sandbox / "bin" / "python3").symlink_to(sys.executable)
+            for rel in (
+                "tomllib/__init__.py",
+                "tomllib/_parser.py",
+                "zoneinfo/__init__.py",
+                "zoneinfo/_common.py",
+                "test/test_tomllib.py",
+                "idlelib/idle_test/test_editor.py",
+                "idlelib/editor.py",
+                "typing.py",
+                "site-packages/pip/_vendor/tomli/__init__.py",
+                "site-packages/pip/__init__.py",
+            ):
+                self._write(stdlib / rel)
+            for rel in (
+                "setuptools/_vendor/tomli/_parser.py",
+                "setuptools/_vendor/tomli-2.4.0.dist-info/METADATA",
+                "setuptools/_vendor/tomli_w/__init__.py",
+                "tomli-2.0.1.dist-info/METADATA",
+                "backports/zoneinfo/__init__.py",
+                "httpx/__init__.py",
+            ):
+                self._write(venv_site / rel)
+            self._write(tree / "openjiuwen_icode" / "__init__.py")
+
+            doc = sanitize_tree(tree)
+            self.assertIsNotNone(doc)
+            for gone in (
+                stdlib / "tomllib",
+                stdlib / "test",
+                stdlib / "idlelib" / "idle_test",
+                stdlib / "zoneinfo" / "__init__.py",
+                stdlib / "zoneinfo" / "_common.py",
+                stdlib / "site-packages" / "pip" / "_vendor" / "tomli",
+                venv_site / "setuptools" / "_vendor" / "tomli",
+                venv_site / "setuptools" / "_vendor" / "tomli-2.4.0.dist-info",
+                venv_site / "tomli-2.0.1.dist-info",
+                venv_site / "backports" / "zoneinfo",
+            ):
+                self.assertFalse(gone.exists(), gone)
+            self.assertTrue((stdlib / "zoneinfo" / "__init__.pyc").is_file())
+            self.assertTrue((stdlib / "zoneinfo" / "_common.pyc").is_file())
+            for kept in (
+                stdlib / "idlelib" / "editor.py",
+                stdlib / "typing.py",
+                stdlib / "site-packages" / "pip" / "__init__.py",
+                venv_site / "httpx" / "__init__.py",
+                venv_site / "setuptools" / "_vendor" / "tomli_w" / "__init__.py",
+                tree / "openjiuwen_icode" / "__init__.py",
+            ):
+                self.assertTrue(kept.is_file(), kept)
+            manifest = json.loads((tree / ".venv" / MANIFEST_NAME).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["sanitizer"], SANITIZER_VERSION)
+            self.assertFalse(manifest["sourceless"])
+            self.assertIn(".venv/sandbox-cpython/lib/python3.13/tomllib", manifest["removed"])
+            self.assertIn(".venv/lib/python3.13/site-packages/setuptools/_vendor/tomli", manifest["removed"])
+            self.assertEqual(len(manifest["tree_sha256"]), 64)
+
+            before = self._snapshot(tree)
+            again = sanitize_tree(tree)
+            self.assertEqual(again, doc)
+            self.assertEqual(self._snapshot(tree), before)
+
+    def _fake_clone(self, parent: Path, home: str) -> Path:
+        """A git-mode tree with the host-specific files a real uv sync leaves in .venv."""
+        tree = parent / "icode-src"
+        tree.mkdir(parents=True)
+        tree = tree.resolve()
+        venv = tree / ".venv"
+        sandbox = venv / "sandbox-cpython"
+        stdlib = sandbox / "lib" / "python3.13"
+        site = venv / "lib" / "python3.13" / "site-packages"
+        (sandbox / "bin").mkdir(parents=True)
+        (sandbox / "bin" / "python3").symlink_to(sys.executable)
+        self._write(stdlib / "typing.py", "def cast(kind, value):\n    return value\n")
+        self._write(stdlib / "zoneinfo" / "__init__.py", "ZONE = 'UTC'\n")
+        self._write(site / "pkg" / "__init__.py", "VALUE = 1\n")
+        self._write(site / "pkg" / "__pycache__" / "__init__.cpython-313.pyc", f"cache {home}")
+        self._write(site / "pkg-1.0.dist-info" / "RECORD", f"../../../bin/pkg,sha256={home},{len(str(tree))}\n")
+        self._write(site / "pkg-1.0.dist-info" / "uv_cache.json", json.dumps({"timestamp": home}))
+        self._write(site / "pkg-1.0.dist-info" / "direct_url.json", json.dumps({"url": f"file://{tree}"}))
+        self._write(venv / "bin" / "icode", f"#!{tree}/.venv/bin/python\nimport sys\n")
+        self._write(venv / "bin" / "activate", f"VIRTUAL_ENV='{tree}/.venv'\n")
+        self._write(venv / "pyvenv.cfg", f"home = {home}\n")
+        (venv / "bin" / "python").symlink_to(f"{home}/bin/python3.13")
+        return tree
+
+    def test_runtime_sha256_is_the_same_for_every_workspace(self):
+        import shutil
+
+        from icode_sanitize import runtime_sha256, sanitize_tree
+
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self._fake_clone(Path(tmp) / "lolbench_one_task", "/home/a/uv")
+            b = self._fake_clone(Path(tmp) / "deepswe_one_task_longer_path", "/home/bb/uv")
+            for path in b.rglob("*"):
+                if not path.is_symlink():
+                    os.utime(path, (1_000_000_000, 1_000_000_000))
+            doc_a = sanitize_tree(a, sourceless=True)
+            doc_b = sanitize_tree(b, sourceless=True)
+            self.assertEqual(doc_a["runtime_sha256"], doc_b["runtime_sha256"])
+            self.assertNotEqual(doc_a["tree_sha256"], doc_b["tree_sha256"])
+            moved = Path(tmp) / "moved" / "icode-src"
+            shutil.copytree(a, moved, symlinks=True)
+            self.assertEqual(runtime_sha256(moved), doc_a["runtime_sha256"])
+            pyc = b / ".venv" / "sandbox-cpython" / "lib" / "python3.13" / "typing.pyc"
+            pyc.write_bytes(pyc.read_bytes() + b"\0")
+            self.assertNotEqual(runtime_sha256(b), doc_a["runtime_sha256"])
+
+    def test_stale_manifest_requires_refresh(self):
+        from icode_sanitize import EXIT_STALE, MANIFEST_NAME, SANITIZER_VERSION, StaleManifestError, sanitize_tree
+
+        outside = ".venv/lib/python3.13/site-packages/setuptools/_vendor/tomli"
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self._fake_clone(Path(tmp) / "job", "/home/a/uv")
+            (tree / ".venv" / MANIFEST_NAME).write_text(
+                json.dumps({"sanitizer": "mac-k3d-icode-sanitize-v1", "removed": [outside], "sourceless_removed": 625}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(StaleManifestError):
+                sanitize_tree(tree, sourceless=True)
+            cli = subprocess.run(
+                [sys.executable, str(LIB / "icode_sanitize.py"), "--tree", str(tree), "--sourceless"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(cli.returncode, EXIT_STALE, cli.stderr)
+            doc = sanitize_tree(tree, sourceless=True, refresh=True)
+            self.assertEqual(doc["sanitizer"], SANITIZER_VERSION)
+            self.assertIn(outside, doc["removed"])
+            self.assertEqual(doc["sourceless_removed"], 1)
+            self.assertEqual(sanitize_tree(tree, sourceless=True), doc)
+
+    def test_isolation_record_hashes_the_tree_now(self):
+        from agent_mounts import build_mounts
+        from icode_sanitize import SANITIZER_VERSION, sanitize_tree
+        from provenance import isolation_record, record_leakscan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self._fake_clone(Path(tmp) / "job", "/home/a/uv")
+            doc = sanitize_tree(tree, sourceless=True)
+            record = isolation_record(tree, build_mounts(tree))
+            self.assertEqual(record["mode"], "git")
+            self.assertEqual(record["sanitizer"], SANITIZER_VERSION)
+            self.assertTrue(record["sourceless"])
+            self.assertEqual(record["tree_sha256"], doc["tree_sha256"])
+            self.assertEqual(record["runtime_sha256"], doc["runtime_sha256"])
+            self.assertTrue(record["manifest_matches_tree"])
+            self.assertEqual(record["mount"], {"count": 1, "target": "/opt/icode-host", "read_only": True})
+            self._write(tree / ".venv" / "lib" / "python3.13" / "site-packages" / "pkg" / "late.py", "LATE = 1\n")
+            self.assertFalse(isolation_record(tree, build_mounts(tree))["manifest_matches_tree"])
+
+            release = Path(tmp) / "icode-bin"
+            release.mkdir()
+            rel = isolation_record(release, build_mounts(release))
+            self.assertEqual(rel["mode"], "release")
+            self.assertIsNone(rel["sourceless"])
+            self.assertIsNone(rel["manifest_matches_tree"])
+
+            inputs = Path(tmp) / "inputs.json"
+            inputs.write_text(json.dumps({"isolation": record}), encoding="utf-8")
+            report = Path(tmp) / "leak.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "scanner": "mac-k3d-leakscan-v1",
+                        "hit_tasks": ["b", "a"],
+                        "tasks": {"a": {"status": "hit"}, "b": {"status": "hit"}, "c": {"status": "clean"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            merged = record_leakscan(inputs, report)["isolation"]
+            self.assertEqual(merged["runtime_sha256"], record["runtime_sha256"])
+            self.assertEqual(merged["leak_scan"]["hit_tasks"], ["a", "b"])
+            self.assertEqual(merged["leak_scan"]["statuses"], {"clean": 1, "hit": 2})
+            self.assertEqual(len(merged["leak_scan"]["report_sha256"]), 64)
+
+    def test_sanitizer_skips_tree_without_sandbox(self):
+        from icode_sanitize import sanitize_tree
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp) / "icode-bin"
+            self._write(tree / "icode", "#!/bin/sh\n")
+            self.assertIsNone(sanitize_tree(tree))
+            self.assertEqual(sorted(p.name for p in tree.iterdir()), ["icode"])
+
+    def test_sourceless_stdlib_still_imports(self):
+        import shutil
+        import sysconfig
+
+        from icode_sanitize import sanitize_tree
+
+        exe = Path(os.path.realpath(sys.executable))
+        version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        source = Path(sysconfig.get_paths()["stdlib"])
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp) / "icode-src"
+            sandbox = tree / ".venv" / "sandbox-cpython"
+            stdlib = sandbox / "lib" / version
+            (sandbox / "bin").mkdir(parents=True)
+            py = sandbox / "bin" / "python3"
+            shutil.copy2(exe, py)
+            ignore = shutil.ignore_patterns(
+                "test", "site-packages", "dist-packages", "__pycache__", "idlelib", "tkinter", "turtledemo", "ensurepip"
+            )
+            shutil.copytree(source, stdlib, ignore=ignore, symlinks=True)
+            probe = subprocess.run(
+                [str(py), "-I", "-c", "import sys, json, typing; print(sys.prefix)"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if probe.returncode != 0 or Path(probe.stdout.strip()).resolve() != sandbox.resolve():
+                self.skipTest(f"host python is not relocatable: {probe.stdout.strip()} {probe.stderr[-200:]}")
+
+            doc = sanitize_tree(tree, sourceless=True)
+            self.assertTrue(doc["sourceless"])
+            self.assertGreater(doc["sourceless_removed"], 100)
+            self.assertFalse((stdlib / "typing.py").exists())
+            self.assertFalse((stdlib / "json" / "__init__.py").exists())
+            self.assertTrue((stdlib / "typing.pyc").is_file())
+            self.assertTrue((stdlib / "json" / "__init__.pyc").is_file())
+            run = subprocess.run(
+                [str(py), "-I", "-c", "import json, typing; print(json.dumps(typing.get_args(typing.Union[int, str])[0].__name__))"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.strip(), '"int"')
+
+    def test_leakscan_reports_copied_gold_and_ignores_unrelated(self):
+        from anticheat_leakscan import scan
+
+        gold = [f"    value_{i} = compute_distinctive_thing({i}, alpha, beta)" for i in range(40)]
+        test_lines = [f"    assert check_distinctive_case_{i}(fixture) is True" for i in range(40)]
+        patch = (
+            "diff --git a/pkg/mod.py b/pkg/mod.py\nnew file mode 100644\n--- /dev/null\n+++ b/pkg/mod.py\n"
+            "@@ -0,0 +1,40 @@\n"
+            + "".join(f"+{line}\n" for line in gold)
+            + "diff --git a/tests/test_mod.py b/tests/test_mod.py\n--- /dev/null\n+++ b/tests/test_mod.py\n"
+            "@@ -0,0 +1,40 @@\n"
+            + "".join(f"+{line}\n" for line in test_lines)
+        )
+        small = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n" + "".join(f"+{line}\n" for line in gold[:5])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = root / "tasks"
+            self._write(tasks / "big" / "solution" / "solution.patch", patch)
+            self._write(tasks / "small" / "solution" / "solution.patch", small)
+            (tasks / "nogold" / "tests").mkdir(parents=True)
+            leaky = root / "leaky"
+            self._write(leaky / "lib" / "python3.13" / "mod.py", "\n".join(gold) + "\n")
+            self._write(leaky / ".git" / "objects" / "copy", "\n".join(gold) + "\n")
+            unrelated = root / "unrelated"
+            self._write(unrelated / "lib" / "other.py", "\n".join(f"    other_{i} = something_unrelated({i})" for i in range(60)))
+            tests_only = root / "tests-only"
+            self._write(tests_only / "lib" / "copied_tests.py", "\n".join(test_lines) + "\n")
+
+            ids = ["big", "small", "nogold"]
+            report = scan(leaky, tasks, ids)
+            self.assertEqual(report["hit_tasks"], ["big"])
+            big = report["tasks"]["big"]
+            self.assertEqual(big["status"], "hit")
+            self.assertEqual(big["gold_lines"], 40)
+            self.assertEqual(big["hits"], [{"path": "lib/python3.13/mod.py", "matched": 40, "share": 1.0}])
+            self.assertEqual(report["tasks"]["small"]["status"], "too_small")
+            self.assertEqual(report["tasks"]["nogold"]["status"], "no_gold")
+            self.assertEqual(scan(unrelated, tasks, ids)["tasks"]["big"]["status"], "clean")
+            self.assertEqual(scan(tests_only, tasks, ids)["tasks"]["big"]["status"], "clean")
+
+            script = LIB / "anticheat_leakscan.py"
+            out = root / "leak.json"
+            hit = subprocess.run(
+                [sys.executable, str(script), "--tree", str(leaky), "--tasks-dir", str(tasks), "--all", "--out", str(out)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(hit.returncode, 2, hit.stdout + hit.stderr)
+            self.assertIn("LEAK task=big file=lib/python3.13/mod.py matched=40/40", hit.stdout)
+            self.assertNotIn("compute_distinctive_thing", hit.stdout)
+            self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["hit_tasks"], ["big"])
+            clean = subprocess.run(
+                [sys.executable, str(script), "--tree", str(unrelated), "--tasks-dir", str(tasks), "--all", "--out", str(out)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+
+    def test_agent_mounts_read_only_and_allowlist(self):
+        from agent_mounts import ICODE_TARGET, build_mounts, check_mounts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            icode = work / "icode-src"
+            icode.mkdir()
+            bench = work / "deep-swe"
+            (bench / "tasks").mkdir(parents=True)
+            forbid = [bench, bench / "tasks"]
+            mounts = build_mounts(icode)
+            self.assertEqual(
+                mounts,
+                [{"type": "bind", "source": str(icode), "target": ICODE_TARGET, "read_only": True}],
+            )
+            self.assertEqual(check_mounts(mounts, icode, forbid), [])
+            second = mounts + [{"type": "bind", "source": str(bench), "target": "/bench", "read_only": True}]
+            self.assertTrue(any("exactly one mount" in err for err in check_mounts(second, icode, forbid)))
+            writable = [dict(mounts[0], read_only=False)]
+            self.assertTrue(any("read_only" in err for err in check_mounts(writable, icode, forbid)))
+            self.assertTrue(any("overlaps" in err for err in check_mounts(build_mounts(work), work, forbid)))
+            inside = bench / "icode"
+            inside.mkdir()
+            self.assertTrue(any("overlaps" in err for err in check_mounts(build_mounts(inside), inside, forbid)))
+
+    def _run_p5_dry(self, tmp: Path, host_root: Path | None = None) -> tuple[subprocess.CompletedProcess[str], Path]:
+        work = tmp / "eval"
+        task = work / "deep-swe" / "tasks" / "alpha"
+        self._write(task / "task.toml", 'docker_image = "example/alpha:1"\n')
+        self._write(
+            task / "solution" / "solution.patch",
+            "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n+print('hello from the alpha gold patch line')\n",
+        )
+        icode = work / "icode-bin"
+        self._write(icode / "icode", "#!/bin/sh\necho icode\n")
+        (icode / "icode").chmod(0o755)
+        (work / "icode_bin_path.txt").write_text(f"{icode / 'icode'}\n", encoding="utf-8")
+        (work / "icode_host_root.txt").write_text(f"{host_root or icode}\n", encoding="utf-8")
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        marker = tmp / "harbor-ran"
+        for name, body in (
+            ("harbor", f"#!/bin/sh\n[ \"$1\" = \"--version\" ] && {{ echo 0.22.0; exit 0; }}\ntouch '{marker}'\nexit 0\n"),
+            ("docker", "#!/bin/sh\nexit 1\n"),
+        ):
+            (bindir / name).write_text(body, encoding="utf-8")
+            (bindir / name).chmod(0o755)
+        env_file = tmp / "empty.env"
+        env_file.write_text("", encoding="utf-8")
+        env_file.chmod(0o600)
+        env = os.environ.copy()
+        for key in (
+            "OFFICIAL",
+            "RESUME",
+            "TASK",
+            "TASKS",
+            "ICODE_SOURCELESS_STDLIB",
+            "DEEPSWE_DIR",
+            "LOLBENCH_DIR",
+            "SWEBENCHPRO_DIR",
+            "GITHUB_TOKEN",
+            "MAC_K3D_GITHUB_PAT",
+            "MAC_K3D_GITCODE_PAT",
+            "MAC_K3D_EVAL_OUTPUT",
+        ):
+            env.pop(key, None)
+        env.update(
+            {
+                "HOME": str(tmp),
+                "PATH": str(bindir) + os.pathsep + env.get("PATH", ""),
+                "MAC_K3D_EVAL_WORKDIR": str(work),
+                "MAC_K3D_ENV_FILE": str(env_file),
+                "DEEPSEEK_API_KEY": self.SENTINEL_KEY,
+                "GITCODE_TOKEN": self.SENTINEL_TOKEN,
+                "BENCHMARK": "deepswe",
+                "N_TASKS": "1",
+                "N_ROLLOUTS": "1",
+                "CPU_LOCK_QTY": "1",
+                "BUILD_NUMBER": "dry",
+                "MAC_K3D_P5_DRY_RUN": "1",
+            }
+        )
+        proc = subprocess.run(
+            ["bash", str(ROOT / "pipeline" / "stages" / "p5_harness.sh")],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        self.assertFalse(marker.exists(), "dry run must not call harbor run")
+        return proc, work
+
+    def test_p5_dry_run_has_no_gitcode_token_and_read_only_mount(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, work = self._run_p5_dry(Path(tmp))
+            output = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 0, output)
+            line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("P5 harbor dry-run")), "")
+            self.assertIn("harbor run", line)
+            self.assertIn('"read_only": true', line)
+            self.assertIn('"target": "/opt/icode-host"', line)
+            self.assertIn("DEEPSEEK_API_KEY=***", line)
+            self.assertNotIn("GITCODE_TOKEN", output)
+            self.assertNotIn(self.SENTINEL_TOKEN, output)
+            self.assertNotIn(self.SENTINEL_KEY, output)
+            harbor_env = (work / ".harbor-env").read_text(encoding="utf-8")
+            self.assertNotIn("GITCODE_TOKEN", harbor_env)
+            self.assertNotIn(self.SENTINEL_TOKEN, harbor_env)
+            self.assertIn("DEEPSEEK_API_KEY=", harbor_env)
+            leak = json.loads((work / "anticheat_leakscan.json").read_text(encoding="utf-8"))
+            self.assertEqual(leak["hit_tasks"], [])
+            self.assertEqual(leak["tasks"]["alpha"]["status"], "too_small")
+            isolation = json.loads((work / "eval_protocol_inputs.json").read_text(encoding="utf-8"))["isolation"]
+            self.assertEqual(isolation["mode"], "release")
+            self.assertEqual(isolation["mount"], {"count": 1, "target": "/opt/icode-host", "read_only": True})
+            self.assertEqual(isolation["leak_scan"]["scanner"], "mac-k3d-leakscan-v1")
+            self.assertEqual(isolation["leak_scan"]["hit_tasks"], [])
+            self.assertEqual(isolation["leak_scan"]["statuses"], {"too_small": 1})
+        stage = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        self.assertIn("unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT", stage)
+
+    def test_p5_refuses_icode_root_that_contains_benchmark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "eval"
+            proc, _ = self._run_p5_dry(Path(tmp), host_root=work)
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("overlaps benchmark path", proc.stderr)
+            self.assertNotIn("P5 harbor dry-run", proc.stdout)
 
 
 if __name__ == "__main__":

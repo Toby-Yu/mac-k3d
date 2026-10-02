@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -58,6 +59,37 @@ def _present_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def official_isolation_errors(isolation: object) -> list[str]:
+    """The same isolation protocol must hold for every benchmark and model (docs/evaluation.md)."""
+    if not isinstance(isolation, dict):
+        return ["missing eval_protocol.isolation"]
+    errors: list[str] = []
+    loc = "eval_protocol.isolation"
+    if isolation.get("mode") != "git":
+        errors.append(f"{loc}.mode must be git")
+    if not _nonempty_str(isolation.get("sanitizer")):
+        errors.append(f"missing {loc}.sanitizer")
+    if isolation.get("sourceless") is not True:
+        errors.append(f"{loc}.sourceless must be true")
+    for key in ("tree_sha256", "runtime_sha256"):
+        if not _SHA256.match(str(isolation.get(key) or "")):
+            errors.append(f"{loc}.{key} must be a sha256")
+    if isolation.get("manifest_matches_tree") is not True:
+        errors.append(f"{loc}.manifest_matches_tree must be true (the tree changed after sanitizing)")
+    mount = isolation.get("mount") if isinstance(isolation.get("mount"), dict) else {}
+    if mount.get("count") != 1 or mount.get("target") != "/opt/icode-host" or mount.get("read_only") is not True:
+        errors.append(f"{loc}.mount must be one read-only mount at /opt/icode-host")
+    leak = isolation.get("leak_scan") if isinstance(isolation.get("leak_scan"), dict) else {}
+    if not _nonempty_str(leak.get("scanner")) or not _nonempty_str(leak.get("report_sha256")):
+        errors.append(f"missing {loc}.leak_scan")
+    elif leak.get("hit_tasks") != []:
+        errors.append(f"{loc}.leak_scan.hit_tasks must be empty")
+    return errors
+
+
 def official_provenance_errors(doc: dict) -> list[str]:
     """Required when OFFICIAL=1. Smoke artifacts stay valid without these fields."""
     if not official_enabled():
@@ -99,6 +131,7 @@ def official_provenance_errors(doc: dict) -> list[str]:
         errors.append("missing eval_protocol.pipeline.commit")
     if not isinstance(pipe.get("dirty"), bool):
         errors.append("missing eval_protocol.pipeline.dirty")
+    errors.extend(official_isolation_errors(protocol.get("isolation")))
     git = doc.get("icode_git")
     if not isinstance(git, dict) or not _nonempty_str(git.get("sha")):
         errors.append("missing icode_git")

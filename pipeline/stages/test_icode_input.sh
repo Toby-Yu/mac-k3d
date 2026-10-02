@@ -138,6 +138,31 @@ icode_assert_clean_checkout "$KIND_TMP/c-clean"
 ok "porcelain allows only the icode launcher"
 unset MAC_K3D_ICODE_GIT_ALLOW_FILE
 
+PTH_TREE="$KIND_TMP/pth-tree"
+mkdir -p "$PTH_TREE/.venv/lib/python3.13/site-packages" "$PTH_TREE/.venv/sandbox-cpython/lib/python3.13"
+icode_write_wrapper "$PTH_TREE/icode"
+grep -q 'export PYTHONPATH' "$PTH_TREE/icode" && fail "launcher must not export PYTHONPATH"
+grep -q 'export VIRTUAL_ENV' "$PTH_TREE/icode" && fail "launcher must not export VIRTUAL_ENV"
+grep -qF 'exec "$PY" "$ROOT/.venv/bin/icode" "$@"' "$PTH_TREE/icode" || fail "launcher exec line"
+icode_write_sandbox_pth "$PTH_TREE"
+PTH="$PTH_TREE/.venv/sandbox-cpython/lib/python3.13/site-packages/icode-host.pth"
+[ "$(cat "$PTH")" = "$(printf '%s\n%s' /opt/icode-host /opt/icode-host/.venv/lib/python3.13/site-packages)" ] \
+  || fail "icode-host.pth must list exactly the clone root and its venv site-packages"
+ok "launcher exports nothing; icode-host.pth lists the two iCode paths"
+for bench in deepswe lolbench swebenchpro; do
+  BENCHMARK="$bench" icode_sourceless_enabled || fail "sourceless must default on for $bench"
+done
+ICODE_SOURCELESS_STDLIB=yes-please icode_sourceless_enabled || fail "unrecognized ICODE_SOURCELESS_STDLIB must keep sourceless on"
+if OFFICIAL=0 ICODE_SOURCELESS_STDLIB=0 icode_sourceless_enabled; then
+  fail "ICODE_SOURCELESS_STDLIB=0 must turn sourceless off for a non-official run"
+fi
+if (OFFICIAL=1 ICODE_SOURCELESS_STDLIB=off icode_sourceless_enabled) 2>"$KIND_TMP/sourceless-official.err"; then
+  fail "OFFICIAL=1 must refuse ICODE_SOURCELESS_STDLIB=off"
+fi
+grep -q 'OFFICIAL=1 requires the sourceless stdlib' "$KIND_TMP/sourceless-official.err" \
+  || fail "OFFICIAL=1 sourceless refusal message"
+ok "sourceless stdlib on for every benchmark; OFFICIAL=1 refuses turning it off"
+
 ICODE_MODE=binary bash "$IN" --normalize-mode | grep -qx release || fail "binary alias"
 ICODE_MODE=git bash "$IN" --normalize-mode | grep -qx git || fail "git mode"
 if ICODE_MODE=source bash "$IN" --normalize-mode >/dev/null 2>&1; then

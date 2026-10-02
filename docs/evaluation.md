@@ -10,9 +10,58 @@ Default packing stays `CPU_LOCK_QTY=4` as the **upper** concurrency bound, with 
 
 Harbor’s agent budget is the task’s `agent.timeout_sec` (often 10800s on DeepSWE) with timeout multiplier 1. A rollout that ends near 5100s is iCode stopping itself, not Harbor cutting the trial.
 
-P8 stores `eval_protocol` on `artifact.json` (iCode mode/version/source, model params, concurrency, `cpus_each`, and the timeout note) and repeats it in `summary.md` and `report.html`.
+P8 stores `eval_protocol` on `artifact.json` (iCode mode/version/source, model params, concurrency, `cpus_each`, the timeout note, and `isolation`: what the agent could see at `/opt/icode-host`) and repeats it in `summary.md` and `report.html`.
 
 DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-empty `TASKS` list wins; otherwise one `TASK`; otherwise `N_TASKS` is the first N sorted ids. Full suite sizes are DeepSWE 113, LoLBench 20, and SWE-bench Pro 731. `N_ROLLOUTS` is how many attempts each question gets. Job default is 4.
+
+## Same protocol for every benchmark and model
+
+A score measures the iCode harness only if every run sees the same rules. So every security, anti-cheat and run control below applies identically to DeepSWE, LoLBench and SWE-bench Pro, and to every LLM. When you compare models, change only `DEEPSEEK_MODEL` / `ICODE_MODEL`; everything else stays fixed and is recorded in `eval_protocol`.
+
+**Rule for changes:** a new control is added for all suites or not at all. A per-suite exception needs a written reason in this section and a matching test. Do not switch a control off to make one suite pass.
+
+| Control | What P3/P5 does | Code |
+|---|---|---|
+| Pinned iCode | `OFFICIAL=1` requires `ICODE_MODE=git` at the pinned commit; iCode is evaluated unmodified | `icode_input.sh` (`icode_apply_official_pin`) |
+| Runtime stripped of deliverables | Removes `tomllib`, `test/`, `idlelib/idle_test`, vendored `tomli` and `backports.zoneinfo`; `zoneinfo` stays importable as `.pyc` only | `icode_sanitize.py` |
+| Sourceless stdlib | The mounted sandbox CPython keeps `.pyc` only, so no stdlib `.py` is readable at `/opt/icode-host`. On for every benchmark | `ICODE_SOURCELESS_STDLIB` (see below) |
+| No iCode Python paths in the agent's shell | The launcher exports no `PYTHONPATH` or `VIRTUAL_ENV`; iCode's own interpreter gets its paths from `icode-host.pth` | `icode_input.sh` |
+| Runtime still starts | Host probe: `icode --help` and a pydantic model build on the sanitized tree, before any rollout | `icode_probe_sandbox` |
+| One read-only mount | The only agent mount is the iCode tree at `/opt/icode-host`, `read_only: true`. P5 refuses a tree that is, contains or sits inside a benchmark or tasks folder | `agent_mounts.py` |
+| Leak scan | Gold lines of every selected task are searched in the mounted tree (`anticheat_leakscan.json`). `OFFICIAL=1` stops on a hit; smoke runs warn | `anticheat_leakscan.py` |
+| Secrets | Only `DEEPSEEK_API_KEY` reaches the agent. Clone tokens are unset before Harbor and never written to `.harbor-env` | `p5_harness.sh` |
+| Model protocol | Same `ICODE_PROVIDER`, `ICODE_REASONING_EFFORT` and `ICODE_API_BASE` defaults for every suite | `p5_harness.sh` |
+
+`ICODE_SOURCELESS_STDLIB` defaults to on. Setting it to `0`/`false`/`no`/`off` is only for a non-official debugging run: P5 prints a warning that the run is not comparable, and `OFFICIAL=1` refuses it. Any other value keeps sourceless on.
+
+### Recorded proof: `eval_protocol.isolation`
+
+Every run records the controls above in `eval_protocol.isolation` (in `artifact.json`, and as the Isolation, Agent mount and Leak scan lines under Provenance in `summary.md` and `report.html`). P5 hashes the tree itself when it records them, so the values describe the runtime the agent actually got rather than what the sanitizer claimed.
+
+| Field | Meaning |
+|---|---|
+| `mode` | `git` (sanitized sandbox CPython) or `release` (binary only, nothing to sanitize) |
+| `sanitizer` | Sanitizer version, for example `mac-k3d-icode-sanitize-v2` |
+| `sourceless` | `true` when the mounted stdlib has no `.py` files |
+| `removed` | How many deliverable paths the sanitizer removed |
+| `runtime_sha256` | Fingerprint of the mounted runtime that is the same for every clone of one iCode commit, whatever the workspace path or file times. **Compare this one across runs** |
+| `tree_sha256` | Exact bytes of `.venv`. It differs per workspace, because uv writes the clone path into `.venv/bin`. Use it only within a run |
+| `manifest_matches_tree` | `true` when both fingerprints still equal what the sanitizer wrote, so nothing changed the tree after sanitizing |
+| `mount` | Count, target and `read_only` of the agent mounts |
+| `leak_scan` | Scanner version, `hit_tasks`, task counts per status, and the sha256 of `anticheat_leakscan.json` |
+
+`runtime_sha256` reads the clone path as `/opt/icode-host` and leaves out what the container never uses: `pyvenv.cfg`, `__pycache__/`, links that leave the tree, and install bookkeeping (`*.dist-info/RECORD`, `uv_cache.json`). Stdlib bytecode is compiled with hash-based invalidation and container paths, so it is byte-identical on every clone. Two independent PR 2 clones (the DeepSWE and LoLBench Jenkins workspaces) gave the same `runtime_sha256`.
+
+**Two runs are comparable** only when they have the same iCode commit, `sanitizer`, `runtime_sha256` and model protocol, with `sourceless: true`, `manifest_matches_tree: true`, one read-only mount and no leak hits. With `OFFICIAL=1`, `check_report.py` rejects an artifact whose own record breaks a per-run rule (git mode, sourceless, both fingerprints present, manifest still matching, one read-only mount, leak scan present with no hits). Matching `runtime_sha256` between runs is checked by comparing their artifacts.
+
+A tree sanitized by an older sanitizer version has already lost its stdlib sources, so it cannot be re-sanitized in place. P3/P5 then copy the sandbox CPython again from the host interpreter and sanitize it fresh (the console prints `re-embedding … for the current sanitizer`). Paths already removed outside the sandbox stay listed in the manifest.
+
+**Allowed differences** come from the task, not from the harness: the task image, the agent timeout (`agent.timeout_sec`), the verifier and its declared network, the task path and working folder, LoLBench's `LOLBENCH_SUITE=union` verifier variable and its reward overlay, and the per-suite memory fallback for packing ([optimization.md](optimization.md)).
+
+**Limits to keep in mind:**
+- SWE-bench Pro tasks carry no `solution/solution.patch`, so the leak scan reports them as `no_gold` and cannot prove them clean. Every other control still applies.
+- Release mode (`ICODE_MODE=release`) mounts only the binary, so there is no sandbox CPython to strip. Official runs use git mode.
+- Still open and tracked in the integration report: transcript-based cheat detection (P0.5), the isolation canary (P0.6) and honoring each task's declared CPUs (P0.9).
 
 ## Where a run is stored
 

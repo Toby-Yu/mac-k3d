@@ -351,20 +351,117 @@ if [ ! -x "$PY" ]; then
   echo "icode git sandbox python missing under $ROOT/.venv/sandbox-cpython" >&2
   exit 127
 fi
-SITE="$ROOT/.venv/lib/python3.13/site-packages"
-if [ ! -d "$SITE" ]; then
-  SITE="$(ls -d "$ROOT/.venv/lib"/python3.*/site-packages 2>/dev/null | head -1)"
-fi
-# Clone root first: uv editable installs map to the host path, which Docker does not have.
-export VIRTUAL_ENV="$ROOT/.venv"
-if [ -n "$SITE" ]; then
-  export PYTHONPATH="${ROOT}:${SITE}${PYTHONPATH:+:$PYTHONPATH}"
-else
-  export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
-fi
+# icode-host.pth in the sandbox interpreter's site-packages gives iCode its clone
+# root and venv site-packages. Nothing is exported, so the agent's python, pytest
+# and pip never load iCode's packages.
 exec "$PY" "$ROOT/.venv/bin/icode" "$@"
 WRAP
   chmod +x "$dest"
+}
+
+ICODE_MOUNT_TARGET="/opt/icode-host"
+
+# Paths inside the mounted tree, as the sandbox interpreter sees them in a container.
+icode_write_sandbox_pth() {
+  local dest="${1:-}" stdlib site
+  [ -n "$dest" ] && [ -d "$dest/.venv/sandbox-cpython/lib" ] || return 0
+  stdlib="$dest/.venv/sandbox-cpython/lib/python3.13"
+  if [ ! -d "$stdlib" ]; then
+    stdlib="$(ls -d "$dest/.venv/sandbox-cpython/lib"/python3.* 2>/dev/null | head -1 || true)"
+  fi
+  [ -n "$stdlib" ] && [ -d "$stdlib" ] || return 0
+  site="$dest/.venv/lib/python3.13/site-packages"
+  if [ ! -d "$site" ]; then
+    site="$(ls -d "$dest/.venv/lib"/python3.*/site-packages 2>/dev/null | head -1 || true)"
+  fi
+  mkdir -p "$stdlib/site-packages"
+  {
+    printf '%s\n' "$ICODE_MOUNT_TARGET"
+    if [ -n "$site" ]; then
+      printf '%s/.venv/lib/%s/site-packages\n' "$ICODE_MOUNT_TARGET" "$(basename "$(dirname "$site")")"
+    fi
+  } >"$stdlib/site-packages/icode-host.pth"
+}
+
+# Sourceless stdlib is on for every benchmark, so all suites and models see the same runtime.
+# ICODE_SOURCELESS_STDLIB=0 turns it off for a non-official debug run; OFFICIAL=1 refuses that.
+icode_sourceless_enabled() {
+  local raw
+  raw="$(printf '%s' "${ICODE_SOURCELESS_STDLIB:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    0|false|no|off)
+      if icode_official_enabled; then
+        die "OFFICIAL=1 requires the sourceless stdlib on every benchmark; unset ICODE_SOURCELESS_STDLIB"
+      fi
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# Strip task deliverables from the runtime the agent can read at /opt/icode-host.
+# Writes .venv/SANITIZED_MANIFEST.json; a second run changes nothing.
+# A manifest from another sanitizer version means the stdlib sources are already
+# gone, so the sandbox CPython is copied again from the host and sanitized fresh.
+icode_sanitize_host_tree() {
+  local dest="${1:-}" lib rc=0
+  local -a args
+  [ -n "$dest" ] && [ -d "$dest/.venv/sandbox-cpython" ] || return 0
+  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  args=(--tree "$dest")
+  if icode_sourceless_enabled; then
+    args+=(--sourceless)
+  else
+    echo "WARNING: ICODE_SOURCELESS_STDLIB=${ICODE_SOURCELESS_STDLIB} leaves stdlib source readable at /opt/icode-host; this run is not comparable with default runs" >&2
+  fi
+  python3 "$lib/icode_sanitize.py" "${args[@]}" >&2 || rc=$?
+  if [ "$rc" = 3 ]; then
+    echo "icode sanitize: re-embedding $dest/.venv/sandbox-cpython for the current sanitizer" >&2
+    icode_force_rm "$dest/.venv/sandbox-cpython"
+    icode_embed_sandbox_cpython "$dest"
+    [ -d "$dest/.venv/sandbox-cpython" ] \
+      || die "cannot re-embed the sandbox CPython under $dest (host uv python missing?); rerun P3"
+    icode_write_sandbox_pth "$dest"
+    rc=0
+    python3 "$lib/icode_sanitize.py" "${args[@]}" --refresh >&2 || rc=$?
+  fi
+  [ "$rc" = 0 ] || die "iCode sanitizer failed for $dest"
+}
+
+# Start the sanitized sandbox interpreter on the host before any rollout.
+# The .pth paths only exist in containers, so this one process gets host paths.
+icode_probe_sandbox() {
+  local dest="${1:-}" py="" name site tmp
+  [ -n "$dest" ] && [ -x "$dest/.venv/bin/icode" ] || return 0
+  for name in python3.13 python3 python; do
+    if [ -x "$dest/.venv/sandbox-cpython/bin/$name" ]; then
+      py="$dest/.venv/sandbox-cpython/bin/$name"
+      break
+    fi
+  done
+  [ -n "$py" ] || die "sandbox python missing under $dest/.venv/sandbox-cpython (P3 embed failed)"
+  site="$(ls -d "$dest/.venv/lib"/python3.*/site-packages 2>/dev/null | head -1 || true)"
+  tmp="$(mktemp -d)"
+  if ! (cd "$tmp" && env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${dest}${site:+:$site}" \
+    "$py" "$dest/.venv/bin/icode" --help) >"$tmp/probe.log" 2>&1; then
+    tail -n 20 "$tmp/probe.log" >&2 || true
+    rm -rf "$tmp"
+    die "sanitized iCode runtime does not start: $py $dest/.venv/bin/icode --help failed"
+  fi
+  # --help builds no model; pydantic imports zoneinfo only when it builds its first schema.
+  if ! (cd "$tmp" && env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${dest}${site:+:$site}" \
+    "$py" -c 'import importlib.util
+if importlib.util.find_spec("pydantic"):
+    import pydantic
+    class Probe(pydantic.BaseModel):
+        value: int = 0
+    Probe()') >"$tmp/probe.log" 2>&1; then
+    tail -n 20 "$tmp/probe.log" >&2 || true
+    rm -rf "$tmp"
+    die "sanitized iCode runtime cannot build a pydantic model (stdlib module missing?)"
+  fi
+  rm -rf "$tmp"
+  echo "OK sanitized iCode runtime starts ($py)" >&2
 }
 
 # Host uv venv python is a symlink to ~/.local/share/uv/python/... which Docker
@@ -608,6 +705,8 @@ get_bin_icode() {
   fi
   [ -x "$dest/.venv/bin/icode" ] || die "uv sync did not produce $dest/.venv/bin/icode"
   icode_embed_sandbox_cpython "$dest"
+  icode_write_sandbox_pth "$dest"
+  icode_sanitize_host_tree "$dest"
   icode_write_wrapper "$dest/icode"
   icode_assert_clean_checkout "$dest"
   icode_write_host_root "$dest"

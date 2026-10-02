@@ -320,6 +320,7 @@ def build_eval_protocol(
         "worker",
         "requester",
         "pipeline",
+        "isolation",
     ):
         if key in inputs:
             protocol[key] = inputs[key]

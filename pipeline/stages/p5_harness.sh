@@ -97,10 +97,15 @@ fi
 if [ -x "$HOST_ICODE/.venv/bin/icode" ]; then
   echo "P5 harbor: git wrapper for $HOST_ICODE"
   icode_embed_sandbox_cpython "$HOST_ICODE"
+  icode_write_sandbox_pth "$HOST_ICODE"
+  icode_sanitize_host_tree "$HOST_ICODE"
   icode_write_wrapper "$HOST_ICODE/icode"
+  icode_probe_sandbox "$HOST_ICODE"
 else
   echo "P5 harbor: keeping release binary at $HOST_ICODE/$(basename "${ICODE_BIN:-icode}") (no git wrapper)"
 fi
+# Clone tokens are for P3 on the host. Harbor hands its own environment to docker compose.
+unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT MAC_K3D_GIT_TOKEN
 
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
 export ICODE_MODEL="${ICODE_MODEL:-$DEEPSEEK_MODEL}"
@@ -150,15 +155,29 @@ case "${BENCHMARK:-deepswe}" in
     PROV_APPLIED=0
     ;;
 esac
+
+MOUNTS_JSON="$(python3 "$PIPELINE_LIB/agent_mounts.py" build --icode-root "$HOST_ICODE")"
+python3 "$PIPELINE_LIB/agent_mounts.py" check \
+  --mounts "$MOUNTS_JSON" \
+  --icode-root "$HOST_ICODE" \
+  --forbid "$DEEPSWE_DIR" \
+  --forbid "$LOLBENCH_DIR" \
+  --forbid "$SWEBENCHPRO_DIR" \
+  --forbid "$TASKS_DIR" \
+  || die "P5 refuses to mount $HOST_ICODE for the agent (see errors above)"
+
+PROTOCOL_INPUTS="$WORKDIR/eval_protocol_inputs.json"
 python3 "$PIPELINE_LIB/provenance.py" write-inputs \
-  --out "$WORKDIR/eval_protocol_inputs.json" \
+  --out "$PROTOCOL_INPUTS" \
   --repo-dir "$PROV_REPO" \
   --tasks-dir "$TASKS_DIR" \
   --selected "$WORKDIR/selected_tasks.txt" \
   --overlay "$PIPELINE_LIB/lolbench_fix_rewards.py" \
   --applied "$PROV_APPLIED" \
   --workdir "$WORKDIR" \
-  --pipeline-root "$MAC_K3D_ROOT"
+  --pipeline-root "$MAC_K3D_ROOT" \
+  --icode-root "$HOST_ICODE" \
+  --mounts "$MOUNTS_JSON"
 python3 "$PIPELINE_LIB/eval_slots.py" report \
   --tasks-file "$WORKDIR/selected_tasks.txt" \
   --n-rollouts "$N_ROLLOUTS" \
@@ -183,18 +202,31 @@ umask 077
   printf 'ICODE_REASONING_EFFORT=%s\n' "${ICODE_REASONING_EFFORT}"
   printf 'PYTHONDONTWRITEBYTECODE=%s\n' "1"
   printf 'MAC_K3D_BENCHMARK=%s\n' "${BENCHMARK:-deepswe}"
-  if [ -n "${GITCODE_TOKEN:-}" ]; then
-    printf 'GITCODE_TOKEN=%s\n' "${GITCODE_TOKEN}"
-  fi
 } >"$HARBOR_ENV"
 chmod 600 "$HARBOR_ENV"
 
-MOUNTS_JSON="$(
-  python3 - "$HOST_ICODE" <<'PY'
-import json, sys
-print(json.dumps([{"type": "bind", "source": sys.argv[1], "target": "/opt/icode-host"}]))
-PY
-)"
+LEAKSCAN_OUT="$WORKDIR/anticheat_leakscan.json"
+set +e
+python3 "$PIPELINE_LIB/anticheat_leakscan.py" \
+  --tree "$HOST_ICODE" \
+  --tasks-dir "$TASKS_DIR" \
+  --selected "$WORKDIR/selected_tasks.txt" \
+  --out "$LEAKSCAN_OUT"
+leak_rc=$?
+set -e
+if [ "$leak_rc" = 0 ] || [ "$leak_rc" = 2 ]; then
+  python3 "$PIPELINE_LIB/provenance.py" record-leakscan --inputs "$PROTOCOL_INPUTS" --report "$LEAKSCAN_OUT"
+fi
+case "$leak_rc" in
+  0) ;;
+  2)
+    if icode_official_enabled; then
+      die "leak scan found task gold in the mounted iCode tree (see $LEAKSCAN_OUT); OFFICIAL=1 stops here"
+    fi
+    echo "WARNING: leak scan found task gold in the mounted iCode tree (see $LEAKSCAN_OUT). Smoke run continues; OFFICIAL=1 would stop."
+    ;;
+  *) die "leak scanner failed (exit $leak_rc)" ;;
+esac
 
 declare -A TASK_READY=()
 ASSIGNED=""
@@ -309,38 +341,34 @@ next_work_unit() {
     --inflight "$INFLIGHT"
 }
 
-start_unit() {
-  local tid="$1" attempt="$2"
-  ensure_task_ready "$tid"
-  local jobs run_dir task_path job_name att_tag log
-  jobs="$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}/${tid}"
+# Sets cmd, unit_jobs, unit_run_dir, unit_task_path and unit_log for one work unit.
+declare -a cmd=()
+unit_jobs=""
+unit_run_dir=""
+unit_task_path=""
+unit_log=""
+build_unit_cmd() {
+  local tid="$1" attempt="$2" job_name att_tag
+  unit_jobs="$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}/${tid}"
   att_tag="$(printf '%02d' "$attempt")"
   job_name="${tid}_icode_${BUILD_NUMBER:-local}_a${att_tag}"
-  run_dir="$WORKDIR"
-  task_path="$TASKS_DIR/$tid"
+  unit_run_dir="$WORKDIR"
+  unit_task_path="$TASKS_DIR/$tid"
   if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
     job_name="${tid}_icode_union_${BUILD_NUMBER:-local}_a${att_tag}"
-    run_dir="$LOLBENCH_DIR"
-    task_path="harbor_tasks/${tid}"
+    unit_run_dir="$LOLBENCH_DIR"
+    unit_task_path="harbor_tasks/${tid}"
   fi
-  log="$jobs/harbor-a${att_tag}.log"
-  if [ -z "${QUESTION_START[$tid]:-}" ]; then
-    QUESTION_START[$tid]="$SECONDS"
-    printf '%s\n' "$tid" >"$HARNESS_DIR/active_question.txt"
-    echo "P5 harbor: -p ${task_path} -a icode_harbor_agent:ICodeAgent -m ${DEEPSEEK_MODEL}"
-    echo "P5 harbor: --jobs-dir $jobs (attempts 1-${N_ROLLOUTS})"
-  fi
-  echo "P5 harbor: task=$tid attempt=$attempt slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
-  local -a cmd
+  unit_log="$unit_jobs/harbor-a${att_tag}.log"
   cmd=(harbor run)
-  cmd+=(-p "$task_path")
+  cmd+=(-p "$unit_task_path")
   cmd+=(-a "icode_harbor_agent:ICodeAgent")
   cmd+=(-m "${DEEPSEEK_MODEL}")
   cmd+=(--allow-agent-host api.deepseek.com)
   cmd+=(--allow-agent-host api.deepseek.ai)
   cmd+=(--agent-setup-timeout-multiplier 10)
   cmd+=(--job-name "$job_name")
-  cmd+=(--jobs-dir "$jobs")
+  cmd+=(--jobs-dir "$unit_jobs")
   cmd+=(--no-delete)
   cmd+=(-n 1)
   cmd+=(-k 1)
@@ -363,9 +391,20 @@ start_unit() {
   cmd+=(--ae "DEEPSEEK_MODEL=${DEEPSEEK_MODEL}")
   cmd+=(--ae "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")
   cmd+=(--ae "MAC_K3D_BENCHMARK=${BENCHMARK:-deepswe}")
-  if [ -n "${GITCODE_TOKEN:-}" ]; then
-    cmd+=(--ae "GITCODE_TOKEN=${GITCODE_TOKEN}")
+}
+
+start_unit() {
+  local tid="$1" attempt="$2"
+  ensure_task_ready "$tid"
+  build_unit_cmd "$tid" "$attempt"
+  local jobs="$unit_jobs" run_dir="$unit_run_dir" log="$unit_log"
+  if [ -z "${QUESTION_START[$tid]:-}" ]; then
+    QUESTION_START[$tid]="$SECONDS"
+    printf '%s\n' "$tid" >"$HARNESS_DIR/active_question.txt"
+    echo "P5 harbor: -p ${unit_task_path} -a icode_harbor_agent:ICodeAgent -m ${DEEPSEEK_MODEL}"
+    echo "P5 harbor: --jobs-dir $jobs (attempts 1-${N_ROLLOUTS})"
   fi
+  echo "P5 harbor: task=$tid attempt=$attempt slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
   (
     cd "$run_dir"
     export PYTHONPATH="$PIPELINE_LIB${PYTHONPATH:+:$PYTHONPATH}"
@@ -509,6 +548,21 @@ reap_finished() {
   done
   return "$waited"
 }
+
+# MAC_K3D_P5_DRY_RUN=1: print the first unit's harbor command with secret values masked; run nothing.
+if [ "${MAC_K3D_P5_DRY_RUN:-0}" = 1 ]; then
+  live_slots || die "eval_slots.py failed"
+  build_unit_cmd "${TASK_IDS[0]}" 1
+  masked=()
+  for arg in "${cmd[@]}"; do
+    case "$arg" in
+      *_API_KEY=* | *_TOKEN=* | *_PAT=*) arg="${arg%%=*}=***" ;;
+    esac
+    masked+=("$arg")
+  done
+  echo "P5 harbor dry-run (cwd $unit_run_dir): ${masked[*]}"
+  exit 0
+fi
 
 echo "P5 harbor: one question's rollouts together; next question after they exit; heartbeats every 60s"
 write_progress
