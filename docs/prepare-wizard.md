@@ -186,9 +186,9 @@ Detect host cores via `sysctl -n hw.logicalcpu` (fallback `hw.ncpu`).
 
 After Jenkins is up (`mac-k3d start` / `config`), prepare records intent and those commands:
 
-1. Ensure **Lockable Resources** (+ Pipeline / Git) plugins via Helm `additionalPlugins`.
-2. Create / ensure a resource **type/label** `CPU_CORES` on the controller (workers create capacity; plugin is on the controller).
-3. Create Pipeline job **`lolbench_one_task`** if missing (inline Jenkinsfile; see [lolbench-jenkins.md](lolbench-jenkins.md)).
+1. Ensure extra Jenkins plugins via Helm `additionalPlugins` on **controller `mac-k3d start`** (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`). Do not add them in the UI.
+2. The `CPU_CORES` label exists on the controller plugin; workers create capacity (`<agent>-core-1..N`) when they run `config`.
+3. Create/update the ten eval jobs plus `eval_aggregate` (inline Jenkinsfile; see [lolbench-jenkins.md](lolbench-jenkins.md)).
 4. **CI secrets + job defaults** (see [secrets.md](secrets.md)):
    - Prepare prompts for `jenkins_job.default_eval_mode` / `default_task` / `default_icode_release` / `default_icode_git_url` / `default_icode_git_ref` / `default_icode_args` (YAML).
    - Prepare optionally collects API keys / PATs into `~/.config/mac-k3d/credentials.pending.yaml` (mode 0600) — **not** into `config.yaml`.

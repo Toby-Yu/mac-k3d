@@ -26,7 +26,7 @@ Harbor has **no** contamination gate: `harbor job summarize` is a removed shim a
 
 PF.1–PF.6 are implemented and covered by fixtures. **PF.7 is the gate**, and it is the one thing on this branch that cannot be proven without machine time, so the workflow stays closed until it passes.
 
-PF.7 needs, in order: (1) this worker's agent running — `systemctl --user is-active jenkins-agent` currently reports `inactive`; (2) a **second** worker registered with `mac-k3d setup -c worker.yaml` (nothing changes on the controller); (3) a controller `config` refresh so the ten new job definitions and the `copyartifact` plugin land. Without `copyartifact`, `eval_aggregate`'s `copyArtifacts` step fails at runtime, which is why it was added to `ADDITIONAL_PLUGINS`.
+PF.7 needs, in order: (1) both workers online (`mac-k3d setup -c worker.yaml` on each); (2) a **controller** `mac-k3d start` with this binary so Helm installs `copyartifact` and `pipeline-utility-steps` and refreshes the ten jobs. `config` rewrites jobs only; it does not install plugins. Without `copyartifact`, `eval_aggregate`'s `copyArtifacts` step fails at runtime.
 
 ## Weekend test queue
 

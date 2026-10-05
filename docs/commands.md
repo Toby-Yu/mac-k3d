@@ -200,7 +200,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 2. Poll `docker info` until ready or timeout (`docker.startup_timeout_secs`).
 3. If cluster missing: `k3d cluster create` with port mappings from config.
 4. If cluster exists but stopped: `k3d cluster start`.
-5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins chart, then create Pipeline job `lolbench_one_task` if missing (unless `--skip-job`).
+5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins with `additionalPlugins` (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`), then create/update the ten eval jobs plus `eval_aggregate` unless `--skip-job`.
 6. Write state file under `~/.local/state/mac-k3d/`.
 
 `--jenkins` overrides `jenkins.enabled` for this invocation only. If omitted, the config file value is used.
@@ -208,7 +208,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 ### Idempotency
 
 - Second `start` on a running cluster is a no-op aside from Helm upgrade when Jenkins is enabled.
-- Job create/update refreshes `lolbench_one_task` Pipeline definition on each `start`/`config`.
+- Job create/update refreshes the ten eval jobs plus `eval_aggregate` on each `start`/`config`. Plugin list changes require **controller** `start` (Helm), not `config`.
 
 ---
 

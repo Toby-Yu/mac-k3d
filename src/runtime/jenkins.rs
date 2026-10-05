@@ -13,10 +13,11 @@ const HELM_CHART: &str = "jenkins/jenkins";
 /// Do **not** list plugins already in chart defaults (e.g. `git`, `workflow-aggregator`) —
 /// Helm fails with `[PLUGIN CONFLICT]`.
 const ADDITIONAL_PLUGINS: &[&str] = &[
-    "lockable-resources", // CPU_CORES / capacity locks for LoLBench workers
-    "plain-credentials",  // Secret text credentials for LLM / forge PATs
-    "file-parameters",    // stashedFile: Pipeline-safe upload onto agent workspace
-    "copyartifact",       // eval_aggregate pulls each shard's trials by RUN_GROUP
+    "lockable-resources",     // CPU_CORES / capacity locks for LoLBench workers
+    "plain-credentials",      // Secret text credentials for LLM / forge PATs
+    "file-parameters",        // stashedFile: Pipeline-safe upload onto agent workspace
+    "copyartifact",           // eval_aggregate pulls each shard's trials by RUN_GROUP
+    "pipeline-utility-steps", // nodesWithLabel so SHARDS=0 can count online workers
 ];
 
 pub async fn install_or_upgrade(helm: &Path, config: &MacK3dConfig) -> Result<()> {
@@ -128,6 +129,8 @@ mod tests {
         assert!(text.contains("file-parameters"));
         // Without this, eval_aggregate's copyArtifacts step fails at runtime.
         assert!(text.contains("copyartifact"));
+        // Without this, SHARDS=0 cannot count nodes and falls back to one shard.
+        assert!(text.contains("pipeline-utility-steps"));
         assert!(!text.contains("- git"));
         assert!(!text.contains("workflow-aggregator"));
         assert!(text.contains("serviceType: LoadBalancer"));

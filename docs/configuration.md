@@ -128,11 +128,14 @@ controller:
   serviceType: LoadBalancer
   installLatestPlugins: true
   additionalPlugins:
-    - lockable-resources   # per-worker <agent>-core-N capacity locks
-    - copyartifact         # eval_aggregate pulls each shard's trials by RUN_GROUP
+    - lockable-resources      # per-worker <agent>-core-N capacity locks
+    - plain-credentials       # Secret text for LLM keys and forge PATs
+    - file-parameters         # ICODE_RELEASE_FILE upload
+    - copyartifact            # eval_aggregate pulls each shard's trials by RUN_GROUP
+    - pipeline-utility-steps  # nodesWithLabel so SHARDS=0 can count online workers
 ```
 
-Chart defaults still install kubernetes, workflow-aggregator, git, and configuration-as-code.
+Chart defaults still install kubernetes, workflow-aggregator, git, and configuration-as-code. `mac-k3d config` does not change this list; re-run **controller** `mac-k3d start` after a binary that added a plugin.
 
 ### `docker`
 

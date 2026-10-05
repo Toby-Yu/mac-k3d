@@ -123,7 +123,7 @@ State is written after successful `start` and updated by `config`. `clean --purg
 When `--jenkins in-cluster` (or `jenkins.enabled: true` in config):
 
 1. Ensure Helm repo `jenkins` is added.
-2. Install chart `jenkins/jenkins` into namespace `jenkins`, including **lockable-resources** via `controller.additionalPlugins`.
+2. Install chart `jenkins/jenkins` into namespace `jenkins`. Extra plugins come from `controller.additionalPlugins` on **controller `mac-k3d start`** (Helm `upgrade --install`, `overwritePlugins: true`): `lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`. Chart defaults already include Pipeline, Git, and Configuration as Code. `config` rewrites jobs only; it does not install plugins. Do not add plugins in the Jenkins UI.
 3. Map `jenkins.host_port` → Service port 8080 via k3d `--port`.
 
 Jenkins runs inside the cluster; access is via `http://localhost:<host_port>`.

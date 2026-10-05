@@ -51,14 +51,15 @@ Console signals, in order:
 
 The run that has to pass before anyone else uses this.
 
-1. Both workers registered (`mac-k3d setup -c worker.yaml` on each) and online in **Manage Jenkins -> Nodes**.
-2. Open `deepswe_full_suite_task` -> **Build with Parameters**. Set `N_TASKS=10` and `SHARDS=4`.
-3. While it runs, check:
+1. On the **controller** only: put this binary on the machine and run `mac-k3d start -c ~/.config/mac-k3d/config.yaml`. That Helm-upgrades Jenkins (`copyartifact`, `pipeline-utility-steps`) and rewrites the ten jobs. Do not install plugins in the UI. Workers stay on `config` only — never `start -c worker.yaml`.
+2. Both workers registered (`mac-k3d setup -c worker.yaml` on each) and online in **Manage Jenkins -> Nodes**.
+3. Open `deepswe_full_suite_task` -> **Build with Parameters**. Set `N_TASKS=10` and `SHARDS=4`.
+4. While it runs, check:
    - **Lockable Resources** shows held tokens named `<agent>-core-N` for *both* node names, and no build holding a token whose prefix is not its own node
    - both workers show a running `deepswe_some_task` build at the same time
    - each shard's console prints a different `TASK_OFFSET`, and the four `selected_tasks.txt` files are disjoint
-4. When `eval_aggregate` finishes, open its `aggregate/artifact.json` and confirm `shards: 4`, `n_tasks: 10`, and that the rollout records total `10 x N_ROLLOUTS`.
-5. Record the build numbers and the outcome as a new row in [../integration-log.md](../integration-log.md).
+5. When `eval_aggregate` finishes, open its `aggregate/artifact.json` and confirm `shards: 4`, `n_tasks: 10`, and that the rollout records total `10 x N_ROLLOUTS`.
+6. Record the build numbers and the outcome as a new row in [../integration-log.md](../integration-log.md).
 
 ## Status
 

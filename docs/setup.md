@@ -135,11 +135,17 @@ Open `http://localhost:17070` and complete the Jenkins setup wizard.
 
 ### 4. Jenkins plugins
 
-`mac-k3d start` installs **Lockable Resources** via Helm (`controller.additionalPlugins`) in addition to the chart defaults (Kubernetes, Pipeline, Git, Configuration as Code).
+`mac-k3d start` on the **controller** is the only plugin-install path. Helm `upgrade --install` with `overwritePlugins: true` adds these on top of the chart defaults (Kubernetes, Pipeline, Git, Configuration as Code):
 
-After first login you still create the actual `CPU_CORES` lock entries under **Manage Jenkins → Lockable Resources** (plugin is present; resources are operator-defined).
+- `lockable-resources` — per-worker `<agent>-core-N` capacity locks
+- `plain-credentials` — Secret text for LLM keys and forge PATs
+- `file-parameters` — `ICODE_RELEASE_FILE` upload onto the agent workspace
+- `copyartifact` — `eval_aggregate` copies each shard's `eval-runs/`
+- `pipeline-utility-steps` — `nodesWithLabel` so `SHARDS=0` can count online workers
 
-Optional extras (UI): Credentials Binding, etc.
+`mac-k3d config` rewrites job XML and credentials. It does not Helm-upgrade plugins. Workers never install plugins.
+
+Per-core lock entries are created when a worker runs `mac-k3d config -c worker.yaml` (`<agent>-core-1..N`). Do not create them by hand under Manage Jenkins, and do not install extra plugins from the Jenkins UI.
 
 ### 5. Verify
 
