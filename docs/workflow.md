@@ -10,8 +10,8 @@ The product is a CI path for AI harness evaluation: many short jobs, each in its
 
 | Piece | What it does now | Why it matches the goal |
 |-------|------------------|-------------------------|
-| **Jenkins** | One task per build on `deepswe_one_task`, `lolbench_one_task`, or `swebenchpro_one_task`. A `CPU_CORES` lock caps the worker. The workspace dies with the build. | Parallelism across agents, and a short lifetime: nothing from the last trial is the next trial's machine. |
-| **Harbor** | P5 is `harbor run` + `icode_harbor_agent:ICodeAgent` for all three benchmarks. `--allow-agent-host` is only `api.deepseek.com` and `api.deepseek.ai`. | One runner. The allowlist is the isolation that ships today: the agent can call the model and cannot browse the answer online. |
+| **Jenkins** | Three job shapes per benchmark (`_one_task`, `_some_task`, `_full_suite_task`) plus a shared `eval_aggregate`. A build locks cores on **its own node** (`lock(label: env.NODE_NAME)`) and only for the rollouts. The workspace dies with the build. | Parallelism across agents, and a short lifetime: nothing from the last trial is the next trial's machine. |
+| **Harbor** | P5 is one `harbor run` + `icode_harbor_agent:ICodeAgent` for all three benchmarks. Harbor expands rollouts, applies each task's declared limits, retries and grades. `--allow-agent-host` is only `api.deepseek.com` and `api.deepseek.ai`. | One runner, used as a runner. mac-k3d no longer schedules containers. The allowlist is the isolation that ships today: the agent can call the model and cannot browse the answer online. |
 | **k3d** | The controller uses k3d to host Jenkins. Eval sandboxes still run as Harbor containers on the worker's Docker. | A later job will `k3d cluster create` per build, apply a default-deny NetworkPolicy (DeepSeek API only), pull images through a Harbor registry proxy cache, run Harbor, then delete the cluster. That cluster, the NetworkPolicy, and the registry cache are **not** implemented yet. |
 
 Pier is not used. It left a long-lived Docker Compose sandbox on the host, with no Kubernetes NetworkPolicy and no registry cache, and it was a second runner beside Harbor.
@@ -28,13 +28,16 @@ New Mac/Linux
   → download mac-k3d Release asset
   → setup: controller (k3d+Jenkins :17070) or worker (agent.jar)
   → mac-k3d eval (harness=icode, llm=deepseek, benchmark=deepswe|lolbench|swebenchpro, N)
-  → Jenkins job deepswe_one_task, lolbench_one_task, or swebenchpro_one_task (all Harbor)
+  → Jenkins job <benchmark>_one_task | _some_task | _full_suite_task (all Harbor)
+       clone mac-k3d at MAC_K3D_GIT_REF; run pipeline/ from that clone
        install harbor; bind-mount the worker iCode drop at /opt/icode-host
-       harbor run + icode_harbor_agent:ICodeAgent (DeepSeek allowlist)
+       one harbor run + icode_harbor_agent:ICodeAgent (DeepSeek allowlist)
        grade Harbor reward.json
   → eval-runs/output/{benchmark}/jenkins-<build>-<UTC>/{artifact.json,summary.md,report.html}
   → output/{benchmark}/jenkins-<build>-<UTC>.tar.gz in the git checkout
 ```
+
+A full suite adds one hop: `_full_suite_task` slices the suite into `SHARDS`, runs that many `_some_task` builds in parallel across workers, then `eval_aggregate` merges them into one report.
 
 ```mermaid
 flowchart TD
@@ -45,9 +48,12 @@ flowchart TD
   ctrl["Controller: Docker k3d Jenkins :17070 credentials"]
   work["Worker: Docker Java agent Harbor"]
   evalCli["mac-k3d eval: icode / deepseek / deepswe or lolbench or swebenchpro / TASK"]
-  job["Jenkins deepswe_one_task or lolbench_one_task or swebenchpro_one_task"]
+  shape{"how many questions?"}
+  job["<benchmark>_one_task or _some_task (runs on a worker)"]
+  disp["<benchmark>_full_suite_task (agent none, slices into SHARDS)"]
   harborA["Harbor + iCode allowlist"]
   grade["Verifier reward.json"]
+  agg["eval_aggregate: merge shards by RUN_GROUP"]
   json["eval JSON, summary, HTML, checkout backup"]
 
   newHost --> bin --> setup --> role
@@ -55,9 +61,14 @@ flowchart TD
   role --> work
   ctrl --> evalCli
   work --> job
-  evalCli --> job
+  evalCli --> shape
+  shape -->|one or a few| job
+  shape -->|whole suite| disp
+  disp -->|parallel, one TASK_OFFSET each| job
   job --> harborA
   harborA --> grade
+  grade --> agg
+  agg --> json
   grade --> json
 ```
 
@@ -74,7 +85,7 @@ flowchart TD
 | `chmod +x` / quarantine strip | Make the asset executable | Unsigned downloads are blocked on macOS |
 | `mac-k3d setup` | Wizard: role, Install Docker / k3d / Java | One entry point for controller or worker |
 | Controller: `start` + `config` | k3d cluster + Jenkins UI `:17070` + credentials | Job queue and `deepseek-api-key` live here |
-| Worker: token + `config` | Inbound agent + `CPU_CORES` locks | Workloads run on the worker’s Docker, not inside the controller’s k3d nodes |
+| Worker: token + `config` | Inbound agent + `<agent>-core-N` locks, one executor per core | Workloads run on the worker’s Docker, not inside the controller’s k3d nodes. Adding the Nth worker needs no pipeline edit |
 
 Honest leftovers: Linux **logout** after docker group; macOS first **Docker Desktop** window; worker **API token**; DeepSeek key on the **controller** credentials store.
 
@@ -93,18 +104,48 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 | Install Harbor | `uv tool install harbor` | One runner for all three benchmarks |
 | Clone the suite | DeepSWE, LoLBench-Preview, or SWE-bench_Pro-os | Not vendored in this repo. SWE-bench Pro P2 writes a Harbor `task.toml` whose image is `jefzda/sweap-images:…` |
 | Harbor agent `icode` | `icode_harbor_agent:ICodeAgent` bind-mounts the worker drop at `/opt/icode-host` | Same iCode binary in every suite. LoLBench also calls `lolbench-submit` |
-| Harness run | `harbor run -a icode_harbor_agent:ICodeAgent --allow-agent-host api.deepseek.com` | iCode under test. Allowlist is the isolation that ships today. A full eval does not run the no-harness P6 stage |
+| Harness run | one `harbor run -a icode_harbor_agent:ICodeAgent -p <dataset> -i <ids> -k <rollouts> -n <slots> --allow-agent-host api.deepseek.com` | iCode under test. Harbor owns the fan-out, the per-task limits and the retries. Allowlist is the isolation that ships today. A full eval does not run the no-harness P6 stage |
 | Grade | Harbor `reward.json` → f2p / p2p / `resolved` / pass@1, tokens, time, model | Held-out tests plus API usage |
 | JSON | `eval-runs/output/{suite}/jenkins-<build>-<UTC>/artifact.json` plus `summary.md` and `report.html` | One folder per run |
 
 Trigger:
 
 ```bash
-mac-k3d eval                  # interactive → Jenkins deepswe_one_task (or --local)
+mac-k3d eval                  # interactive → Jenkins <benchmark>_one_task (or --local)
 mac-k3d eval --stage p5 --n-tasks 1   # isolated stage test
 ```
 
-Jenkins job names: **`deepswe_one_task`**, **`lolbench_one_task`**, and **`swebenchpro_one_task`**. All three run Harbor. Shared `run_all.sh`; each job pins `BENCHMARK`. One `TASK` per build. Logs print `PROGRESS n% …`. Agent label `lolbench`; builds take a `CPU_CORES` lock. How that lock becomes Harbor slots is [optimization.md](optimization.md).
+Nine Jenkins jobs — `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro** — plus a shared **`eval_aggregate`**. All run Harbor from the same `run_all.sh`; each job pins `BENCHMARK`. Logs print `PROGRESS n% …`. Agent label `lolbench`; a build locks cores on its own node for the `Evaluate` stage only. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor slots is in [optimization.md](optimization.md).
+
+---
+
+## Development loop: test a commit, not a path
+
+Every Jenkins build clones mac-k3d itself and runs `pipeline/` from that clone, so a result always names the code that produced it. There is no `--sync-pipeline` and no local-path fallback: copying a working tree onto a worker left no record of what ran and could not be reverted.
+
+```bash
+# 1. change code, 2. commit, 3. push the branch
+git commit -am "fix: <what>"
+git push origin <branch>
+```
+
+Then in the Jenkins UI, **Build with Parameters**:
+
+| Parameter | Value while developing |
+|---|---|
+| `MAC_K3D_GIT_URL` | `https://github.com/Toby-Yu/mac-k3d.git` (the default) |
+| `MAC_K3D_GIT_REF` | your branch name |
+| `MAC_K3D_GIT_REF_KIND` | `branch` |
+
+The `Prepare` stage prints the resolved SHA and `artifact.json` records it under `pipeline.commit`. That gives you the loop you want:
+
+- **Did my fix work?** Push, build the branch, compare against the previous build's `pipeline.commit`.
+- **Did that commit break it?** Set `MAC_K3D_GIT_REF_KIND=commit` and build the known-good SHA. Nothing on the worker needs touching.
+- **Reproduce an old number?** Build its `pipeline.commit`. An `OFFICIAL=1` run *requires* `kind=commit`, so an official number can never come from a branch that has since moved.
+
+`MAC_K3D_GIT_REF_KIND=pr` fetches `refs/pull/<n>/head`, which is how the iCode inputs are already pinned — the two halves of a run are now traceable the same way.
+
+The binary still embeds `pipeline/` via `include_dir!`, but only so `setup` and `config` can bootstrap a bare machine with no network. Evaluation always runs the clone.
 
 ---
 
@@ -156,3 +197,4 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 | [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | Pipeline stage CLI tests |
 | [secrets.md](secrets.md) | Controller credentials (`deepseek-api-key`) |
 | [lolbench-jenkins.md](lolbench-jenkins.md) | All three jobs are Harbor + iCode |
+| [harbor-delegation-multiworker/README.md](harbor-delegation-multiworker/README.md) | Harbor/mac-k3d responsibility split, job topology, multi-worker scaling |

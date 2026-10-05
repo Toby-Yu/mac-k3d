@@ -159,6 +159,75 @@ In this project, "controller" and "worker" mean CI roles, not Kubernetes node ro
 
 Kubernetes node roles remain internal to each Mac's own local k3d cluster (`server` and optional `agents` configured by `cluster.agents`).
 
+## Evaluation architecture
+
+mac-k3d is the **environment and scheduling manager**. It does not run containers for the benchmark, apply per-task resource limits, retry trials, or compute rewards — [Harbor](https://github.com/laude-institute/harbor) does all of that. The boundary:
+
+| Layer | Owner |
+|---|---|
+| Bare-machine prep: Docker, k3d, Harbor, Jenkins agent, base images | mac-k3d (`setup`, `start`, `config`) |
+| Per-build prep: iCode checkout, benchmark checkout, task selection, env file | mac-k3d (pipeline P0–P4) |
+| Container lifecycle, per-task cpus/memory, retries, rollout fan-out, verifier, reward | **Harbor** (one `harbor run`) |
+| Job placement across workers and resource admission | Jenkins + lockable-resources |
+| Capture receipts, anti-cheat, sanitizer, canary, report | mac-k3d (pipeline P5 canary, P7, P8) |
+
+The integrity layer stays here because Harbor has no equivalent: `harbor job summarize` is a removed shim and `harbor analyze` is rubric-only, so neither inspects a transcript for solution leakage or can reject a trial.
+
+### One Harbor run per build
+
+P5 issues a single command and lets Harbor expand it:
+
+```text
+harbor run -p <dataset dir> -i <task id> ... -k <N_ROLLOUTS> -n <slots> -r <retries>
+```
+
+Harbor's own plan is `n_attempts x tasks x agents`, so `-k 4` over 10 selected ids is 40 trials with `-n` of them in flight. The per-task `cpus` / `memory_mb` / `storage_mb` come from each `task.toml` and are **not** overridden; `pipeline/lib/task_resources.py` reads them, plans how many fit on this worker, and fails the build before any container starts if even one task does not fit.
+
+### Job topology
+
+Nine evaluation jobs — three shapes for each of `deepswe`, `lolbench`, `swebenchpro` — plus one shared aggregator:
+
+| Job | Shape | Purpose |
+|---|---|---|
+| `<suite>_one_task` | 1 question, 1 rollout | smoke test after a code change |
+| `<suite>_some_task` | N questions, full rollouts | comparison against a known-good result; also the shard worker |
+| `<suite>_full_suite_task` | dispatcher, `agent none` | slices the suite into `SHARDS` and fans out |
+| `eval_aggregate` | merge only | one report from many shards |
+
+A full suite does **not** queue one build per rollout. The dispatcher slices the sorted question list into `SHARDS` contiguous ranges, triggers that many `<suite>_some_task` builds in parallel with a `TASK_OFFSET` each, and then triggers `eval_aggregate`, which merges the shards' trials by `RUN_GROUP` into one `artifact.json`.
+
+### Per-worker core locks
+
+Each `<suite>_some_task` build is three stages — `Prepare`, `Evaluate`, `Report` — selected by `MAC_K3D_PHASE`. Only `Evaluate` takes the lock:
+
+```groovy
+lock(label: env.NODE_NAME, quantity: params.CPU_LOCK_QTY as Integer, resource: null)
+```
+
+The label is the **node name**, not a shared `CPU_CORES` label, because `mac-k3d setup` on a worker creates resources named `<agent>-core-1..N` labelled with both the shared label and the agent name, and the agent name is the Jenkins node name. Locking the shared label would let a build on one worker hold cores belonging to another. Image pulls (`Prepare`) and report rendering (`Report`) run unlocked so they do not sit on cores another build is waiting for.
+
+`numExecutors` on a registered node equals its core count; the lock, not the executor count, is what bounds concurrent evaluation.
+
+### Adding a worker
+
+`mac-k3d setup -c worker.yaml` registers the node and its core resources. Nothing in the pipeline is edited: the dispatcher derives shard count from registered cores divided by the suite's declared per-task CPUs, Jenkins places shards on whichever node has free tokens, and `lock(label: env.NODE_NAME)` resolves per build.
+
+Scale workers, not controllers. Lockable-resources state is per-controller, so a second controller would hand out tokens for cores the first one already lent out.
+
+### The pipeline under test is a git ref
+
+The worker clones mac-k3d itself rather than running whatever is installed locally:
+
+| Parameter | Meaning |
+|---|---|
+| `MAC_K3D_GIT_URL` | repo to clone (default `https://github.com/Toby-Yu/mac-k3d.git`) |
+| `MAC_K3D_GIT_REF` | branch, tag, commit, or PR number |
+| `MAC_K3D_GIT_REF_KIND` | `branch` \| `tag` \| `commit` \| `pr` |
+
+The resolved SHA lands in `artifact.json` under `pipeline.commit`, so any result names the code that produced it and a bad commit is revertible. `OFFICIAL=1` requires `MAC_K3D_GIT_REF_KIND=commit` so an official number can never come from a moving branch. This mirrors how the iCode inputs are already pinned — see [workflow.md](workflow.md).
+
+`include_dir!` still embeds `pipeline/` in the binary, but only so `setup` and `config` can bootstrap a bare machine offline. The evaluation path always uses the clone.
+
 ## Cross-network operation (not necessarily LAN)
 
 - Co-located Mac Minis should use a shared switched LAN; see [deployment.md](deployment.md#physical-lan-co-located-mac-minis).

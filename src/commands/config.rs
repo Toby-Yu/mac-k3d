@@ -147,47 +147,15 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
     }
 
     if rewrite_jobs {
-        println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
-        if let Err(err) = jenkins_job::ensure_lolbench_one_task_from_cluster(
-            &tools.kubectl,
-            config,
-            credential_ids.clone(),
-        )
-        .await
-        {
-            println!(
-                "Warning: could not ensure '{}' ({err}).",
-                jenkins_job::LOLBENCH_ONE_TASK
-            );
-        }
-        println!("Ensuring Jenkins job '{}'…", jenkins_job::DEEPSWE_ONE_TASK);
-        if let Err(err) = jenkins_job::ensure_deepswe_one_task_from_cluster(
-            &tools.kubectl,
-            config,
-            credential_ids.clone(),
-        )
-        .await
-        {
-            println!(
-                "Warning: could not ensure '{}' ({err}).",
-                jenkins_job::DEEPSWE_ONE_TASK
-            );
-        }
         println!(
-            "Ensuring Jenkins job '{}'…",
-            jenkins_job::SWEBENCHPRO_ONE_TASK
+            "Ensuring Jenkins eval jobs (one / some / full suite for {}, plus '{}')…",
+            jenkins_job::EVAL_BENCHMARKS.join(", "),
+            jenkins_job::EVAL_AGGREGATE
         );
-        if let Err(err) = jenkins_job::ensure_swebenchpro_one_task_from_cluster(
-            &tools.kubectl,
-            config,
-            credential_ids,
-        )
-        .await
+        if let Err(err) =
+            jenkins_job::ensure_eval_jobs_from_cluster(&tools.kubectl, config, credential_ids).await
         {
-            println!(
-                "Warning: could not ensure '{}' ({err}).",
-                jenkins_job::SWEBENCHPRO_ONE_TASK
-            );
+            println!("Warning: could not ensure the eval jobs ({err}).");
         }
     }
 

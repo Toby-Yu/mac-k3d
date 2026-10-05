@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# EVAL_SLOTS = min(CPU_LOCK_QTY, RAM ceiling). Low free disk forces one slot.
+# EVAL_SLOTS = how many trials Harbor runs at once; EVAL_CPUS_EACH = what each
+# task declares. P5 decides both and writes them to eval_resources.json, so the
+# later stages read that file instead of re-deriving anything: a report must
+# describe the run that happened, not a fresh guess about the current machine.
 eval_parallel_degree() {
   N_ROLLOUTS="${N_ROLLOUTS:-1}"
   CPU_LOCK_QTY="${CPU_LOCK_QTY:-1}"
@@ -13,30 +16,26 @@ eval_parallel_degree() {
     echo "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1" >&2
     return 1
   fi
-  local lib="${PIPELINE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-  local out
-  if ! out="$(
-    python3 "$lib/eval_slots.py" slots \
-      --cpu "$CPU_LOCK_QTY" \
-      --benchmark "${BENCHMARK:-deepswe}" \
-      --workdir "${WORKDIR:-.}"
-  )"; then
-    echo "eval_slots.py failed" >&2
-    return 1
+  local plan="${WORKDIR:-.}/eval_resources.json"
+  local out=""
+
+  if [ -f "$plan" ]; then
+    out="$(python3 - "$plan" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+applied = doc.get("applied") or {}
+declared = (doc.get("declared") or {}).get("peak") or {}
+print(f"EVAL_SLOTS={applied.get('slots') or 1}")
+print(f"EVAL_CPUS_EACH={applied.get('cpus_each') or declared.get('cpus') or 1}")
+PY
+    )" || out=""
   fi
-  eval "$out"
-  if [ -z "${EVAL_SLOTS:-}" ]; then
-    EVAL_SLOTS="$CPU_LOCK_QTY"
+  # No plan means P5 has not run in this workdir yet (a report-only replay of a
+  # tree that never evaluated). 1x1 is the honest answer, not a probe.
+  if [ -n "$out" ]; then
+    eval "$out"
   fi
-  if [ -z "${EVAL_CPUS_EACH:-}" ]; then
-    EVAL_CPUS_EACH=$((CPU_LOCK_QTY / EVAL_SLOTS))
-  fi
-  if [ "${EVAL_FITS:-1}" != 0 ] && [ "$EVAL_SLOTS" -lt 1 ]; then
-    EVAL_SLOTS=1
-  fi
-  if [ "$EVAL_CPUS_EACH" -lt 1 ]; then
-    EVAL_CPUS_EACH=1
-  fi
-  EVAL_PARALLEL="$EVAL_SLOTS"
-  export N_ROLLOUTS CPU_LOCK_QTY EVAL_SLOTS EVAL_PARALLEL EVAL_CPUS_EACH EVAL_FITS EVAL_MEMORY_MB
+  EVAL_SLOTS="${EVAL_SLOTS:-1}"
+  EVAL_CPUS_EACH="${EVAL_CPUS_EACH:-1}"
+  export N_ROLLOUTS CPU_LOCK_QTY EVAL_SLOTS EVAL_CPUS_EACH
 }

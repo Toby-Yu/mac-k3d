@@ -1,69 +1,78 @@
 # Eval resource packing
 
-Jenkins `CPU_LOCK_QTY` is the `CPU_CORES` lock **and** the upper bound on the Harbor slot pool. Field meanings (`concurrency`, `cpus_each`, `tokens.total`) stay in [evaluation.md](evaluation.md).
+Harbor applies each task's own `cpus` / `memory_mb` / `storage_mb`. mac-k3d's only job is to decide **how many** of those fit on this worker and to refuse a build that cannot run even one. Field meanings (`concurrency`, `cpus_each`, `tokens.total`) stay in [evaluation.md](evaluation.md).
 
-## CPU and RAM
+## Declared, not overridden
 
-Each live unit is one question × one rollout: `harbor run -n 1 -k 1`. At most `EVAL_SLOTS` units run at once.
+`pipeline/lib/task_resources.py` reads the `[environment]` and `[verifier.environment]` blocks of every selected `task.toml` and takes the maximum across them, because a verifier can ask for more than the agent phase:
 
-```text
-EVAL_SLOTS = min(CPU_LOCK_QTY, RAM_SLOTS, disk_floor)
-RAM_SLOTS  = floor((MemAvailable_GB - 2) / per_container_GB)
-per_container_GB = history_peak(question) × 1.5
-                 (else live sample; else fallback: DeepSWE 1.5, LoLBench 4.0, SWE-bench Pro 8)
-EVAL_CPUS_EACH = max(1, CPU_LOCK_QTY / EVAL_SLOTS)
-EVAL_MEMORY_MB = min(ceil(per_container_GB × 1024), floor((MemAvailable_MB - 2048) / EVAL_SLOTS))
-```
+| Suite | `cpus` | `memory_mb` | `storage_mb` |
+|---|---|---|---|
+| DeepSWE | 2 | 8192 | 20480 |
+| LoLBench | 4 | 7168–8192 | — |
 
-Slots and the Docker mem cap are **per question**: light DeepSWE / LoLBench ids pack up to `CPU_LOCK_QTY` containers; heavy Flink history peaks shrink to 1 slot with a tight host-capped `--override-memory-mb`. A heavy prior wave does not pin later light questions (global noted peak is cleared on flush; planning prefers that question’s history).
+The pipeline passes **no** `--override-cpus` and **no** `--override-memory-mb` on the normal path. A task gets what it asks for, so a score is comparable with anyone else's run of the same task.
 
-P5 samples `docker stats` for containers whose names contain `_icode_` or `__env-main-` and writes `peak_gb` to `container_mem.jsonl`. Durable peaks live in `harness/container_mem_history.jsonl` (not archived) and drive the next wave of the same question. Free disk at `WORKDIR` below 40 GB sets `EVAL_SLOTS` to 1.
-
-Harbor gets `--override-memory-mb` so a heavy container is OOM-killed **inside Docker** (P5 then skips that question) instead of the kernel OOM-killing the Jenkins agent and aborting the whole suite (`exit -1` / durable-task death).
-
-After the question list is chosen, P5 prints:
+## How many fit
 
 ```text
-P5 parallel: questions=4 ids=a,b,c,d rollouts=4 mem_available_gb=9.8 container_gb=0.40 budget_gb=0.60 slots=4 parallel_containers=4 four_containers=yes
+EVAL_SLOTS = max(1, min(CPU_LOCK_QTY / declared_cpus, mem_slots, disk_floor))
+mem_slots  = floor((MemAvailable_GB - HOST_RESERVE_GB) / declared_memory_GB)
+disk_floor = 1 when free disk at WORKDIR < MIN_DISK_GB, else unbounded
 ```
 
-`container_gb=unmeasured` means no live/history sample yet; LoLBench then uses the 4.0 GB fallback until a peak exists. `four_containers=yes` means `EVAL_SLOTS` is at least 4.
+`HOST_RESERVE_GB` is 2 and `MIN_DISK_GB` is 40. `EVAL_SLOTS` becomes Harbor's `-n`, so Harbor keeps that many trials in flight and queues the rest itself.
 
-Fill order: one question's rollouts run together. A free slot waits while that question still has a container running. The next question starts only after those containers exit.
+Admission and throughput use different numbers on purpose:
 
-If an attempt's log shows an out-of-memory kill, P5 appends that question to `harness/skipped_questions.txt`, does not launch its remaining rollouts, and continues. Reward files already written stay on disk and P8 scores them.
+- **Admission** (can this worker run one task at all?) uses `MemTotal - reserve`. A worker with enough RAM but a full page cache should still be allowed to start.
+- **Throughput** (how many at once?) uses `MemAvailable - reserve`. Packing against total RAM would thrash.
 
-Examples with `CPU_LOCK_QTY=4` and `N_ROLLOUTS=4`:
+If one declared task does not fit under either test, the build **fails before the first container starts** with the shortfall printed. That is deliberate: a half-resourced run produces numbers nobody can use.
 
-| Questions | What runs |
-|-----------|-----------|
-| Light DeepSWE (~0.4 GB peak) | Up to 4 rollouts of one question together; Docker cap ≈ peak×1.5 |
-| Heavy LoLBench Flink (~6 GB peak, ~9 GB free) | `EVAL_SLOTS` drops to 1; four rollouts run one after another under a Docker memory cap |
-| 113 DeepSWE / 20 LoLBench | Same-question waves; slot count and mem cap change per question from history |
+After the question list is chosen, P5 prints the plan and `artifact.json` keeps it:
 
-P6 grading uses the same `EVAL_SLOTS` cap. A local stage run that leaves `CPU_LOCK_QTY` unset uses 1. The Jenkins parameter defaults to 4. Set `EVAL_RESOURCE_CAP=0` only for fixture tests that must ignore RAM.
+```json
+"resources": {
+  "declared": {"peak": {"cpus": 2, "memory_mb": 8192, "storage_mb": 20480}},
+  "applied":  {"slots": 2, "cpus_each": 2}
+}
+```
 
-`--override-cpus` is `EVAL_CPUS_EACH`. DeepSWE `task.toml` files request `cpus = 2` and LoLBench requests `cpus = 4`; those values are not copied into `--override-cpus`.
+Inspect a plan without running anything:
+
+```bash
+python3 pipeline/lib/task_resources.py plan \
+  --tasks-dir eval-runs/deep-swe/tasks \
+  --selected eval-runs/selected_tasks.txt \
+  --cpu 8 --n-rollouts 4 --workdir eval-runs
+```
+
+A local stage run that leaves `CPU_LOCK_QTY` unset uses 1. The Jenkins parameter defaults to 4. Set `EVAL_RESOURCE_CAP=0` only for fixture tests that must ignore RAM.
+
+Later stages do not re-derive any of this: `eval_parallel_degree` reads the `eval_resources.json` that P5 wrote, so the report describes the run that happened rather than a fresh guess about the current machine.
+
+## Memory trace
+
+A single `harbor run` has no one "active question", so the memory trace is per build rather than per question. P5's heartbeat appends a `docker stats` snapshot to `harness/container_mem.jsonl` for containers whose names contain `_icode_` or `__env-main-`, ignoring sidecars. The largest `peak_gb` is kept in `harness/container_mem_peak_gb`, and the next build feeds it back in as `--measured-peak-gb` so a worker learns its real ceiling over time.
+
+```bash
+python3 pipeline/lib/task_resources.py sample --harness-dir eval-runs/harness --slots 2
+```
+
+## Scaling out instead of up
+
+Packing more trials onto one worker has a ceiling; adding workers does not. The real lever for a full suite is `SHARDS` on `<suite>_full_suite_task`, which splits the suite across nodes and merges the results — see [evaluation.md](evaluation.md#which-job-to-run). Within one build, the useful knob is `CPU_LOCK_QTY`, which raises the core budget this build reserves on its node.
 
 Time and token cost are reduced by `ICODE_REASONING_EFFORT=high` (less explore soft-stop), not by cutting rollouts.
 
-## Resume after agent death
+## Retries
 
-Set Jenkins **`RESUME=true`** and keep the **same** `TASK` / `TASKS` / `N_TASKS` / `N_ROLLOUTS` as the aborted full suite (LoLBench or DeepSWE).
-
-P5 then:
-
-1. Keeps prior `harness/harbor_runs/**` (does not wipe other builds’ trees).
-2. Seeds `ASSIGNED` from `reward.json` in **one** jobs tree: `RESUME_FROM=jenkins-N` if set, else the newest prior `jenkins-*` (not the empty new build).
-3. Continues only the remaining units; P7/P8 still score Harbor dirs under `harness/harbor_runs`.
-
-Console line: `P5 harbor: resume from jenkins-23 seeded done=N/M remaining=flink_1,...`.
-
-Leave `RESUME` false for a clean re-run that clears this build’s `harbor_runs/jenkins-$BUILD_NUMBER`. Optional: set env `RESUME_FROM=jenkins-23` when auto-pick is wrong.
+Harbor's `-r` (max retries) handles a trial that dies on infrastructure, so mac-k3d has no resume mode of its own. To re-run a suite that aborted, trigger the dispatcher again: the shards that already finished are archived under their `RUN_GROUP`, and `eval_aggregate` reports on whatever is present (`propagate: false`), so a partial suite still yields a report.
 
 ## Disk and I/O
 
-Free disk at `WORKDIR` below 40 GB sets `EVAL_SLOTS` to 1. One jobs tree per question so extra rollouts reuse image layers. `PYTHONDONTWRITEBYTECODE=1`. The heartbeat does not scan huge logs.
+Free disk at `WORKDIR` below 40 GB forces one slot. Harbor keeps one jobs tree per run so rollouts of the same task reuse image layers. `PYTHONDONTWRITEBYTECODE=1`. The heartbeat does not scan huge logs.
 
 ## Not done
 

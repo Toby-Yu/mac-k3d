@@ -271,14 +271,25 @@ def requester_facts() -> dict:
 
 
 def pipeline_facts(root: Path) -> dict:
+    """Which mac-k3d revision produced this result.
+
+    Jenkins clones the pipeline at MAC_K3D_GIT_URL + MAC_K3D_GIT_REF and exports
+    the resolved SHA, so the url/ref/kind are recorded too and a result can be
+    reproduced, or a bad commit reverted, from the artifact alone.
+    """
+    out_doc = {
+        "url": os.environ.get("MAC_K3D_GIT_URL") or "",
+        "ref": os.environ.get("MAC_K3D_GIT_REF") or "",
+        "ref_kind": os.environ.get("MAC_K3D_GIT_REF_KIND") or "",
+    }
     if not (root / ".git").exists():
-        return {"commit": "", "dirty": None}
+        return {**out_doc, "commit": os.environ.get("MAC_K3D_SHA") or "", "dirty": None}
     code, out = _git(root, "rev-parse", "HEAD")
-    commit = out.strip() if code == 0 else ""
+    commit = out.strip() if code == 0 else (os.environ.get("MAC_K3D_SHA") or "")
     code, out = _git(root, "status", "--porcelain")
     if code != 0:
-        return {"commit": commit, "dirty": None}
-    return {"commit": commit, "dirty": bool(out.strip())}
+        return {**out_doc, "commit": commit, "dirty": None}
+    return {**out_doc, "commit": commit, "dirty": bool(out.strip())}
 
 
 def _env_int(*names: str) -> int:
@@ -296,7 +307,7 @@ def model_inputs() -> dict:
         "provider": os.environ.get("ICODE_PROVIDER") or "DeepSeek",
         "reasoning_effort": os.environ.get("ICODE_REASONING_EFFORT") or "high",
         "cpu_lock_qty": _env_int("CPU_LOCK_QTY"),
-        "concurrency": _env_int("EVAL_SLOTS", "EVAL_PARALLEL"),
+        "concurrency": _env_int("EVAL_SLOTS"),
         "cpus_each": _env_int("EVAL_CPUS_EACH"),
         "n_rollouts": _env_int("N_ROLLOUTS"),
     }
@@ -404,6 +415,22 @@ def canary_record(summary: Path) -> dict:
         "counts": {k: v for k, v in counts.items() if isinstance(v, int) and not isinstance(v, bool)},
         "summary_sha256": sha256_file(summary) if summary.is_file() else "",
     }
+
+
+def record_resources(inputs: Path, plan: Path) -> dict:
+    """What the selected tasks declared and what the build applied (PF.3)."""
+    doc = _load_json(inputs)
+    got = _load_json(plan)
+    declared = got.get("declared") if isinstance(got.get("declared"), dict) else {}
+    doc["resources"] = {
+        "declared": declared.get("peak") or {},
+        "declared_tasks": declared.get("declared_tasks"),
+        "applied": got.get("applied") or {},
+        "host": got.get("host") or {},
+        "reasons": got.get("reasons") or [],
+    }
+    _write_json(inputs, doc)
+    return doc
 
 
 def record_canary(inputs: Path, summary: Path) -> dict:
@@ -663,6 +690,10 @@ def main(argv: list[str] | None = None) -> int:
     canary.add_argument("--inputs", required=True)
     canary.add_argument("--summary", required=True)
 
+    res = sub.add_parser("record-resources")
+    res.add_argument("--inputs", required=True)
+    res.add_argument("--plan", required=True)
+
     args = parser.parse_args(argv)
     if args.cmd == "assert-count":
         assert_task_count(Path(args.tasks_dir), args.expected)
@@ -692,6 +723,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "record-canary":
         record_canary(Path(args.inputs), Path(args.summary))
+        return 0
+    if args.cmd == "record-resources":
+        record_resources(Path(args.inputs), Path(args.plan))
         return 0
     record_task_image(Path(args.inputs), args.task_id, Path(args.task_toml))
     return 0

@@ -39,6 +39,9 @@ STAGE=""
 REPO=""
 REPO_SOURCE=""
 REPO_DECLARED=${MAC_K3D_REPO:-}
+# One Harbor job covers many tasks, so P5 declares every selected task's repo and
+# the trial picks the one its own image actually has.
+REPO_CANDIDATES=${MAC_K3D_REPO_CANDIDATES:-}
 REPO_SCAN=""
 REPO_ERROR=""
 SAFE_COMPLAINT=0
@@ -202,11 +205,22 @@ check_repo() {
   fi
 }
 
-# Declared repo first (P5 passes MAC_K3D_REPO from task.toml), then the LoLBench
-# image metadata, then the first .git under the search roots.
+# Declared repo first (P5 passes MAC_K3D_REPO, or MAC_K3D_REPO_CANDIDATES when one
+# Harbor job covers several tasks), then the LoLBench image metadata, then the
+# first .git under the search roots.
 resolve_repo() {
-  local meta
+  local meta cand
   REPO_SCAN=$(scan_repo)
+  if [ -z "$REPO_DECLARED" ] && [ -n "$REPO_CANDIDATES" ]; then
+    local IFS=:
+    for cand in $REPO_CANDIDATES; do
+      [ -n "$cand" ] || continue
+      if [ -d "$cand/.git" ]; then
+        REPO_DECLARED=$cand
+        break
+      fi
+    done
+  fi
   if [ -n "$REPO_DECLARED" ]; then
     REPO=$REPO_DECLARED
     REPO_SOURCE=declared

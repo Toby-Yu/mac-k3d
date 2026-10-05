@@ -21,7 +21,13 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
-from capture_receipt import annotate, binary_paths, declared_repo, trial_flags  # noqa: E402
+from capture_receipt import (  # noqa: E402
+    annotate,
+    base_mismatch,
+    binary_paths,
+    declared_repo,
+    trial_flags,
+)
 
 CAPTURE = LIB / "icode_capture.sh"
 FIXTURES = LIB / "testdata"
@@ -514,10 +520,58 @@ class CaptureReceiptHostTests(unittest.TestCase):
             out.write_bytes(grader)
         return trial
 
-    def _receipt(self, data: bytes, **patch: object) -> dict:
+    def _receipt(self, data: bytes, base: str = "", **patch: object) -> dict:
         body = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "binary_paths": []}
         body.update(patch)
-        return {"schema": "mac-k3d-capture-v1", "patch": body, "oversize": False, "errors": []}
+        doc = {"schema": "mac-k3d-capture-v1", "patch": body, "oversize": False, "errors": []}
+        if base:
+            doc["base_sha"] = base
+        return doc
+
+    def test_base_mismatch_compares_on_the_shorter_side(self):
+        full = "a" * 40
+        # task.toml usually declares an abbreviated sha.
+        self.assertFalse(base_mismatch(full, "aaaaaaa"))
+        self.assertFalse(base_mismatch(full, full))
+        self.assertTrue(base_mismatch(full, "b" * 7))
+        self.assertTrue(base_mismatch("aaaaaaa", "b" * 40))
+        # Nothing to compare is not a mismatch.
+        self.assertFalse(base_mismatch("", full))
+        self.assertFalse(base_mismatch(full, ""))
+        # LoLBench declares a sentinel, not a commit.
+        self.assertFalse(base_mismatch(full, "lolbench-base"))
+        self.assertFalse(base_mismatch(full, "v1.2.3"))
+        self.assertFalse(base_mismatch("HEAD", full))
+
+    def test_a_trial_that_started_off_the_declared_base_is_flagged(self):
+        """The agent env no longer carries the base, so P7 does the check on the host."""
+        data = b"diff --git a/x b/x\n"
+        declared = "0" * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            good = self._trial(root / "good", "deepswe", self._receipt(data, base=declared), data)
+            self.assertEqual(trial_flags(good, "deepswe", set(), declared)["flags"], [])
+            drifted = self._trial(root / "bad", "deepswe", self._receipt(data, base="f" * 40), data)
+            result = trial_flags(drifted, "deepswe", set(), declared)
+            self.assertEqual(result["flags"], ["base_commit_mismatch"])
+            self.assertEqual(result["declared_base"], declared)
+            self.assertEqual(result["base_sha"], "f" * 40)
+            # No declared base means no verdict either way.
+            self.assertEqual(trial_flags(drifted, "deepswe", set())["flags"], [])
+
+    def test_annotate_reads_the_declared_base_out_of_task_toml(self):
+        data = b"diff --git a/x b/x\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._trial(root, "deepswe", self._receipt(data, base="f" * 40), data)
+            tasks = root / "tasks"
+            self._task(
+                tasks,
+                "alpha",
+                "[[verifier.collect]]\ncommand = \"cd /workspace/repo && git diff abc1234\"\n",
+            )
+            summary = annotate(root / "harness", tasks, ["alpha"], "deepswe")
+            self.assertEqual(summary, {"trials": 1, "base_commit_mismatch": 1})
 
     def test_trial_flags_same_check_for_every_suite(self):
         data = b"diff --git a/x b/x\n"
@@ -606,14 +660,23 @@ class CaptureWiringTests(unittest.TestCase):
 
     def test_stages_pass_declared_repo_and_check_receipts(self):
         p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
-        p6 = (ROOT / "pipeline" / "stages" / "p6_grade_baseline.sh").read_text(encoding="utf-8")
         p7 = (ROOT / "pipeline" / "stages" / "p7_score.sh").read_text(encoding="utf-8")
-        for stage in (p5, p6):
-            self.assertIn("capture_receipt.py\" declared-repo", stage)
-            self.assertIn("MAC_K3D_REPO=", stage)
-            self.assertIn("MAC_K3D_BASE_COMMIT=", stage)
+        self.assertIn("capture_receipt.py\" declared-repo", p5)
+        # One Harbor job covers many tasks, so P5 declares every selected task's
+        # repo once and the trial picks the one its own image has.
+        self.assertIn("MAC_K3D_REPO_CANDIDATES=", p5)
+        self.assertNotIn('--ae "MAC_K3D_REPO=', p5)
         self.assertIn("capture_receipt.py\" annotate", p7)
         self.assertLess(p7.index("annotate"), p7.index("score_results.py"))
+
+    def test_capture_picks_the_candidate_repo_its_image_has(self):
+        capture = (ROOT / "pipeline" / "lib" / "icode_capture.sh").read_text(encoding="utf-8")
+        self.assertIn("REPO_CANDIDATES=${MAC_K3D_REPO_CANDIDATES:-}", capture)
+        # A declared single repo still wins, so older builds behave the same.
+        self.assertLess(
+            capture.index('if [ -z "$REPO_DECLARED" ] && [ -n "$REPO_CANDIDATES" ]'),
+            capture.index('if [ -n "$REPO_DECLARED" ]; then\n    REPO=$REPO_DECLARED'),
+        )
 
 
 if __name__ == "__main__":

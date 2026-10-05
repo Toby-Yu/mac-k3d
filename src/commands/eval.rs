@@ -62,19 +62,10 @@ pub struct EvalArgs {
     /// Skip interactive prompts (use flags / env only)
     #[arg(long)]
     pub yes: bool,
-
-    /// Extract embedded pipeline/ into ~/.local/share/mac-k3d and exit (Jenkins Prepare).
-    #[arg(long)]
-    pub sync_pipeline: bool,
 }
 
 /// Interactive or staged iCode / DeepSeek / DeepSWE evaluation.
 pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
-    if args.sync_pipeline {
-        let share = crate::prepare::eval_assets::ensure_share_pipeline()?;
-        println!("Extracted pipeline to {}", share.join("pipeline").display());
-        return Ok(());
-    }
     if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
         println!("Warning: could not extract pipeline ({err}).");
     }

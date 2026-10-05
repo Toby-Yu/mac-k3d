@@ -39,11 +39,13 @@ This PC: Jenkins agent + Docker + iCode
 
 Worker wizard default is `http://43.107.42.252:17070`. Type a new `http://<ip>:17070` or export `JENKINS_URL` for another controller. Never `mac-k3d start -c worker.yaml`.
 
-After changing the `deepswe_one_task` job XML, refresh on the **cloud** controller:
+After changing **job XML** (parameters, timeout, stages) refresh on the **cloud** controller:
 
 ```bash
 mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 ```
+
+A change under `pipeline/` alone needs none of this — push the branch and set `MAC_K3D_GIT_REF`.
 
 ---
 
@@ -57,7 +59,7 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 | Jenkins API token | **Secret**, not the token *name*, for worker register |
 | Credential `deepseek-api-key` | Stored on the **cloud** controller |
 | iCode on this PC | Downloaded `*-full-*` drop under `~/.local/share/mac-k3d/`, or `ICODE_MODE=git` |
-| `MAC_K3D_ROOT` on this PC | mac-k3d checkout (or Release share dir `~/.local/share/mac-k3d`) |
+| mac-k3d branch pushed | The build clones `MAC_K3D_GIT_URL` at `MAC_K3D_GIT_REF`; an unpushed local commit is not testable on Jenkins |
 | API model string | Catalog `deepseek-v4-pro` (default) or `deepseek-flash` (`DEEPSEEK_MODEL` / `--model` / Jenkins choice) |
 | N for smoke | **1**; larger N later (E8) |
 
@@ -117,7 +119,7 @@ mac-k3d eval --stage p3 --icode-mode git \
 
 Expected: `Saved GITCODE_TOKEN to .env (mode 600)` on first run (or `Using GITCODE_TOKEN from env or .env`); clone finishes (or fails within 90s with a PAT hint); `eval-runs/icode_bin_path.txt`, `icode_host_root.txt`, and `icode_git.json` exist; console prints `OK iCode git kind=branch ref=main sha=…`. A leftover clone may print `removing leftover …/icode-src via docker` then continue — that is expected, not a failure.
 
-Jenkins (after local P3 works): on the **controller**, `mac-k3d config --update-secrets` and enter the GitCode PAT into `gitcode-pat`. Then UI **Build with Parameters**: `ICODE_MODE=git`, the same URL/ref, `ICODE_GIT_REF_KIND=branch` (or `tag` / `commit` for a PR SHA, or `pr` with the pull-request number in `ICODE_GIT_REF`), no PAT in those fields. Worker job param `MAC_K3D_ROOT` empty for a user-like run (or this checkout to test unreleased pipeline).
+Jenkins (after local P3 works): on the **controller**, `mac-k3d config --update-secrets` and enter the GitCode PAT into `gitcode-pat`. Then UI **Build with Parameters**: `ICODE_MODE=git`, the same URL/ref, `ICODE_GIT_REF_KIND=branch` (or `tag` / `commit` for a PR SHA, or `pr` with the pull-request number in `ICODE_GIT_REF`), no PAT in those fields. Leave `MAC_K3D_GIT_*` at the defaults for a user-like run; set `MAC_K3D_GIT_REF` to your branch to test unreleased pipeline code.
 
 ---
 
@@ -125,7 +127,7 @@ Jenkins (after local P3 works): on the **controller**, `mac-k3d config --update-
 
 `lolbench_one_task` is Harbor + iCode, same runner as DeepSWE and SWE-bench Pro. P4 checks that `icode_harbor_agent` imports. Jenkins **SUCCESS** means `reward.json` exists (the pipeline ran). It does **not** mean `pass_at_1=1`. Match Harbor’s Resolved/Reward column: F2P 0.368 with Resolved 0.0 is a valid score.
 
-Jenkins runs `~/.local/share/mac-k3d/pipeline` unless you set job param **`MAC_K3D_ROOT`** to this checkout. To test git changes: `MAC_K3D_ROOT=/home/Toby/Documents/Toby/mac-k3d` on the job, or `mac-k3d config -c ~/.config/mac-k3d/worker.yaml` to re-extract `pipeline/`.
+Jenkins runs the `pipeline/` of a **fresh clone** at `MAC_K3D_GIT_REF`, never a path on the worker. To test git changes: push the branch, then set `MAC_K3D_GIT_REF=<branch>` with `MAC_K3D_GIT_REF_KIND=branch` on the job. The console prints the resolved SHA and `artifact.json` keeps it under `pipeline.commit`, so you can rebuild that exact commit later with `MAC_K3D_GIT_REF_KIND=commit`. Full loop: [../workflow.md](../workflow.md#development-loop-test-a-commit-not-a-path).
 
 | Check | Command | Expected | Pass (y/n) | Notes |
 |-------|---------|----------|------------|-------|

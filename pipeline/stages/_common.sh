@@ -422,7 +422,7 @@ selected_tasks_csv_source() {
 }
 
 write_selected_tasks() {
-  local list="$WORKDIR/selected_tasks.txt" n root tid csv
+  local list="$WORKDIR/selected_tasks.txt" n root tid csv skip
   root="$(benchmark_tasks_dir)"
   [ -d "$root" ] || die "run P2 first (missing $root)"
   csv="$(selected_tasks_csv_source || true)"
@@ -449,14 +449,25 @@ EOF
     return 0
   fi
   n="${N_TASKS:-1}"
-  find "$root" -mindepth 1 -maxdepth 1 -type d | sort | head -n "$n" \
+  # TASK_OFFSET lets the full-suite dispatcher hand each shard a disjoint slice
+  # of the same sorted id list without naming every id on the command line.
+  skip="${TASK_OFFSET:-0}"
+  case "$skip" in
+    "" | *[!0-9]*) die "TASK_OFFSET must be an integer >= 0 (got '$skip')" ;;
+  esac
+  find "$root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n "+$((skip + 1))" | head -n "$n" \
     | xargs -n1 basename >"$list"
-  [ -s "$list" ] || die "no tasks to select under $root"
+  [ -s "$list" ] || die "no tasks to select under $root (N_TASKS=$n TASK_OFFSET=$skip)"
 }
 
 ensure_selected_tasks() {
-  local list="$WORKDIR/selected_tasks.txt" have_n want csv
+  local list="$WORKDIR/selected_tasks.txt" stamp="$WORKDIR/selected_tasks_offset.txt" have_n want csv
   csv="$(selected_tasks_csv_source || true)"
+  # A reused workspace can hold another shard's slice of the same size.
+  if [ "$(cat "$stamp" 2>/dev/null || echo 0)" != "${TASK_OFFSET:-0}" ]; then
+    rm -f "$list"
+    printf '%s\n' "${TASK_OFFSET:-0}" >"$stamp"
+  fi
   if [ -n "$csv" ]; then
     want="$(task_ids_from_csv "$csv" | grep -c . || true)"
     if [ -f "$list" ]; then

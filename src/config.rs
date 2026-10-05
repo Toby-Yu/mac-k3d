@@ -228,6 +228,16 @@ pub struct JenkinsJobConfig {
     /// Git ref kind for job param default: `branch` | `tag` | `commit` | `pr`.
     #[serde(default = "default_icode_git_ref_kind_pr")]
     pub default_icode_git_ref_kind: String,
+    /// Git URL of the mac-k3d repo the Jenkins jobs clone to get `pipeline/`.
+    /// The build records the resolved commit, so a result names its pipeline version.
+    #[serde(default = "default_mac_k3d_git_url")]
+    pub default_mac_k3d_git_url: String,
+    /// Ref for `default_mac_k3d_git_url`: branch name, tag, commit SHA, or PR number.
+    #[serde(default = "default_mac_k3d_git_ref")]
+    pub default_mac_k3d_git_ref: String,
+    /// Ref kind for the mac-k3d clone: `branch` | `tag` | `commit` | `pr`.
+    #[serde(default = "default_mac_k3d_git_ref_kind")]
+    pub default_mac_k3d_git_ref_kind: String,
 }
 
 fn default_n_tasks_one() -> u32 {
@@ -240,6 +250,18 @@ fn default_n_rollouts_four() -> u32 {
 
 fn default_icode_git_ref_kind_pr() -> String {
     "pr".into()
+}
+
+fn default_mac_k3d_git_url() -> String {
+    "https://github.com/Toby-Yu/mac-k3d.git".into()
+}
+
+fn default_mac_k3d_git_ref() -> String {
+    "main".into()
+}
+
+fn default_mac_k3d_git_ref_kind() -> String {
+    "branch".into()
 }
 
 impl Default for JenkinsJobConfig {
@@ -263,6 +285,9 @@ impl Default for JenkinsJobConfig {
             default_n_rollouts: 4,
             default_tasks: Vec::new(),
             default_icode_git_ref_kind: "pr".into(),
+            default_mac_k3d_git_url: default_mac_k3d_git_url(),
+            default_mac_k3d_git_ref: default_mac_k3d_git_ref(),
+            default_mac_k3d_git_ref_kind: default_mac_k3d_git_ref_kind(),
         }
     }
 }

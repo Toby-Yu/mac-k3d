@@ -119,38 +119,13 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig, config_path: Option<&Pa
                 }
             };
             if let Some(credential_ids) = credential_ids {
-                println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
-                // Best-effort: config will retry if Jenkins is still warming up.
-                if let Err(err) = jenkins_job::ensure_lolbench_one_task_from_cluster(
-                    &tools.kubectl,
-                    &config,
-                    credential_ids.clone(),
-                )
-                .await
-                {
-                    println!(
-                        "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
-                        jenkins_job::LOLBENCH_ONE_TASK
-                    );
-                }
-                println!("Ensuring Jenkins job '{}'…", jenkins_job::DEEPSWE_ONE_TASK);
-                if let Err(err) = jenkins_job::ensure_deepswe_one_task_from_cluster(
-                    &tools.kubectl,
-                    &config,
-                    credential_ids.clone(),
-                )
-                .await
-                {
-                    println!(
-                        "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
-                        jenkins_job::DEEPSWE_ONE_TASK
-                    );
-                }
                 println!(
-                    "Ensuring Jenkins job '{}'…",
-                    jenkins_job::SWEBENCHPRO_ONE_TASK
+                    "Ensuring Jenkins eval jobs (one / some / full suite for {}, plus '{}')…",
+                    jenkins_job::EVAL_BENCHMARKS.join(", "),
+                    jenkins_job::EVAL_AGGREGATE
                 );
-                if let Err(err) = jenkins_job::ensure_swebenchpro_one_task_from_cluster(
+                // Best-effort: config will retry if Jenkins is still warming up.
+                if let Err(err) = jenkins_job::ensure_eval_jobs_from_cluster(
                     &tools.kubectl,
                     &config,
                     credential_ids,
@@ -158,8 +133,7 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig, config_path: Option<&Pa
                 .await
                 {
                     println!(
-                        "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
-                        jenkins_job::SWEBENCHPRO_ONE_TASK
+                        "Note: could not create the eval jobs yet ({err}). Re-run `mac-k3d config`."
                     );
                 }
             }

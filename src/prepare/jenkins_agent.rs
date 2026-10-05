@@ -103,6 +103,7 @@ pub fn try_register_node(
     agent_name: &str,
     remote_fs: &Path,
     labels: &[String],
+    executors: u32,
     api_user: Option<&str>,
     api_token: Option<&str>,
 ) -> Result<Option<String>> {
@@ -138,7 +139,7 @@ pub fn try_register_node(
     .unwrap_or(false);
 
     if !exists {
-        let xml = agent_config_xml(agent_name, remote_fs, &labels_joined);
+        let xml = agent_config_xml(agent_name, remote_fs, &labels_joined, executors);
         // Modern Jenkins: POST /computer/createItem?name=… with XML body.
         // (doCreateItem expects a Stapler form submission and returns HTTP 400 for raw XML.)
         let create_url = format!(
@@ -214,14 +215,18 @@ pub fn try_register_node(
     }
 }
 
-fn agent_config_xml(name: &str, remote_fs: &Path, labels: &str) -> String {
+fn agent_config_xml(name: &str, remote_fs: &Path, labels: &str, executors: u32) -> String {
+    // One executor per registered core. The CPU lock, not the executor count,
+    // is what bounds concurrent evaluation, so a single executor would stop a
+    // second shard from even queueing on a worker that has free tokens.
+    let executors = executors.max(1);
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <slave>
   <name>{name}</name>
   <description>mac-k3d worker agent</description>
   <remoteFS>{remote}</remoteFS>
-  <numExecutors>1</numExecutors>
+  <numExecutors>{executors}</numExecutors>
   <mode>NORMAL</mode>
   <retentionStrategy class="hudson.slaves.RetentionStrategy$Always"/>
   <launcher class="hudson.slaves.JNLPLauncher">
@@ -446,6 +451,7 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
             &name,
             &remote_fs,
             &config.jenkins_agent.labels,
+            config.jenkins_agent.cpu_cores,
             config.jenkins_agent.api_user.as_deref(),
             config.jenkins_agent.api_token.as_deref(),
         )?

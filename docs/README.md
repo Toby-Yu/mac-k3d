@@ -14,9 +14,9 @@ Do not add a new top-level folder for each feature branch. Update these product 
 | [workflow.md](workflow.md) | End-to-end: new machine → controller/worker → JSON |
 | [export-import.md](export-import.md) | Worker vs controller YAML; `--force` vs `--skip-secrets` |
 | [secrets.md](secrets.md) | Jenkins credentials on the controller; local `.env` for `--local` |
-| [lolbench-jenkins.md](lolbench-jenkins.md) | `deepswe_one_task`, `lolbench_one_task`, and `swebenchpro_one_task` (all Harbor) |
-| [evaluation.md](evaluation.md) | What a run stores and what the fields mean |
-| [optimization.md](optimization.md) | CPU slot pool, RAM/disk gates, what this tree optimized |
+| [lolbench-jenkins.md](lolbench-jenkins.md) | The ten jobs `config` writes: three shapes x three benchmarks, plus `eval_aggregate` |
+| [evaluation.md](evaluation.md) | What a run stores, which job shape to pick, and what the fields mean |
+| [optimization.md](optimization.md) | Declared per-task resources, how many fit, RAM/disk gates |
 
 ## Lab runbooks (this team, not the user start-here)
 
@@ -72,6 +72,7 @@ Each folder is **only** `README.md` (what that git branch shipped) and `testing.
 | [binary-initializer/README.md](binary-initializer/README.md) | Release `setup` + Docker install |
 | [eval-comparison-report/README.md](eval-comparison-report/README.md) | Comparison report, same-question slots, four open slots, and the per-run container memory log |
 | [eval-optimization/README.md](eval-optimization/README.md) | DeepSeek+high, force-commit, eval_protocol, LoLBench fix rewards, active-question mem, cost-token report |
+| [harbor-delegation-multiworker/README.md](harbor-delegation-multiworker/README.md) | Harbor owns scheduling; declared resources; per-node locks; three job shapes + sharded full suite; pipeline pinned by git ref |
 
 ## Goals
 

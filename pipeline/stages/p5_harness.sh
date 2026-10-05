@@ -147,8 +147,7 @@ else
   echo "P5 harbor: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
 fi
 ensure_selected_tasks
-eval_parallel_degree || die "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1"
-echo "P5 harbor: n_rollouts=$N_ROLLOUTS slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
+JOBS_DIR="$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
 case "${BENCHMARK:-deepswe}" in
   lolbench)
     PROV_REPO="$LOLBENCH_DIR"
@@ -186,14 +185,26 @@ python3 "$PIPELINE_LIB/provenance.py" write-inputs \
   --pipeline-root "$MAC_K3D_ROOT" \
   --icode-root "$HOST_ICODE" \
   --mounts "$MOUNTS_JSON"
-python3 "$PIPELINE_LIB/eval_slots.py" report \
-  --tasks-file "$WORKDIR/selected_tasks.txt" \
-  --n-rollouts "$N_ROLLOUTS" \
-  --cpu "$CPU_LOCK_QTY" \
-  --benchmark "${BENCHMARK:-deepswe}" \
-  --workdir "$WORKDIR"
 mapfile -t TASK_IDS < <(grep -v '^[[:space:]]*$' "$WORKDIR/selected_tasks.txt" || true)
 [ "${#TASK_IDS[@]}" -gt 0 ] || die "no task under $TASKS_DIR (wanted ${TASK_ID:-<empty>})"
+
+# Harbor applies each task.toml's cpus/memory_mb. This only decides how many
+# trials it may run at once, and refuses a worker that cannot host one.
+RESOURCE_PLAN="$WORKDIR/eval_resources.json"
+plan_out="$(
+  python3 "$PIPELINE_LIB/task_resources.py" plan \
+    --tasks-dir "$TASKS_DIR" \
+    --selected "$WORKDIR/selected_tasks.txt" \
+    --cpu "${CPU_LOCK_QTY:-1}" \
+    --n-rollouts "$N_ROLLOUTS" \
+    --workdir "$WORKDIR" \
+    --measured-peak-gb "$(cat "$HARNESS_DIR/container_mem_peak_gb" 2>/dev/null || echo 0)" \
+    --out "$RESOURCE_PLAN"
+)" || die "this worker cannot run the selected tasks as declared (see the error above)"
+eval "$plan_out"
+export EVAL_SLOTS DECLARED_CPUS DECLARED_MEMORY_MB DECLARED_STORAGE_MB
+python3 "$PIPELINE_LIB/provenance.py" record-resources \
+  --inputs "$PROTOCOL_INPUTS" --plan "$RESOURCE_PLAN" || true
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SECONDS=0
 : >"$HARNESS_DIR/harbor.log"
@@ -237,50 +248,19 @@ case "$leak_rc" in
 esac
 
 declare -A TASK_READY=()
-ASSIGNED=""
-INFLIGHT=""
-declare -A UNIT_SPEC=()
-declare -A UNIT_JOBS=()
-declare -A UNIT_LOG=()
-declare -A UNIT_START=()
-declare -A QUESTION_START=()
 NEEDED=$(( ${#TASK_IDS[@]} * N_ROLLOUTS ))
-STARTED_UNITS=0
-DONE_UNITS=0
-DUR_SUM=0
-DUR_N=0
 
-if [ "$RESUME" = "1" ]; then
-  seed="$(
-    python3 "$PIPELINE_LIB/eval_slots.py" resume-seed \
-      --tasks-file "$WORKDIR/selected_tasks.txt" \
-      --n-rollouts "$N_ROLLOUTS" \
-      --workdir "$WORKDIR" \
-      --build "${RESUME_FROM:-}"
-  )" || die "eval_slots.py resume-seed failed"
-  eval "$seed"
-  ASSIGNED="${ASSIGNED:-}"
-  RESUME_DONE="${RESUME_DONE:-0}"
-  RESUME_REMAINING="${RESUME_REMAINING:-}"
-  RESUME_BUILD="${RESUME_BUILD:-}"
-  STARTED_UNITS="$RESUME_DONE"
-  DONE_UNITS="$RESUME_DONE"
-  echo "P5 harbor: resume from ${RESUME_BUILD:-auto} seeded done=$RESUME_DONE/$NEEDED remaining=${RESUME_REMAINING:--}"
-fi
-
+# Harbor owns the trial loop, so progress is "how many rewards exist so far".
 write_progress() {
-  local inflight_n="${#UNIT_SPEC[@]}"
-  local mean=""
-  if [ "${DUR_N:-0}" -gt 0 ]; then
-    mean="$(python3 -c "print($DUR_SUM / $DUR_N)")"
-  fi
+  local done_units
+  done_units="$(find "$JOBS_DIR" -name reward.json -type f 2>/dev/null | wc -l | tr -d ' ')"
   python3 "$PIPELINE_LIB/eval_progress.py" write \
     --out "$HARNESS_DIR/progress.json" \
-    --done "$DONE_UNITS" \
+    --done "${done_units:-0}" \
     --needed "$NEEDED" \
-    --inflight "$inflight_n" \
+    --inflight "$EVAL_SLOTS" \
     --slots "${EVAL_SLOTS:-1}" \
-    --mean "$mean" \
+    --mean "" \
     --started-at "$STARTED_AT"
 }
 
@@ -288,9 +268,6 @@ ensure_task_ready() {
   local tid="$1"
   [ -n "${TASK_READY[$tid]:-}" ] && return 0
   [ -d "$TASKS_DIR/$tid" ] || die "no task under $TASKS_DIR (wanted $tid)"
-  local jobs="$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}/${tid}"
-  mkdir -p "$jobs"
-  printf '%s\n' "$jobs" >"$HARNESS_DIR/harbor_jobs_dir.txt"
   if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
     local task_toml="$TASKS_DIR/${tid}/task.toml"
     local image
@@ -308,68 +285,43 @@ PY
   TASK_READY[$tid]=1
 }
 
-live_slots() {
-  local out question=""
-  if [ -n "${INFLIGHT:-}" ]; then
-    question="${INFLIGHT%%:*}"
-  else
-    # Next wave's question (history peak / fallback planning before launch).
-    question="$(next_work_unit 2>/dev/null | awk '{print $1}' || true)"
-  fi
-  out="$(
-    python3 "$PIPELINE_LIB/eval_slots.py" slots \
-      --cpu "$CPU_LOCK_QTY" \
-      --benchmark "${BENCHMARK:-deepswe}" \
-      --workdir "$WORKDIR" \
-      --question "$question"
-  )" || return 1
-  eval "$out"
-  EVAL_PARALLEL="$EVAL_SLOTS"
-  export EVAL_SLOTS EVAL_PARALLEL EVAL_CPUS_EACH EVAL_FITS EVAL_MEMORY_MB
-}
-
-next_work_unit() {
-  python3 "$PIPELINE_LIB/eval_slots.py" next \
-    --tasks-file "$WORKDIR/selected_tasks.txt" \
-    --n-rollouts "$N_ROLLOUTS" \
-    --assigned "$ASSIGNED" \
-    --inflight "$INFLIGHT"
-}
-
-# Sets cmd, unit_jobs, unit_run_dir, unit_task_path and unit_log for one work unit.
+# Sets cmd, unit_run_dir, unit_task_path, unit_jobs and unit_log.
 declare -a cmd=()
 unit_jobs=""
 unit_run_dir=""
 unit_task_path=""
 unit_log=""
 
-# LoLBench runs Harbor from its checkout with a relative task path.
+# LoLBench runs Harbor from its checkout with a relative dataset path.
+# Where to run harbor from, and the dataset directory to hand it. LoLBench's
+# tasks only resolve relative to its checkout.
 unit_location() {
   unit_run_dir="$WORKDIR"
-  unit_task_path="$TASKS_DIR/$1"
+  unit_task_path="$TASKS_DIR"
   if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
     unit_run_dir="$LOLBENCH_DIR"
-    unit_task_path="harbor_tasks/$1"
+    unit_task_path="harbor_tasks"
   fi
 }
 
-build_unit_cmd() {
-  local tid="$1" attempt="$2" job_name att_tag
-  unit_jobs="$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}/${tid}"
-  att_tag="$(printf '%02d' "$attempt")"
-  job_name="${tid}_icode_${BUILD_NUMBER:-local}_a${att_tag}"
-  if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
-    job_name="${tid}_icode_union_${BUILD_NUMBER:-local}_a${att_tag}"
-  fi
-  unit_location "$tid"
-  unit_log="$unit_jobs/harbor-a${att_tag}.log"
+# One Harbor job for the whole build: Harbor expands the selected tasks into
+# n_attempts trials each and runs EVAL_SLOTS of them at a time.
+build_run_cmd() {
+  local tid
+  unit_location
+  unit_log="$JOBS_DIR/harbor.log"
   cmd=(harbor run)
   cmd+=(-p "$unit_task_path")
+  for tid in "${TASK_IDS[@]}"; do
+    cmd+=(-i "$tid")
+  done
   cmd+=(-a "icode_harbor_agent:ICodeAgent")
-  cmd+=(--job-name "$job_name")
-  cmd+=(--jobs-dir "$unit_jobs")
+  cmd+=(--job-name "icode_${BENCHMARK:-deepswe}_${BUILD_NUMBER:-local}")
+  cmd+=(--jobs-dir "$JOBS_DIR")
   cmd+=(--no-delete)
-  append_agent_flags "$tid"
+  cmd+=(-k "$N_ROLLOUTS")
+  cmd+=(-r "${HARBOR_MAX_RETRIES:-1}")
+  append_agent_flags
 }
 
 # The canary (P0.6) runs in iCode's sandbox: only the agent, job location, its
@@ -377,16 +329,19 @@ build_unit_cmd() {
 # the canary alone, to prove that it notices.
 build_canary_cmd() {
   local tid="$1" spec="$2"
-  unit_location "$tid"
+  # Same -p/-i resolution as the real run, so the canary proves isolation on the
+  # path the rollouts actually take.
+  unit_location
   unit_jobs="$CANARY_DIR/$tid"
   unit_log="$unit_jobs/harbor.log"
   cmd=(harbor run)
   cmd+=(-p "$unit_task_path")
+  cmd+=(-i "$tid")
   cmd+=(-a "canary_harbor_agent:CanaryAgent")
   cmd+=(--job-name "${tid}_canary_${BUILD_NUMBER:-local}")
   cmd+=(--jobs-dir "$unit_jobs")
   cmd+=(--no-delete)
-  append_agent_flags "$tid"
+  append_agent_flags
   cmd+=(--ak "spec=$spec")
   cmd+=(--disable-verification)
   if [ -n "${CANARY_ALLOW_HOST:-}" ]; then
@@ -397,17 +352,20 @@ build_canary_cmd() {
 # Everything the agent sees: model, egress allowlist, resources, env file,
 # verifier env, mounts and agent env. Shared by iCode and the canary.
 append_agent_flags() {
-  local tid="$1"
   cmd+=(-m "${DEEPSEEK_MODEL}")
   cmd+=(--allow-agent-host api.deepseek.com)
   cmd+=(--allow-agent-host api.deepseek.ai)
   cmd+=(--agent-setup-timeout-multiplier 10)
-  cmd+=(-n 1)
-  cmd+=(-k 1)
-  cmd+=(--override-cpus "$EVAL_CPUS_EACH")
-  if [ "${EVAL_MEMORY_MB:-0}" -gt 0 ] 2>/dev/null; then
-    cmd+=(--override-memory-mb "$EVAL_MEMORY_MB")
-    echo "P5 harbor: override-memory-mb=$EVAL_MEMORY_MB slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
+  cmd+=(-n "$EVAL_SLOTS")
+  # No --override-cpus / --override-memory-mb: Harbor then applies what each
+  # task.toml declares. EVAL_SLOTS already divides the lock by those numbers.
+  if [ -n "${EVAL_OVERRIDE_CPUS:-}" ]; then
+    cmd+=(--override-cpus "$EVAL_OVERRIDE_CPUS")
+    echo "P5 harbor: override-cpus=$EVAL_OVERRIDE_CPUS (EVAL_OVERRIDE_CPUS set; task.toml ignored)"
+  fi
+  if [ -n "${EVAL_OVERRIDE_MEMORY_MB:-}" ]; then
+    cmd+=(--override-memory-mb "$EVAL_OVERRIDE_MEMORY_MB")
+    echo "P5 harbor: override-memory-mb=$EVAL_OVERRIDE_MEMORY_MB (EVAL_OVERRIDE_MEMORY_MB set; task.toml ignored)"
   fi
   cmd+=(-y)
   cmd+=(--env-file "$HARBOR_ENV")
@@ -423,33 +381,58 @@ append_agent_flags() {
   cmd+=(--ae "DEEPSEEK_MODEL=${DEEPSEEK_MODEL}")
   cmd+=(--ae "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")
   cmd+=(--ae "MAC_K3D_BENCHMARK=${BENCHMARK:-deepswe}")
-  capture_declared_ae "$TASKS_DIR/$tid"
-}
-
-# Appends the repo and base the task declares; icode_capture.sh checks them.
-capture_declared_ae() {
-  local declared repo_decl="" base_decl=""
-  declared="$(python3 "$PIPELINE_LIB/capture_receipt.py" declared-repo \
-    --task-dir "$1" --benchmark "${BENCHMARK:-deepswe}")" || declared=""
-  { read -r repo_decl; read -r base_decl; } <<<"$declared" || true
-  if [ -n "$repo_decl" ]; then cmd+=(--ae "MAC_K3D_REPO=$repo_decl"); fi
-  if [ -n "$base_decl" ]; then cmd+=(--ae "MAC_K3D_BASE_COMMIT=$base_decl"); fi
-}
-
-start_unit() {
-  local tid="$1" attempt="$2"
-  ensure_task_ready "$tid"
-  build_unit_cmd "$tid" "$attempt"
-  local jobs="$unit_jobs" run_dir="$unit_run_dir" log="$unit_log"
-  if [ -z "${QUESTION_START[$tid]:-}" ]; then
-    QUESTION_START[$tid]="$SECONDS"
-    printf '%s\n' "$tid" >"$HARNESS_DIR/active_question.txt"
-    echo "P5 harbor: -p ${unit_task_path} -a icode_harbor_agent:ICodeAgent -m ${DEEPSEEK_MODEL}"
-    echo "P5 harbor: --jobs-dir $jobs (attempts 1-${N_ROLLOUTS})"
+  if [ -n "${REPO_CANDIDATES:-}" ]; then
+    cmd+=(--ae "MAC_K3D_REPO_CANDIDATES=$REPO_CANDIDATES")
   fi
-  echo "P5 harbor: task=$tid attempt=$attempt slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
+}
+
+# Every selected task's declared repo, colon separated and deduplicated. One
+# Harbor job covers them all, so the trial picks the one its own image has.
+# The declared base commit is checked host-side in P7 instead, where the task id
+# of each trial is known.
+declared_repo_candidates() {
+  local tid declared repo_decl base_decl out=""
+  for tid in "${TASK_IDS[@]}"; do
+    declared="$(python3 "$PIPELINE_LIB/capture_receipt.py" declared-repo \
+      --task-dir "$TASKS_DIR/$tid" --benchmark "${BENCHMARK:-deepswe}")" || declared=""
+    { read -r repo_decl; read -r base_decl; } <<<"$declared" || true
+    [ -n "$repo_decl" ] || continue
+    case ":${out}:" in
+      *":${repo_decl}:"*) continue ;;
+    esac
+    if [ -n "$out" ]; then out="${out}:${repo_decl}"; else out="$repo_decl"; fi
+  done
+  printf '%s' "$out"
+}
+
+# One Harbor job for every selected task x rollout. Harbor schedules them.
+run_harbor() {
+  local tid rc rewards
+  for tid in "${TASK_IDS[@]}"; do
+    ensure_task_ready "$tid"
+  done
+  REPO_CANDIDATES="$(declared_repo_candidates)"
+  mkdir -p "$JOBS_DIR"
+  printf '%s\n' "$JOBS_DIR" >"$HARNESS_DIR/harbor_jobs_dir.txt"
+  build_run_cmd
+  echo "P5 harbor: -p ${unit_task_path} tasks=${#TASK_IDS[@]} -k ${N_ROLLOUTS} -n ${EVAL_SLOTS} (${NEEDED} trials)"
+  echo "P5 harbor: --jobs-dir $JOBS_DIR log=$unit_log"
+  [ -z "$REPO_CANDIDATES" ] || echo "P5 harbor: declared repos $REPO_CANDIDATES"
+  write_progress
   (
-    cd "$run_dir"
+    while true; do
+      sleep 60
+      python3 "$PIPELINE_LIB/eval_progress.py" heartbeat \
+        --progress "$HARNESS_DIR/progress.json" --elapsed "$SECONDS" || true
+      python3 "$PIPELINE_LIB/task_resources.py" sample \
+        --harness-dir "$HARNESS_DIR" --slots "$EVAL_SLOTS" || true
+      write_progress || true
+    done
+  ) &
+  heartbeat_pid=$!
+  set +e
+  (
+    cd "$unit_run_dir"
     export PYTHONPATH="$PIPELINE_LIB${PYTHONPATH:+:$PYTHONPATH}"
     export PYTHONUNBUFFERED=1
     if command -v stdbuf >/dev/null 2>&1; then
@@ -457,139 +440,36 @@ start_unit() {
     else
       "${cmd[@]}"
     fi
-  ) >>"$log" 2>&1 &
-  local pid=$!
-  UNIT_SPEC[$pid]="${tid}:${attempt}"
-  UNIT_JOBS[$pid]="$jobs"
-  UNIT_LOG[$pid]="$log"
-  if [ -n "$ASSIGNED" ]; then
-    ASSIGNED="${ASSIGNED},${tid}:${attempt}"
-  else
-    ASSIGNED="${tid}:${attempt}"
+  ) 2>&1 | tee -a "$unit_log"
+  rc="${PIPESTATUS[0]}"
+  set -e
+  kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+  cat "$unit_log" >>"$HARNESS_DIR/harbor.log" || true
+  if grep -Eiq 'No such option|unexpected argument|unrecognized arguments' "$unit_log"; then
+    die "harbor CLI rejected flags (see $unit_log). Not recording as a successful stage."
   fi
-  if [ -n "$INFLIGHT" ]; then
-    INFLIGHT="${INFLIGHT},${tid}:${attempt}"
-  else
-    INFLIGHT="${tid}:${attempt}"
+  echo "$rc" >"$HARNESS_DIR/exit_code.txt"
+  LAST_RC="$rc"
+  rewards="$(find "$JOBS_DIR" -name reward.json -type f 2>/dev/null | wc -l | tr -d ' ')"
+  echo "P5 harbor: ${rewards:-0}/${NEEDED} trials scored (exit $rc)"
+  if [ "${rewards:-0}" -eq 0 ]; then
+    echo "WARNING: no reward.json under $JOBS_DIR (unscored / no-response; see $unit_log)"
+  elif [ "$rc" -ne 0 ]; then
+    echo "WARNING: harbor run exited $rc. Rewards are present; treating them as scores."
   fi
-  UNIT_START[$pid]="$SECONDS"
-  STARTED_UNITS=$((STARTED_UNITS + 1))
-}
-
-drop_inflight() {
-  local spec="$1"
-  local out="" part
-  IFS=',' read -r -a parts <<<"$INFLIGHT"
-  for part in "${parts[@]}"; do
-    [ "$part" = "$spec" ] && continue
-    [ -z "$part" ] && continue
-    if [ -n "$out" ]; then
-      out="${out},${part}"
-    else
-      out="$part"
-    fi
+  if grep -Eiq \
+    'out of memory|Cannot allocate memory|oom-kill|oom_kill|exit(ed)?[[:space:]]+(with[[:space:]]+)?(status|code)[[:space:]]*137([^0-9]|$)|ExitCode[=:[:space:]]*137([^0-9]|$)' \
+    "$unit_log"; then
+    echo "WARNING: a trial hit the memory ceiling. EVAL_SLOTS=$EVAL_SLOTS came from CPU_LOCK_QTY and the declared memory; lower CPU_LOCK_QTY or give the worker more RAM."
+  fi
+  for tid in "${TASK_IDS[@]}"; do
+    python3 "$PIPELINE_LIB/provenance.py" record-image \
+      --inputs "$WORKDIR/eval_protocol_inputs.json" \
+      --task-id "$tid" \
+      --task-toml "$TASKS_DIR/${tid}/task.toml" || true
   done
-  INFLIGHT="$out"
-}
-
-reap_finished() {
-  local pid spec jobs log rc reward waited=0
-  for pid in "${!UNIT_SPEC[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      continue
-    fi
-    waited=1
-    set +e
-    wait "$pid"
-    rc=$?
-    set -e
-    spec="${UNIT_SPEC[$pid]}"
-    jobs="${UNIT_JOBS[$pid]}"
-    log="${UNIT_LOG[$pid]}"
-    start_s="${UNIT_START[$pid]:-0}"
-    unset 'UNIT_SPEC[$pid]'
-    unset 'UNIT_JOBS[$pid]'
-    unset 'UNIT_LOG[$pid]'
-    unset 'UNIT_START[$pid]'
-    drop_inflight "$spec"
-    DONE_UNITS=$((DONE_UNITS + 1))
-    if [ "$SECONDS" -ge "$start_s" ]; then
-      DUR_SUM=$((DUR_SUM + SECONDS - start_s))
-      DUR_N=$((DUR_N + 1))
-    fi
-    cat "$log" >>"$HARNESS_DIR/harbor.log" || true
-    if grep -Eiq 'No such option|unexpected argument|unrecognized arguments' "$log"; then
-      die "harbor CLI rejected flags (see $log). Not recording as a successful stage."
-    fi
-    echo "$rc" >"$HARNESS_DIR/exit_code.txt"
-    if [ "$rc" -ne 0 ]; then
-      LAST_RC="$rc"
-    fi
-    tid="${spec%%:*}"
-    attempt="${spec##*:}"
-    att_tag="$(printf '%02d' "$attempt")"
-    job_name="${tid}_icode_${BUILD_NUMBER:-local}_a${att_tag}"
-    if [ "${BENCHMARK:-deepswe}" = "lolbench" ]; then
-      job_name="${tid}_icode_union_${BUILD_NUMBER:-local}_a${att_tag}"
-    fi
-    reward="$(find "$jobs/$job_name" -name reward.json -type f -print -quit 2>/dev/null || true)"
-    if [ -z "$reward" ]; then
-      echo "WARNING: no reward.json for $spec (unscored / no-response; see $log)"
-    else
-      echo "OK unit=$spec"
-      if [ "$rc" -ne 0 ]; then
-        echo "WARNING: harbor run exited $rc for $spec. reward.json present; treating as a score."
-      fi
-    fi
-    # OOM detect: require exit/status context for 137 so Harbor f2p totals like
-    # "137 passed" / table cell "137" are not false positives. Only skip remaining
-    # attempts when this unit has no reward.json (real unscored OOM).
-    if [ -z "$reward" ] && grep -Eiq \
-      'out of memory|Cannot allocate memory|oom-kill|oom_kill|exit(ed)?[[:space:]]+(with[[:space:]]+)?(status|code)[[:space:]]*137([^0-9]|$)|ExitCode[=:[:space:]]*137([^0-9]|$)' \
-      "$log"; then
-      echo "P5 harbor: skip question=$tid (out of memory); continuing"
-      if ! grep -qx "$tid" "$HARNESS_DIR/skipped_questions.txt" 2>/dev/null; then
-        echo "$tid" >>"$HARNESS_DIR/skipped_questions.txt"
-      fi
-      local rest
-      for rest in $(seq 1 "$N_ROLLOUTS"); do
-        case ",${ASSIGNED}," in
-          *",${tid}:${rest},"*) continue ;;
-        esac
-        if [ -n "$ASSIGNED" ]; then
-          ASSIGNED="${ASSIGNED},${tid}:${rest}"
-        else
-          ASSIGNED="${tid}:${rest}"
-        fi
-        STARTED_UNITS=$((STARTED_UNITS + 1))
-        DONE_UNITS=$((DONE_UNITS + 1))
-      done
-    fi
-    if [ -z "$INFLIGHT" ]; then
-      start_q="${QUESTION_START[$tid]:-$SECONDS}"
-      elapsed=$((SECONDS - start_q))
-      if [ "$elapsed" -lt 0 ]; then
-        elapsed=0
-      fi
-      span="$((elapsed % 60))s"
-      if [ "$elapsed" -ge 60 ]; then
-        span="$((elapsed / 60))m $((elapsed % 60))s"
-      fi
-      echo "P5 harbor: question=$tid rollouts=${N_ROLLOUTS}/${N_ROLLOUTS} time=$span"
-      python3 "$PIPELINE_LIB/provenance.py" record-image \
-        --inputs "$WORKDIR/eval_protocol_inputs.json" \
-        --task-id "$tid" \
-        --task-toml "$TASKS_DIR/${tid}/task.toml" || true
-      python3 "$PIPELINE_LIB/eval_slots.py" flush \
-        --question "${spec%%:*}" \
-        --slots "${EVAL_SLOTS:-0}" \
-        --memory-mb "${EVAL_MEMORY_MB:-0}" \
-        --benchmark "${BENCHMARK:-deepswe}" \
-        --workdir "$WORKDIR" || true
-      rm -f "$HARNESS_DIR/active_question.txt"
-    fi
-  done
-  return "$waited"
+  write_progress
 }
 
 masked_cmd() {
@@ -630,7 +510,6 @@ run_canary() {
   if [ -n "${CANARY_ALLOW_HOST:-}" ]; then
     echo "WARNING: CANARY_ALLOW_HOST=$CANARY_ALLOW_HOST opens that host for the canary only; the canary must fail"
   fi
-  live_slots || die "eval_slots.py failed"
   for tid in "${targets[@]}"; do
     ensure_task_ready "$tid"
     spec="$(canary_spec "$tid")"
@@ -666,10 +545,10 @@ run_canary() {
   echo "P5 canary: pass (${#targets[@]} tasks, report $CANARY_DIR/report.md)"
 }
 
-# MAC_K3D_P5_DRY_RUN=1: print the first unit's harbor command with secret values masked; run nothing.
+# MAC_K3D_P5_DRY_RUN=1: print the harbor command with secret values masked; run nothing.
 if [ "${MAC_K3D_P5_DRY_RUN:-0}" = 1 ]; then
-  live_slots || die "eval_slots.py failed"
-  build_unit_cmd "${TASK_IDS[0]}" 1
+  REPO_CANDIDATES="$(declared_repo_candidates)"
+  build_run_cmd
   echo "P5 harbor dry-run (cwd $unit_run_dir): $(masked_cmd)"
   if [ "$CANARY_MODE" != off ]; then
     build_canary_cmd "${TASK_IDS[0]}" "$(canary_spec "${TASK_IDS[0]}")"
@@ -686,42 +565,7 @@ if [ "$CANARY_MODE" = only ]; then
   exit 0
 fi
 
-echo "P5 harbor: one question's rollouts together; next question after they exit; heartbeats every 60s"
-write_progress
-(
-  while true; do
-    sleep 60
-    python3 "$PIPELINE_LIB/eval_progress.py" heartbeat --progress "$HARNESS_DIR/progress.json" --elapsed "$SECONDS" || true
-    python3 "$PIPELINE_LIB/eval_slots.py" sample \
-      --workdir "$WORKDIR" \
-      --slots "${EVAL_SLOTS:-0}" \
-      --memory-mb "${EVAL_MEMORY_MB:-0}" \
-      --benchmark "${BENCHMARK:-deepswe}" || true
-  done
-) &
-heartbeat_pid=$!
-
-while [ "$STARTED_UNITS" -lt "$NEEDED" ] || [ "${#UNIT_SPEC[@]}" -gt 0 ]; do
-  live_slots || die "eval_slots.py failed"
-  write_progress
-  while [ "${#UNIT_SPEC[@]}" -lt "$EVAL_SLOTS" ] && [ "$STARTED_UNITS" -lt "$NEEDED" ]; do
-    unit="$(next_work_unit || true)"
-    [ -n "$unit" ] || break
-    start_unit $unit
-    write_progress
-  done
-  if [ "${#UNIT_SPEC[@]}" -eq 0 ]; then
-    break
-  fi
-  set +e
-  wait -n
-  set -e
-  reap_finished || true
-  write_progress
-done
-
-kill "$heartbeat_pid" 2>/dev/null || true
-wait "$heartbeat_pid" 2>/dev/null || true
+run_harbor
 icode_reclaim_host_tree "$HOST_ICODE"
 
 DURATION="$SECONDS"

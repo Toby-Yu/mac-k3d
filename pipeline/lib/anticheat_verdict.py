@@ -34,7 +34,7 @@ from anticheat_similarity import (
 from anticheat_transcript import RULE_SEVERITY, scan
 from harness_labels import labels_for
 from harness_labels import load as load_labels
-from score_results import attempt_index, find_harbor_task_dir, load_json, parse_reward_value, trial_dirs
+from score_results import attempt_index, harbor_task_trials, load_json, parse_reward_value
 
 SCHEMA = "mac-k3d-anticheat-v1"
 VERDICTS = ("clean", "flagged", "rejected")
@@ -349,8 +349,7 @@ def run_live(args: argparse.Namespace) -> int:
     overrides = load_overrides(harness / "anticheat_overrides.json")
     docs = []
     for tid in ids:
-        job = find_harbor_task_dir(harness, tid)
-        for n, trial in enumerate(trial_dirs(job if job is not None else harness / tid), start=1):
+        for n, trial in enumerate(harbor_task_trials(harness, tid), start=1):
             doc = apply_override(evaluate(ctx, tid, _attempt_number(trial, n), trial), overrides)
             (trial / "agent").mkdir(parents=True, exist_ok=True)
             (trial / "agent" / "anticheat.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
@@ -366,9 +365,8 @@ def run_live(args: argparse.Namespace) -> int:
 
 
 def _harbor_trials(harbor_runs: Path, tid: str) -> dict[int, Path]:
-    job = find_harbor_task_dir(harbor_runs, tid)
     out: dict[int, Path] = {}
-    for n, trial in enumerate(trial_dirs(job), start=1):
+    for n, trial in enumerate(harbor_task_trials(harbor_runs, tid), start=1):
         out.setdefault(_attempt_number(trial, n), trial)
     return out
 

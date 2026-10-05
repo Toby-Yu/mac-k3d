@@ -158,13 +158,11 @@ def _missing_attempt() -> dict:
 
 def harness_task_attempts(harness_dir: Path, tid: str, n_rollouts: int = 0) -> list[dict]:
     """Attempts in `_aNN` order. A missing slot stays put as no-response, not shifted to the end."""
-    from score_results import attempt_index, find_harbor_task_dir, trial_dirs
+    from score_results import attempt_index, harbor_task_trials
 
-    job = find_harbor_task_dir(harness_dir, tid)
-    root = job if job is not None else harness_dir / tid
     indexed: dict[int, dict] = {}
     loose: list[dict] = []
-    for trial in trial_dirs(root):
+    for trial in harbor_task_trials(harness_dir, tid):
         reward = trial / "verifier" / "reward.json"
         if not reward.is_file():
             reward = trial / "reward.json"
@@ -848,12 +846,10 @@ def backup_run(
     verdicts = harness_dir / "anticheat"
     if verdicts.is_dir():
         shutil.copytree(verdicts, dest / "anticheat", dirs_exist_ok=True)
-    from score_results import find_harbor_task_dir, trial_dirs
+    from score_results import harbor_task_trials
 
     for tid in task_ids:
-        job = find_harbor_task_dir(harness_dir, tid)
-        root = job if job is not None else harness_dir / tid
-        for index, trial in enumerate(trial_dirs(root), start=1):
+        for index, trial in enumerate(harbor_task_trials(harness_dir, tid), start=1):
             _copy_trial_files(trial, dest / "icode" / tid / f"attempt-{index:02d}")
     return dest
 
@@ -946,7 +942,7 @@ def main() -> int:
         print(f"wrote {path}")
         return 0
     n_rollouts = args.n_rollouts or int(os.environ.get("N_ROLLOUTS") or "1")
-    concurrency = args.concurrency or int(os.environ.get("EVAL_PARALLEL") or "1")
+    concurrency = args.concurrency or int(os.environ.get("EVAL_SLOTS") or "1")
     cpus_each = args.cpus_each or int(os.environ.get("EVAL_CPUS_EACH") or "1")
     ids = [ln.strip() for ln in Path(args.task_file).read_text(encoding="utf-8").splitlines() if ln.strip()]
     run_id = args.run_id

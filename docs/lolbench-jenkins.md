@@ -1,12 +1,19 @@
 # LoLBench Jenkins Job Design
 
-**What `config` writes today:** three separate runners, all iCode + DeepSeek catalog model (Jenkins **DEEPSEEK_MODEL** choice: `deepseek-v4-pro` default, or `deepseek-flash`):
+**What `config` writes today:** ten jobs — three shapes for each of three benchmarks, plus one shared aggregator. All are iCode + DeepSeek catalog model (Jenkins **DEEPSEEK_MODEL** choice: `deepseek-v4-pro` default, or `deepseek-flash`).
 
-- **`deepswe_one_task`** — DeepSWE only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent` + worker `*-full-*` drop.
-- **`lolbench_one_task`** — LoLBench only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent` + the same `DEEPSEEK_MODEL` catalog. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop. LoLBench's in-repo gitcode clone is not used. First run: `uv tool install harbor` if missing; on x86_64, P5 builds or retags the task image (Hub tags are arm64-only). After iCode exits, `pipeline/lib/icode_capture.sh` runs `lolbench-submit` before committing (the script diffs against the index, so a commit first leaves an empty patch). If its output differs from `git diff --binary <base>` (for example when the agent committed), the standard patch replaces it. Every trial gets `agent/capture.json`, and P7 checks that `solution.patch` matches it.
-- **`swebenchpro_one_task`** — SWE-bench Pro only. P5 = `harbor run` + `icode_harbor_agent:ICodeAgent`, same as DeepSWE. Each task is a Harbor `task.toml` whose image is `jefzda/sweap-images:…`. The verifier scores official `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are large; use one `TASK` (`instance_id`).
+Per benchmark, `<benchmark>_one_task` (1 question x 1 rollout), `<benchmark>_some_task` (`N_TASKS` questions x `N_ROLLOUTS`) and `<benchmark>_full_suite_task` (a dispatcher) share one Jenkinsfile and differ only in their parameter defaults. Which to pick: [evaluation.md](evaluation.md#which-job-to-run).
 
-Operator start: [user-guide.md](user-guide.md). Jenkinsfile still only calls `pipeline/stages/run_all.sh` (Harbor stays in P5, not in job XML).
+- **DeepSWE** — P5 = one `harbor run` + `icode_harbor_agent:ICodeAgent` + worker `*-full-*` drop.
+- **LoLBench** — same P5 and the same `DEEPSEEK_MODEL` catalog. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop. LoLBench's in-repo gitcode clone is not used. First run: `uv tool install harbor` if missing; on x86_64, P5 builds or retags the task image (Hub tags are arm64-only). After iCode exits, `pipeline/lib/icode_capture.sh` runs `lolbench-submit` before committing (the script diffs against the index, so a commit first leaves an empty patch). If its output differs from `git diff --binary <base>` (for example when the agent committed), the standard patch replaces it. Every trial gets `agent/capture.json`, and P7 checks that `solution.patch` matches it.
+- **SWE-bench Pro** — same P5 as DeepSWE. Each task is a Harbor `task.toml` whose image is `jefzda/sweap-images:…`. The verifier scores official `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are large; use one `TASK` (`instance_id`) on a first run.
+- **`eval_aggregate`** — merges shards from one `RUN_GROUP` into a single report. No iCode, no Docker, no core lock.
+
+Operator start: [user-guide.md](user-guide.md). The Jenkinsfile clones mac-k3d at `MAC_K3D_GIT_REF` and calls `pipeline/stages/run_all.sh` from that clone, once per phase (`prepare`, `evaluate`, `report`); Harbor stays in P5, not in job XML.
+
+**The "wrapper job" this page calls a non-goal now exists.** `<benchmark>_full_suite_task` is that wrapper: it runs on `agent none`, slices the sorted question list into `SHARDS` contiguous ranges, triggers that many `_some_task` builds in parallel with a `TASK_OFFSET` each, then triggers `eval_aggregate`. It does not queue one build per rollout — Harbor expands rollouts inside a single build. Design: [architecture.md](architecture.md#evaluation-architecture).
+
+Two more things on this page are stale by design. The `lock(label: 'CPU_CORES', quantity: 4)` in the example Jenkinsfile is **not** what ships: eval builds lock `label: env.NODE_NAME` so a build can only hold its own worker's cores. And resources are per worker, named `<agent>-core-1..N`, carrying both the shared label and the agent name.
 
 The rest of this page is an earlier **opencode / OpenRouter** Harbor design. That Jenkinsfile is **not** the current job. Current LoLBench eval is iCode + DeepSeek via Harbor as above.
 

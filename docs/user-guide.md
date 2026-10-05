@@ -9,11 +9,13 @@ Two different downloads:
 
 Prefer **v0.5.2** Latest (or this checkout’s `cargo build --release`). **v0.5.1** DeepSWE Pier used the wrong iCode CLI and often exited in ~20s. **v0.5.0** still has the old P3: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1+.
 
-Eval jobs are three benchmarks, all Harbor + iCode + DeepSeek catalog model (default `deepseek-v4-pro`; also `deepseek-flash`), one `TASK` per build. P1 installs `harbor` if it is missing. Release and git mount that iCode the same way and run one `icode run` per rollout with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`. The Jenkins model choice stays the catalog id. The report labels it `openai/<id>` and records the real provider and reasoning effort under `eval_protocol`.
+Eval jobs cover three benchmarks, all Harbor + iCode + DeepSeek catalog model (default `deepseek-v4-pro`; also `deepseek-flash`). P1 installs `harbor` if it is missing. Release and git mount that iCode the same way and run one `icode run` per rollout with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`. The Jenkins model choice stays the catalog id. The report labels it `openai/<id>` and records the real provider and reasoning effort under `eval_protocol`.
 
-- **`deepswe_one_task`** — DeepSWE via **Harbor** (`icode_harbor_agent:ICodeAgent`). Same worker `icode-*-full-*` bind-mount and the same iCode CLI (`run -t … -C … -a code --json`).
-- **`lolbench_one_task`** — LoLBench via **Harbor** (same agent; bind-mounts the same worker drop). Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, P5 builds or retags a local image (do not use Harbor `--force-build`).
-- **`swebenchpro_one_task`** — SWE-bench Pro via **Harbor**. P2 writes a task whose image is `jefzda/sweap-images:…`. The verifier scores `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are 1–3 GB each; first live job should set **one** `TASK` (`instance_id`).
+- **DeepSWE** via **Harbor** (`icode_harbor_agent:ICodeAgent`). Same worker `icode-*-full-*` bind-mount and the same iCode CLI (`run -t … -C … -a code --json`).
+- **LoLBench** via **Harbor** (same agent; bind-mounts the same worker drop). Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, P5 builds or retags a local image (do not use Harbor `--force-build`).
+- **SWE-bench Pro** via **Harbor**. P2 writes a task whose image is `jefzda/sweap-images:…`. The verifier scores `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are 1–3 GB each; first live job should set **one** `TASK` (`instance_id`).
+
+Each benchmark has three job shapes. Start with `_one_task` (one question, one rollout), use `_some_task` for a handful of questions, and `_full_suite_task` for the whole suite — it splits the work across workers and merges the results. Details: [evaluation.md](evaluation.md#which-job-to-run).
 
 Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
 
@@ -54,7 +56,7 @@ cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 # When asked for CI secrets, enter the DeepSeek key as credential deepseek-api-key
 mac-k3d setup -c ~/.config/mac-k3d/config.yaml
 
-# Confirm Jenkins and jobs deepswe_one_task + lolbench_one_task on this VM
+# Confirm Jenkins and the eval jobs on this VM
 JENKINS_URL=http://127.0.0.1:17070 ./scripts/env_set_up/02_check_controller.sh
 ```
 
@@ -158,7 +160,7 @@ Rebuild/extract pipeline on the worker (`mac-k3d eval --stage p0` or `config`) s
 
 ### Jenkins UI (recommended)
 
-1. Open `http://CONTROLLER_IP:17070` → job **`deepswe_one_task`**, **`lolbench_one_task`**, or **`swebenchpro_one_task`** (all Harbor + iCode). One `TASK` per build. Do not flip `BENCHMARK` across jobs.
+1. Open `http://CONTROLLER_IP:17070` → job **`<benchmark>_one_task`** for a first run (all Harbor + iCode). Do not flip `BENCHMARK` across jobs. For more than one question use `<benchmark>_some_task`, and for the whole suite `<benchmark>_full_suite_task`.
 2. **Build with Parameters**:
 
 | Field | Value |
@@ -173,8 +175,8 @@ Rebuild/extract pipeline on the worker (`mac-k3d eval --stage p0` or `config`) s
 | ICODE_GIT_REF | **git:** branch name, tag, commit SHA, or pull-request number when KIND is `pr`. **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required. |
 | ICODE_GIT_REF_KIND | **git:** pick `branch`, `tag`, `commit`, or `pr` (no auto). **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF. |
 | AGENT_LABEL | `lolbench` |
-| CPU_LOCK_QTY | `4` (cores reserved; that many question/rollout containers may run). See [optimization.md](optimization.md). |
-| MAC_K3D_ROOT | empty |
+| CPU_LOCK_QTY | `4` (cores reserved on the node this build lands on). How that becomes Harbor slots: [optimization.md](optimization.md). |
+| MAC_K3D_GIT_URL / MAC_K3D_GIT_REF / MAC_K3D_GIT_REF_KIND | Leave the defaults (`…/mac-k3d.git`, `main`, `branch`) for a normal run. To test your own branch, set REF to the branch name; to reproduce an old build, set KIND to `commit` and paste its `pipeline.commit`. See [workflow.md](workflow.md#development-loop-test-a-commit-not-a-path). |
 | DEEPSEEK_MODEL | `deepseek-v4-pro` (catalog default; or `deepseek-flash`). iCode sends this id to `https://api.deepseek.com/v1` with provider `DeepSeek` and reasoning effort `high` |
 
 Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND`. The archived JSON includes `icode_git` (resolved SHA + subject). Full split: [icode-harness-inputs.md](icode-harness-inputs.md).
@@ -189,6 +191,7 @@ Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --yes
 
 ```bash
 # Queue deepswe_one_task on the controller. Uses worker.yaml when config.yaml is absent.
+# A multi-question run goes through the UI: pick _some_task or _full_suite_task.
 # Does not run Harbor on this shell — watch Jenkins Console Output.
 export PATH="$HOME/.local/bin:$PATH"
 # Git mode still queues with --yes:

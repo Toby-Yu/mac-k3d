@@ -75,7 +75,7 @@ python3 "$PIPELINE_LIB/render_report.py" \
   --api-base "$API_BASE" \
   --run-id "$RUN_ID" \
   --n-rollouts "${N_ROLLOUTS:-1}" \
-  --concurrency "${EVAL_PARALLEL:-1}" \
+  --concurrency "${EVAL_SLOTS:-1}" \
   --cpus-each "${EVAL_CPUS_EACH:-1}" \
   --workdir "$WORKDIR" \
   --utc "$UTC" \

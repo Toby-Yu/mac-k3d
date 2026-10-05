@@ -571,7 +571,11 @@ def report_html(doc: dict) -> str:
         ["Macro Pass@1 (±CI)", _macro_cell(macro, ci), _macro_cell(macro_scored, ci_scored)],
     ]
     for k in range(1, n_rollouts + 1):
-        metric_rows.append([f"Pass@{k}", _fmt_pct(_pass_k(arm, k)), _fmt_pct(_pass_k_scored(arm, k))])
+        # Pass@1 is the first attempt alone, not an average over the rollouts.
+        # Macro Pass@1 one row above is the average; saying so here stops the
+        # two being read as the same number.
+        label = "Pass@1 (first rollout only)" if k == 1 else f"Pass@{k}"
+        metric_rows.append([label, _fmt_pct(_pass_k(arm, k)), _fmt_pct(_pass_k_scored(arm, k))])
     unscored_rollouts = arm.get("unscored_rollouts")
     all_scored = isinstance(unscored_rollouts, int) and not isinstance(unscored_rollouts, bool) and unscored_rollouts == 0
     any_cell = DASH if any_pass is None else f"{_fmt_pct(any_pass)} ({hits}/{n_tasks})"
@@ -778,7 +782,7 @@ table.outcomes th, table.outcomes td {{ white-space: nowrap; }}
 <div class="kpis">{kpi_html}</div>
 {provenance_html}
 <h2>Pass@k ladder</h2>
-<p class="source">Pass@1..k (padded, missing=fail): missing attempt counts as not resolved; n is N_ROLLOUTS. Pass@1..k (scored-only, missing omitted): only attempts with reward.json. Macro Pass@1 = mean of c/n (padded) or c_scored/n_scored.</p>
+<p class="source">Pass@1..k (padded, missing=fail): missing attempt counts as not resolved; n is N_ROLLOUTS. Pass@1..k (scored-only, missing omitted): only attempts with reward.json. Pass@1 is the first rollout of each question on its own; Macro Pass@1 = mean of c/n (padded) or c_scored/n_scored, which averages every rollout and is the number to compare across runs.</p>
 <div class="card">
 {pass_chart}
 {pass_legend}

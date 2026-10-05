@@ -128,7 +128,8 @@ controller:
   serviceType: LoadBalancer
   installLatestPlugins: true
   additionalPlugins:
-    - lockable-resources   # CPU_CORES capacity locks for workers
+    - lockable-resources   # per-worker <agent>-core-N capacity locks
+    - copyartifact         # eval_aggregate pulls each shard's trials by RUN_GROUP
 ```
 
 Chart defaults still install kubernetes, workflow-aggregator, git, and configuration-as-code.

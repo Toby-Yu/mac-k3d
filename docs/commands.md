@@ -40,7 +40,7 @@ Global `-c / --config` is honored.
 
 If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
 
-Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **`deepswe_one_task`**, **`lolbench_one_task`**, and **`swebenchpro_one_task`** (same P0–P8 pipeline; pick the job or `--benchmark`).
+Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **ten** jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**, plus the shared **`eval_aggregate`**. They share the P0–P8 pipeline; pick the job or `--benchmark`. Which shape to use: [evaluation.md](evaluation.md#which-job-to-run).
 
 ---
 
@@ -79,11 +79,31 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 | `--icode-git-ref-kind KIND` | `branch` (default), `tag`, `commit` (PR SHA), or `pr` (pull-request number). Leftover `auto` still maps: 7–40 hex → commit, else branch |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
 | `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-v4-pro` (default) or `deepseek-flash`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`; the HTTP model id stays this catalog id |
-| `--yes` | Skip prompts: Jenkins `deepswe_one_task` or `lolbench_one_task` unless `--local`. Git `--yes` queues the job. Release `--yes` prints UI upload instructions (cannot attach `ICODE_RELEASE_FILE`). Also skips the git PAT prompt |
+| `--yes` | Skip prompts: Jenkins `<benchmark>_one_task` unless `--local`. Git `--yes` queues the job. Release `--yes` prints UI upload instructions (cannot attach `ICODE_RELEASE_FILE`). Also skips the git PAT prompt |
 
 Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.
 
 v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-v4-pro` (default) and `deepseek-flash`. Benchmark is `deepswe`, `lolbench`, or `swebenchpro`. Output: `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, with `summary.md` and `report.html` in that folder, and a checkout backup at `output/<benchmark>/<same run folder>.tar.gz`. Field glossary: [evaluation.md](evaluation.md). Slot packing: [optimization.md](optimization.md).
+
+There is no `--sync-pipeline`. A Jenkins build clones mac-k3d at `MAC_K3D_GIT_REF` and runs `pipeline/` from that clone, so the pipeline under test is always a named commit — see the development loop in [workflow.md](workflow.md#development-loop-test-a-commit-not-a-path). `--stage` and `--local` still run the working tree directly, which is the fast path for a fixture-level change.
+
+### Jenkins job parameters
+
+Beyond the iCode and model parameters above, every eval job takes:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `MAC_K3D_GIT_URL` | `https://github.com/Toby-Yu/mac-k3d.git` | repo the worker clones to get `pipeline/` |
+| `MAC_K3D_GIT_REF` | `main` | branch, tag, commit SHA, or PR number |
+| `MAC_K3D_GIT_REF_KIND` | `branch` | `branch` \| `tag` \| `commit` \| `pr`. `OFFICIAL=1` requires `commit` |
+| `N_TASKS` | per shape | questions to run when `TASK` and `TASKS` are empty |
+| `TASK_OFFSET` | `0` | skip the first N sorted ids; how the dispatcher gives each shard a disjoint slice |
+| `N_ROLLOUTS` | per shape | attempts per question (Harbor's `-k`) |
+| `CPU_LOCK_QTY` | `4` | cores this build reserves on its own node |
+| `RUN_GROUP` | empty | set by the dispatcher; when non-empty the build archives its trials for `eval_aggregate` |
+| `SHARDS` | `0` | `full_suite_task` only. `0` derives it from registered cores / declared per-task CPUs |
+
+`eval_aggregate` takes `BENCHMARK`, `RUN_GROUP`, `SHARD_JOB` and `N_ROLLOUTS`, and needs no iCode, Docker or core lock — it only merges.
 
 ---
 
@@ -143,7 +163,7 @@ If `config.yaml` already exists and stdin is a TTY, `prepare` (without `-i`) pro
 3. **Role**: standalone / controller / worker; set `jenkins.enabled` for controller.
 4. **Dependencies**: discover Docker Desktop, k3d, kubectl, helm, Harbor (`uv`/`pipx`), Java; prompt to use existing, specify path, or install.
 5. **LoLBench**: prefer a found checkout; otherwise print `git clone` / release unpack commands and optionally clone.
-6. **Resources**: controller → ensure `CPU_CORES` Lockable Resources label; worker → Jenkins URL, download `agent.jar`, optional API registration, capacity = logical CPU cores.
+6. **Resources**: controller → ensure the `CPU_CORES` Lockable Resources label; worker → Jenkins URL, download `agent.jar`, optional API registration, capacity = logical CPU cores. A worker's resources are named `<agent>-core-1..N` and carry **both** the shared label and the agent name, so a build can lock `label: env.NODE_NAME` and get only its own node's cores. `numExecutors` is set to the core count.
 7. **Disk check**: fail if free space on storage volume is below role minimum (standalone 40 GB, controller 60 GB, worker 40 GB). RAM preflight is 8 GB.
 8. Write `~/.config/mac-k3d/config.yaml` and run validation.
 

@@ -92,7 +92,24 @@ def _gold_binary(tasks_dir: Path, tid: str) -> set[str]:
         return set()
 
 
-def trial_flags(trial: Path, benchmark: str, gold_binary: set[str]) -> dict:
+def base_mismatch(receipt_base: str, declared_base: str) -> bool:
+    """True when the agent started from a commit the task did not declare.
+
+    The declared value may be abbreviated (``git diff abc1234``), so compare on
+    the shorter of the two. ``lolbench-base`` is a sentinel, not a commit, and
+    an empty side means there is nothing to check rather than a mismatch.
+    """
+    a = receipt_base.strip().lower()
+    b = declared_base.strip().lower()
+    if not a or not b or b == "lolbench-base":
+        return False
+    if not re.fullmatch(r"[0-9a-f]{7,40}", b) or not re.fullmatch(r"[0-9a-f]{7,40}", a):
+        return False
+    width = min(len(a), len(b))
+    return a[:width] != b[:width]
+
+
+def trial_flags(trial: Path, benchmark: str, gold_binary: set[str], declared_base: str = "") -> dict:
     """Flags for one trial: capture_missing, capture_error, capture_mismatch, patch_oversize."""
     flags: list[str] = []
     receipt_path = trial / "agent" / "capture.json"
@@ -127,6 +144,13 @@ def trial_flags(trial: Path, benchmark: str, gold_binary: set[str]) -> dict:
     extra_binary = sorted(receipt_binary - gold_binary)
     if receipt.get("oversize") or (receipt_bytes or 0) > OVERSIZE_BYTES or extra_binary:
         flags.append("patch_oversize")
+
+    # The agent env no longer carries the declared base, so the container cannot
+    # check it; task.toml is only readable here on the host.
+    receipt_base = str(receipt.get("base_sha") or "")
+    if base_mismatch(receipt_base, declared_base):
+        flags.append("base_commit_mismatch")
+
     return {
         "schema": FLAGS_SCHEMA,
         "benchmark": benchmark,
@@ -135,18 +159,20 @@ def trial_flags(trial: Path, benchmark: str, gold_binary: set[str]) -> dict:
         "receipt_bytes": receipt_bytes,
         "grader_patch": grader_info,
         "binary_not_in_gold": extra_binary,
+        "base_sha": receipt_base or None,
+        "declared_base": declared_base or None,
     }
 
 
 def annotate(harness_dir: Path, tasks_dir: Path, task_ids: list[str], benchmark: str) -> dict:
-    from score_results import find_harbor_task_dir, trial_dirs
+    from score_results import harbor_task_trials
 
     summary: dict[str, int] = {"trials": 0}
     for tid in task_ids:
         gold_binary = _gold_binary(tasks_dir, tid)
-        job = find_harbor_task_dir(harness_dir, tid)
-        for trial in trial_dirs(job):
-            result = trial_flags(trial, benchmark, gold_binary)
+        _, declared_base = declared_repo(tasks_dir / tid, benchmark)
+        for trial in harbor_task_trials(harness_dir, tid):
+            result = trial_flags(trial, benchmark, gold_binary, declared_base)
             result["task"] = tid
             summary["trials"] += 1
             for flag in result["flags"]:

@@ -109,6 +109,71 @@ def find_harbor_task_dir(harness_dir: Path, tid: str) -> Path | None:
     return max(candidates, key=_mtime)
 
 
+def trial_task_name(trial: Path) -> str:
+    """Task id a Harbor trial recorded for itself; empty when it recorded none."""
+    data = load_json(trial / "result.json")
+    if isinstance(data, dict):
+        for key in ("task_name", "task_id"):
+            got = data.get(key)
+            if isinstance(got, str) and got.strip():
+                return got.strip()
+    data = load_json(trial / "config.json")
+    if isinstance(data, dict):
+        path = (data.get("task") or {}).get("path") if isinstance(data.get("task"), dict) else None
+        if isinstance(path, str) and path.strip():
+            return Path(path.strip()).name
+    return ""
+
+
+def harbor_runs_root(harness_dir: Path) -> Path | None:
+    if harness_dir.name == "harbor_runs" and harness_dir.is_dir():
+        return harness_dir
+    runs = harness_dir / "harbor_runs"
+    return runs if runs.is_dir() else None
+
+
+def _trial_stamp(trial: Path) -> float:
+    newest = -1.0
+    for reward in trial.rglob("reward.json"):
+        try:
+            newest = max(newest, reward.stat().st_mtime)
+        except OSError:
+            pass
+    try:
+        newest = max(newest, trial.stat().st_mtime)
+    except OSError:
+        pass
+    return newest
+
+
+def harbor_task_trials(harness_dir: Path, tid: str) -> list[Path]:
+    """Trials for one task, oldest attempt first.
+
+    Builds up to PF.1 gave every task its own jobs dir named <tid>. One
+    ``harbor run`` per build has no such level, so fall back to the task each
+    trial recorded and keep only the newest build that ran it.
+    """
+    job = find_harbor_task_dir(harness_dir, tid)
+    if job is not None:
+        return trial_dirs(job)
+    runs = harbor_runs_root(harness_dir)
+    by_build: dict[Path, list[Path]] = {}
+    if runs is not None and tid:
+        for trial in trial_dirs(runs):
+            if trial_task_name(trial) != tid:
+                continue
+            try:
+                rel = trial.relative_to(runs)
+            except ValueError:
+                continue
+            build = runs / rel.parts[0] if rel.parts else runs
+            by_build.setdefault(build, []).append(trial)
+    if not by_build:
+        return trial_dirs(harness_dir / tid) if tid else []
+    newest = max(by_build, key=lambda b: max(_trial_stamp(t) for t in by_build[b]))
+    return by_build[newest]
+
+
 def find_scale_task_dir(harness_dir: Path, tid: str) -> Path | None:
     """SWE-bench Pro writes harness/<instance_id>/eval.json (and agent.patch)."""
     if not harness_dir.is_dir() or not tid:
@@ -595,6 +660,21 @@ def reward_files(job_dir: Path | None) -> list[Path]:
     return [path for _, path in found]
 
 
+def trial_reward_files(trials: list[Path]) -> list[Path]:
+    """One reward.json per trial, keeping the order the trials came in."""
+    out: list[Path] = []
+    for trial in trials:
+        for candidate in (trial / "verifier" / "reward.json", trial / "reward.json"):
+            if candidate.is_file():
+                out.append(candidate)
+                break
+        else:
+            nested = sorted(trial.rglob("reward.json"))
+            if nested:
+                out.append(nested[0])
+    return out
+
+
 def trial_dir_for_reward(path: Path) -> Path:
     if path.parent.name == "verifier":
         return path.parent.parent
@@ -646,12 +726,34 @@ def trial_dirs(job_dir: Path | None) -> list[Path]:
     return [trial for trial, _ in sorted(found.items(), key=lambda item: _attempt_sort_key(item[0], item[1]))]
 
 
+def trial_patch_bytes(trial: Path) -> int | None:
+    """Bytes the capture receipt recorded for this trial's patch; None when there is no receipt."""
+    doc = load_json(trial / "agent" / "capture.json")
+    if not isinstance(doc, dict):
+        return None
+    patch = doc.get("patch")
+    if not isinstance(patch, dict):
+        return None
+    got = patch.get("bytes")
+    return got if isinstance(got, int) and not isinstance(got, bool) else None
+
+
 def rates_for_trial(trial: Path) -> dict:
     rates = verifier_rates(trial)
     if rates["partial"] is None:
         derived = partial_from_counts(rates)
         if derived is not None:
             rates["partial"] = derived
+    # A trial that produced no patch leaves the repo untouched, so its P2P is
+    # not evidence that the agent broke anything. The verifier still reports
+    # 0/N for it (LoLBench sets applied=0, which cascades to build_ok=0), and
+    # averaging that in understates P2P. Drop it instead of counting it.
+    if trial_patch_bytes(trial) == 0:
+        rates["p2p"] = None
+        rates["p2p_pass"] = None
+        rates["p2p_total"] = None
+        rates["partial"] = None
+        rates["empty_patch"] = True
     return rates
 
 
@@ -731,7 +833,7 @@ def main() -> int:
         b_resolved = current_reward_resolved(baseline_dir / tid)
         bmeta = baseline_by_id.get(tid, {})
         trial_usage = find_icode_usage(hdir) if hdir is not None else None
-        files = reward_files(hdir if hdir is not None else harness_dir / tid)
+        files = trial_reward_files(harbor_task_trials(harness_dir, tid))
         attempts: list[dict] = []
         tok_in = tok_out = None
         token_source = "none"
@@ -749,7 +851,12 @@ def main() -> int:
                 resolved = False
             usage = find_icode_usage(trial)
             row_rates = rates_for_trial(trial)
-            if row_rates["f2p"] is None and row_rates["p2p"] is None and hdir is not None:
+            if (
+                row_rates["f2p"] is None
+                and row_rates["p2p"] is None
+                and not row_rates.get("empty_patch")
+                and hdir is not None
+            ):
                 row_rates = rates_for_trial(hdir)
             attempts.append(
                 {
@@ -774,6 +881,9 @@ def main() -> int:
                 "p2p_pass": _sum_counts(attempt_rates, "p2p_pass"),
                 "p2p_total": _sum_counts(attempt_rates, "p2p_total"),
             }
+            empty = sum(1 for row in attempt_rates if row.get("empty_patch"))
+            if empty:
+                rates["empty_patch_attempts"] = empty
             usages = [row["usage"] for row in attempts if row["usage"] is not None]
             if usages:
                 tok_in = sum(int(item.get("prompt") or 0) for item in usages)

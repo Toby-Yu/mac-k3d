@@ -1137,9 +1137,12 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
         text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertIn("icode_harbor_agent:ICodeAgent", text)
         self.assertIn("harbor run", text)
-        self.assertIn("cmd+=(-n 1)", text)
-        self.assertIn("cmd+=(-k 1)", text)
-        self.assertIn('cmd+=(--override-cpus "$EVAL_CPUS_EACH")', text)
+        # One run covers every selected task x rollout; Harbor schedules them.
+        self.assertIn('cmd+=(-k "$N_ROLLOUTS")', text)
+        self.assertIn('cmd+=(-n "$EVAL_SLOTS")', text)
+        # Declared cpus/memory stand unless an operator opts out on purpose.
+        self.assertNotIn('cmd+=(--override-cpus "$EVAL_CPUS_EACH")', text)
+        self.assertIn('if [ -n "${EVAL_OVERRIDE_CPUS:-}" ]; then', text)
         self.assertNotIn('TASK_ID="$tid"\n  break', text)
         self.assertIn("No such option", text)
         self.assertIn("selected_tasks", text)
@@ -1210,7 +1213,9 @@ exit 0
         self.assertLess(capture.find("lolbench-submit \"$REPO\""), capture.find('commit -q --no-verify -m "icode solution"'))
         self.assertIn("https://api.deepseek.com/v1", agent)
         stage = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
-        self.assertGreaterEqual(stage.count("icode_harbor_agent:ICodeAgent"), 2)
+        # One `harbor run` per build names the agent once; the canary names its own.
+        self.assertEqual(stage.count("icode_harbor_agent:ICodeAgent"), 1)
+        self.assertIn("canary_harbor_agent:CanaryAgent", stage)
         self.assertIn('cmd+=(--ae "ICODE_PROVIDER=${ICODE_PROVIDER}")', stage)
         self.assertIn('cmd+=(--ae "ICODE_API_BASE=${ICODE_API_BASE}")', stage)
         self.assertIn('cmd+=(--ae "ICODE_REASONING_EFFORT=${ICODE_REASONING_EFFORT}")', stage)
@@ -1688,22 +1693,66 @@ class SecretGuardTests(unittest.TestCase):
 
 
 class EvalReportTests(unittest.TestCase):
-    def test_parallel_degree_four_lock_is_four_slots(self):
+    def test_parallel_degree_reads_the_plan_p5_wrote(self):
+        """EVAL_SLOTS and EVAL_CPUS_EACH come from the applied plan, not a guess."""
         script = ROOT / "pipeline" / "lib" / "parallel_degree.sh"
-        proc = subprocess.run(
-            [
-                "bash",
-                "-c",
-                f'source "{script}" && eval_parallel_degree && echo "$EVAL_SLOTS $EVAL_CPUS_EACH"',
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            env={**os.environ, "N_ROLLOUTS": "4", "CPU_LOCK_QTY": "4", "EVAL_RESOURCE_CAP": "0"},
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout.strip(), "4 1")
-        from eval_slots import eval_slots, parallel_report_line
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "eval_resources.json").write_text(
+                json.dumps(
+                    {
+                        "declared": {"peak": {"cpus": 2, "memory_mb": 8192}},
+                        "applied": {"slots": 3, "cpus_each": 2},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            proc = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f'source "{script}" && eval_parallel_degree && echo "$EVAL_SLOTS $EVAL_CPUS_EACH"',
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "N_ROLLOUTS": "4", "CPU_LOCK_QTY": "8", "WORKDIR": str(work)},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), "3 2")
+
+    def test_parallel_degree_does_not_guess_when_p5_never_ran(self):
+        """A report-only replay of a tree with no plan reports 1x1, not a probe of this host."""
+        script = ROOT / "pipeline" / "lib" / "parallel_degree.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f'source "{script}" && eval_parallel_degree && echo "$EVAL_SLOTS $EVAL_CPUS_EACH"',
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "N_ROLLOUTS": "4", "CPU_LOCK_QTY": "8", "WORKDIR": tmp},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), "1 1")
+        self.assertNotIn("task_resources.py", script.read_text(encoding="utf-8"))
+
+    def test_parallel_degree_rejects_bad_integers(self):
+        script = ROOT / "pipeline" / "lib" / "parallel_degree.sh"
+        for env in ({"N_ROLLOUTS": "x", "CPU_LOCK_QTY": "4"}, {"N_ROLLOUTS": "4", "CPU_LOCK_QTY": "0"}):
+            proc = subprocess.run(
+                ["bash", "-c", f'source "{script}" && eval_parallel_degree'],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, **env},
+            )
+            self.assertNotEqual(proc.returncode, 0, f"{env} should be rejected")
+
+    def test_eval_protocol_records_what_actually_ran(self):
         from render_report import build_eval_protocol
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1719,9 +1768,9 @@ class EvalReportTests(unittest.TestCase):
                         "api_base": "https://api.deepseek.com/v1",
                         "provider": "DeepSeek",
                         "reasoning_effort": "high",
-                        "cpu_lock_qty": 4,
+                        "cpu_lock_qty": 8,
                         "concurrency": 4,
-                        "cpus_each": 1,
+                        "cpus_each": 2,
                     }
                 ),
                 encoding="utf-8",
@@ -1732,32 +1781,19 @@ class EvalReportTests(unittest.TestCase):
                 api_base="https://api.deepseek.com/v1",
                 n_rollouts=4,
                 concurrency=4,
-                cpus_each=1,
+                cpus_each=2,
             )
             self.assertEqual(protocol["icode"]["version"], "v0.1.44")
             self.assertEqual(protocol["model_params"]["provider"], "DeepSeek")
             self.assertEqual(protocol["model_params"]["reasoning_effort"], "high")
             self.assertEqual(protocol["model_params"]["thinking"]["type"], "enabled")
             self.assertEqual(protocol["resources"]["concurrency"], 4)
-            self.assertEqual(protocol["resources"]["cpus_each"], 1)
+            # Declared, not CPU_LOCK_QTY / slots.
+            self.assertEqual(protocol["resources"]["cpus_each"], 2)
 
-        from eval_slots import budget_gb, max_icode_mem_gb, memory_limit_mb
+    def test_docker_stats_peak_ignores_sidecars(self):
+        from eval_slots import max_icode_mem_gb
 
-        low_ram_kb = int(4.5 * 1024 * 1024)
-        now_kb = int(9.8 * 1024 * 1024)
-        # Fallback deepswe 1.5 GB → low RAM yields 1 slot; light measured peaks keep 4.
-        self.assertEqual(eval_slots(4, "deepswe", mem_kb=low_ram_kb), (1, 4))
-        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=0.4), (4, 1))
-        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=2.0), (2, 2))
-        self.assertEqual(eval_slots(4, "deepswe", mem_kb=now_kb, container_gb=8.0), (1, 4))
-        self.assertEqual(eval_slots(4, "lolbench", mem_kb=now_kb, container_gb=6.4), (1, 4))
-        self.assertGreater(memory_limit_mb(now_kb, 4, 8.0), 0)
-        self.assertGreater(memory_limit_mb(now_kb, 1, None), 0)
-        # History-based need is capped by host share; light peaks get a tighter Docker cap.
-        self.assertLess(memory_limit_mb(now_kb, 4, 0.4), memory_limit_mb(now_kb, 4, None))
-        self.assertEqual(memory_limit_mb(now_kb, 4, 8.0), memory_limit_mb(now_kb, 4, None))
-        self.assertAlmostEqual(budget_gb("deepswe", 0.4), 0.6)
-        self.assertAlmostEqual(budget_gb("lolbench", None), 4.0)
         sample = (
             "k3d-server\t2.0GiB / 16GiB\n"
             "q1_icode_1_a01\t400MiB / 16GiB\n"
@@ -1773,33 +1809,11 @@ class EvalReportTests(unittest.TestCase):
             "abs-module-cache-flags__BB2vSAk__env-harbor-docker-egress-control-sidecar-1\t4GiB / 16GiB\n"
         )
         self.assertAlmostEqual(max_icode_mem_gb(trial_only), 350 / 1024)
+        # A 400 KiB reading is startup noise, not a peak.
         self.assertIsNone(
             max_icode_mem_gb("fastapi-deprecation-response-hea__FzVfjPP-main-1\t400KiB / 16GiB\n")
         )
-        ids = ["a", "b", "c", "d"]
-        low_line = parallel_report_line(ids, 4, 2, now_kb, 2.0, 3.0)
-        high_line = parallel_report_line(ids, 4, 4, now_kb, 0.4, 0.6)
-        self.assertIn("questions=4 ids=a,b,c,d", low_line)
-        self.assertIn("four_containers=no", low_line)
-        self.assertIn("container_gb=unmeasured", parallel_report_line(ids, 4, 4, now_kb))
-        self.assertIn("four_containers=yes", high_line)
-        self.assertIn("budget_gb=0.60", high_line)
-        p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
-        self.assertIn("eval_slots.py", p5)
-        self.assertIn("report", p5)
-        self.assertIn("resume-seed", p5)
-        self.assertIn("RESUME=1", p5)
-        self.assertIn("cmd+=(-n 1)", p5)
-        self.assertIn("cmd+=(-k 1)", p5)
-        self.assertIn("--override-memory-mb", p5)
-        self.assertIn("out of memory", p5)
-        self.assertIn("skip question=", p5)
-        self.assertIn('echo "OK unit=$spec"', p5)
-        self.assertNotIn("[[:space:]]137", p5)
-        self.assertIn('ExitCode[=:[:space:]]*137', p5)
-        self.assertIn('[ -z "$reward" ]', p5)
-        self.assertIn("active_question.txt", p5)
-        self.assertIn('eval_slots.py" sample', p5)
+
 
     def test_pass_at_ladder_and_demo_report(self):
         from eval_metrics import pass_at_ladder, summarize_arm
@@ -1914,243 +1928,74 @@ class EvalReportTests(unittest.TestCase):
         for block in blocks:
             self.assertEqual(len(set(len(line) for line in block)), 1)
 
-    def test_work_unit_finishes_one_question_before_the_next(self):
-        from eval_slots import next_unit
 
-        many = [f"t{i:03d}" for i in range(113)]
-        assigned: list[tuple[str, int]] = []
-        inflight: list[tuple[str, int]] = []
-        first = []
-        for _ in range(4):
-            unit = next_unit(many, 4, assigned, inflight)
-            first.append(unit)
-            assigned.append(unit)
-            inflight.append(unit)
-        self.assertEqual(first, [("t000", 1), ("t000", 2), ("t000", 3), ("t000", 4)])
-        inflight = inflight[1:]
-        self.assertIsNone(next_unit(many, 4, assigned, inflight))
-        self.assertEqual(next_unit(many, 4, assigned, []), ("t001", 1))
-
-        three = ["a", "b", "c"]
-        assigned = []
-        inflight = []
-        got = []
-        for _ in range(4):
-            unit = next_unit(three, 4, assigned, inflight)
-            got.append(unit)
-            assigned.append(unit)
-            inflight.append(unit)
-        self.assertEqual(got, [("a", 1), ("a", 2), ("a", 3), ("a", 4)])
-
-        assigned = []
-        inflight = []
-        got = []
-        for _ in range(4):
-            unit = next_unit(["only"], 4, assigned, inflight)
-            got.append(unit)
-            assigned.append(unit)
-            inflight.append(unit)
-        self.assertEqual(got, [("only", 1), ("only", 2), ("only", 3), ("only", 4)])
-
-    def test_resume_seed_and_history_mem_cap(self):
-        import json
-        import tempfile
-        from pathlib import Path
-
-        from eval_slots import (
-            completed_units,
-            estimate_container_gb,
-            eval_slots,
-            memory_limit_mb,
-            remaining_questions,
-        )
-
-        scratch = ROOT / ".tmp-eval-slots"
-        scratch.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=scratch) as tmp:
-            root = Path(tmp)
-            harness = root / "harness"
-            jobs = harness / "harbor_runs" / "jenkins-23" / "cpython_1"
-            for attempt in (1, 2):
-                trial = jobs / f"cpython_1_icode_23_a{attempt:02d}" / "verifier"
-                trial.mkdir(parents=True)
-                (trial / "reward.json").write_text("1\n", encoding="utf-8")
-            # Incomplete attempt 3: no reward — must not seed.
-            (jobs / "cpython_1_icode_23_a03").mkdir(parents=True)
-            done = completed_units(root, ["cpython_1", "flink_1"], 4, build="jenkins-23")
-            self.assertEqual(done, ["cpython_1:1", "cpython_1:2"])
-            # Older builds must not pollute resume of jenkins-23.
-            old = harness / "harbor_runs" / "jenkins-19" / "flink_1"
-            trial = old / "flink_1_icode_19_a01" / "verifier"
-            trial.mkdir(parents=True)
-            (trial / "reward.json").write_text("1\n", encoding="utf-8")
-            self.assertEqual(
-                completed_units(root, ["cpython_1", "flink_1"], 4, build="jenkins-23"),
-                ["cpython_1:1", "cpython_1:2"],
-            )
-            remaining = remaining_questions(
-                ["cpython_1", "flink_1"],
-                4,
-                {(u.split(":")[0], int(u.split(":")[1])) for u in done},
-            )
-            self.assertEqual(remaining, ["cpython_1", "flink_1"])
-            (harness / "container_mem_history.jsonl").write_text(
-                "\n".join(
-                    [
-                        json.dumps({"question": "fastapi_1", "peak_gb": 0.26, "build": "22"}),
-                        json.dumps({"question": "flink_1", "peak_gb": 6.448, "build": "23"}),
-                    ]
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            # Stale global peak must not override per-question history.
-            (harness / "container_mem_peak_gb").write_text("6.448\n", encoding="utf-8")
-            self.assertAlmostEqual(
-                estimate_container_gb(root, "lolbench", question="fastapi_1"),
-                0.26,
-            )
-            self.assertAlmostEqual(
-                estimate_container_gb(root, "lolbench", question="flink_1"),
-                6.448,
-            )
-            mem_kb = int(8.8 * 1024 * 1024)
-            self.assertEqual(
-                eval_slots(4, "lolbench", workdir=root, mem_kb=mem_kb, question="fastapi_1"),
-                (4, 1),
-            )
-            self.assertEqual(
-                eval_slots(4, "lolbench", workdir=root, mem_kb=mem_kb, question="flink_1"),
-                (1, 4),
-            )
-            light_cap = memory_limit_mb(mem_kb, 4, 0.26)
-            heavy_cap = memory_limit_mb(mem_kb, 1, 6.448)
-            self.assertLess(light_cap, heavy_cap)
-            self.assertGreaterEqual(light_cap, 512)
-            self.assertEqual(light_cap, 512)  # floor; 0.26×1.5×1024 ≈ 399
 
     def test_question_memory_record_covers_every_benchmark(self):
-        import json
+        """One harbor run has no active question, so the memory trace is per build."""
         import tempfile
         from pathlib import Path
 
-        from eval_slots import (
-            eval_slots,
-            flush_question,
-            memory_limit_mb,
-            observe_question,
-            sample_active_question,
-            write_active_question,
-        )
+        import task_resources
         from render_report import copy_memory_sidecars, memory_sidecar
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            history = root / "harness" / "container_mem_history.jsonl"
-            history.parent.mkdir(parents=True)
-            history.write_text(
-                json.dumps({"question": "earlier", "peak_gb": 0.2, "build": "32"}) + "\n",
-                encoding="utf-8",
-            )
-            observe_question(root, "q1", 1.0, 4, 1536, "deepswe")
-            observe_question(root, "q1", 1.2, 4, 1843, "deepswe")
-            flush_question(root, "q1", 4, 1843, "deepswe", final_sample=False)
-            observe_question(root, "q2", 0.4, 4, 614, "deepswe")
-            flush_question(root, "q2", 4, 614, "deepswe", final_sample=False)
-            observe_question(root, "q3", 0.0004, 4, 0, "deepswe")
-            flush_question(root, "q3", 4, 0, "deepswe", final_sample=False)
-            write_active_question(root, "q4")
-            # No docker in unit tests: sample leaves peak untouched / unmeasured.
-            self.assertEqual(sample_active_question(root, slots=4, benchmark="deepswe"), "q4")
-            flush_question(root, "q4", 4, 0, "deepswe", final_sample=False)
+            harness = Path(tmp) / "harness"
+            samples = iter([0.4, 1.2, None, 0.9])
+            task_resources_measure = task_resources.sample_peak.__globals__
+            import eval_slots
+
+            original = eval_slots.measure_container_gb
+            eval_slots.measure_container_gb = lambda: next(samples, None)
+            try:
+                for _ in range(4):
+                    task_resources.sample_peak(harness, slots=2)
+            finally:
+                eval_slots.measure_container_gb = original
+            del task_resources_measure
             rows = [
                 json.loads(line)
-                for line in (root / "harness" / "container_mem.jsonl").read_text(encoding="utf-8").splitlines()
+                for line in (harness / "container_mem.jsonl").read_text(encoding="utf-8").splitlines()
             ]
-            self.assertEqual([row["question"] for row in rows], ["q1", "q2", "q3", "q4"])
-            self.assertAlmostEqual(rows[0]["peak_gb"], 1.2)
-            self.assertAlmostEqual(rows[1]["peak_gb"], 0.4)
-            self.assertIsNone(rows[2]["peak_gb"])
-            self.assertIsNone(rows[3]["peak_gb"])
-            self.assertNotIn("build", rows[0])
-            self.assertFalse((root / "harness" / "active_question.txt").exists())
-            hist_rows = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([row["question"] for row in hist_rows], ["earlier", "q1", "q2", "q3", "q4"])
-            self.assertEqual(hist_rows[1]["build"], os.environ.get("BUILD_NUMBER") or "local")
-            mem_kb = int(6 * 1024 * 1024)
-            self.assertEqual(eval_slots(4, "lolbench", mem_kb=mem_kb, container_gb=1.2), (2, 2))
-            self.assertEqual(eval_slots(4, "swebenchpro", mem_kb=mem_kb, container_gb=1.2), (2, 2))
-            self.assertGreater(memory_limit_mb(mem_kb, 4, 1.2), 0)
-            # History peak for flink_1 forces a single slot on a 14 GB-class host.
-            # Use a workdir on the workspace disk so the 40 GB free-disk floor does not
-            # force slots=1 independently of RAM (tempfs /tmp is often < 40 GB).
-            scratch = ROOT / ".tmp-eval-slots"
-            scratch.mkdir(exist_ok=True)
-            with tempfile.TemporaryDirectory(dir=scratch) as packed:
-                packed_root = Path(packed)
-                (packed_root / "harness").mkdir()
-                (packed_root / "harness" / "container_mem_history.jsonl").write_text(
-                    json.dumps({"question": "flink_1", "peak_gb": 6.448, "build": "23"})
-                    + "\n",
-                    encoding="utf-8",
-                )
-                self.assertEqual(
-                    eval_slots(
-                        4,
-                        "lolbench",
-                        workdir=packed_root,
-                        mem_kb=int(8.8 * 1024 * 1024),
-                        question="flink_1",
-                    ),
-                    (1, 4),
-                )
-                self.assertEqual(
-                    eval_slots(
-                        4,
-                        "deepswe",
-                        workdir=packed_root,
-                        mem_kb=int(9.8 * 1024 * 1024),
-                        container_gb=0.4,
-                    ),
-                    (4, 1),
-                )
-            (root / "harness" / "skipped_questions.txt").write_text("q9\n", encoding="utf-8")
-            out = root / "out"
+            # The None reading records nothing; the rest keep the running peak.
+            self.assertEqual([row["peak_gb"] for row in rows], [0.4, 1.2, 0.9])
+            self.assertEqual([row["slots"] for row in rows], [2, 2, 2])
+            self.assertAlmostEqual(
+                float((harness / "container_mem_peak_gb").read_text(encoding="utf-8")), 1.2
+            )
+            peak, skipped = memory_sidecar(harness)
+            self.assertAlmostEqual(peak, 1.2)
+            self.assertEqual(skipped, [])
+            out = Path(tmp) / "out"
             out.mkdir()
-            copy_memory_sidecars(root / "harness", out)
+            copy_memory_sidecars(harness, out)
             self.assertTrue((out / "container_mem.jsonl").is_file())
             self.assertFalse((out / "container_mem_history.jsonl").exists())
-            self.assertEqual((out / "skipped_questions.txt").read_text(encoding="utf-8"), "q9\n")
-            peak, skipped = memory_sidecar(root / "harness")
-            self.assertAlmostEqual(peak, 1.2)
-            self.assertEqual(skipped, ["q9"])
+
         run_all = (ROOT / "pipeline" / "stages" / "run_all.sh").read_text(encoding="utf-8")
         common = (ROOT / "pipeline" / "stages" / "_common.sh").read_text(encoding="utf-8")
-        self.assertGreater(run_all.index('bash "$DIR/p5_harness.sh"'), run_all.index("esac"))
+        self.assertIn("MAC_K3D_PHASE", run_all)
         for name in ("deepswe", "lolbench", "swebenchpro"):
             self.assertIn(name, common)
         p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
         self.assertIn('"$HARNESS_DIR/container_mem.jsonl"', p5)
         self.assertNotIn("container_mem_history.jsonl", p5)
-        self.assertIn("eval_slots.py\" flush", p5)
-        self.assertIn('eval_slots.py" sample', p5)
-        self.assertIn("active_question.txt", p5)
+        self.assertIn('task_resources.py" sample', p5)
+        self.assertNotIn("eval_slots.py", p5)
         self.assertIn("--override-memory-mb", p5)
         self.assertIn("out of memory", p5)
-        self.assertIn("skipped_questions.txt", p5)
         self.assertNotIn("[[:space:]]137", p5)
-        self.assertIn('[ -z "$reward" ]', p5)
         oom_re = re.compile(
             r"out of memory|Cannot allocate memory|oom-kill|oom_kill|"
             r"exit(?:ed)?\s+(?:with\s+)?(?:status|code)\s*137(?:[^0-9]|$)|"
             r"ExitCode[=:\s]*137(?:[^0-9]|$)",
             re.I,
         )
-        self.assertIsNone(oom_re.search("│ 137    │     1 │"))
+        self.assertIsNone(oom_re.search("\u2502 137    \u2502     1 \u2502"))
         self.assertIsNone(oom_re.search("============================= 137 passed in 0.93s =============================="))
         self.assertIsNotNone(oom_re.search("harbor run exited with code 137"))
         self.assertIsNotNone(oom_re.search("ExitCode: 137"))
         self.assertIsNotNone(oom_re.search("process out of memory"))
+
 
     def test_compact_rollouts_only_when_every_attempt_is_perfect(self):
         from eval_metrics import summarize_arm
@@ -2425,9 +2270,10 @@ class EvalReportTests(unittest.TestCase):
         self.assertIn("progress.json", p5)
         self.assertIn("eval_progress.py", p5)
         self.assertNotIn("ETA ≈ remaining", p5)
-        self.assertIn("time=$span", p5)
         self.assertIn('rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"', p5)
-        self.assertIn('set +e\n    wait "$pid"', p5)
+        # The scheduler that owned the per-unit wait is Harbor's job now.
+        self.assertNotIn('wait "$pid"', p5)
+        self.assertIn('kill "$heartbeat_pid"', p5)
 
     def test_attempt_index_keeps_a_missing_slot(self):
         from render_report import harness_task_attempts
@@ -2450,6 +2296,68 @@ class EvalReportTests(unittest.TestCase):
         self.assertTrue(rows[1]["resolved"])
         self.assertFalse(rows[2]["has_reward"])
         self.assertFalse(rows[3]["has_reward"])
+
+    @staticmethod
+    def _trial(at: Path, task: str, reward: float | None = None) -> Path:
+        at.mkdir(parents=True, exist_ok=True)
+        (at / "result.json").write_text(json.dumps({"task_name": task}), encoding="utf-8")
+        if reward is not None:
+            (at / "verifier").mkdir(exist_ok=True)
+            (at / "verifier" / "reward.json").write_text(json.dumps({"reward": reward}), encoding="utf-8")
+        return at
+
+    def test_trials_are_found_in_both_the_old_and_the_one_run_layout(self):
+        """Builds up to PF.1 gave every task its own jobs dir; one harbor run does not."""
+        from score_results import harbor_task_trials, trial_reward_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "harness"
+            old = harness / "harbor_runs" / "jenkins-50" / "alpha" / "job"
+            self._trial(old / "alpha_icode_50_a01" / "trial", "alpha", 1.0)
+            self._trial(old / "alpha_icode_50_a02" / "trial", "alpha", 0.0)
+            found = harbor_task_trials(harness, "alpha")
+            self.assertEqual([p.parent.name for p in found], ["alpha_icode_50_a01", "alpha_icode_50_a02"])
+            self.assertEqual(len(trial_reward_files(found)), 2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "harness"
+            job = harness / "harbor_runs" / "jenkins-51" / "icode_deepswe_51"
+            self._trial(job / "alpha__a01" / "trial", "alpha", 1.0)
+            self._trial(job / "beta__a01" / "trial", "beta", 0.0)
+            self._trial(job / "alpha__a02" / "trial", "alpha", 0.0)
+            alpha = harbor_task_trials(harness, "alpha")
+            self.assertEqual(len(alpha), 2)
+            self.assertEqual({p.parent.name for p in alpha}, {"alpha__a01", "alpha__a02"})
+            self.assertEqual(len(harbor_task_trials(harness, "beta")), 1)
+            self.assertEqual(harbor_task_trials(harness, "gamma"), [])
+
+    def test_only_the_newest_build_counts_when_several_ran_one_task(self):
+        from score_results import harbor_task_trials
+
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "harness"
+            runs = harness / "harbor_runs"
+            old = self._trial(runs / "jenkins-51" / "job" / "alpha__a01" / "trial", "alpha", 0.0)
+            new = self._trial(runs / "jenkins-52" / "job" / "alpha__a01" / "trial", "alpha", 1.0)
+            then = time.time() - 3600
+            os.utime(old / "verifier" / "reward.json", (then, then))
+            found = harbor_task_trials(harness, "alpha")
+            self.assertEqual(found, [new])
+
+    def test_a_trial_without_a_verifier_dir_still_yields_its_reward(self):
+        from score_results import trial_reward_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            flat = Path(tmp) / "flat"
+            flat.mkdir()
+            (flat / "reward.json").write_text('{"reward": 1}', encoding="utf-8")
+            nested = Path(tmp) / "nested" / "deep" / "down"
+            nested.mkdir(parents=True)
+            (nested / "reward.json").write_text('{"reward": 0}', encoding="utf-8")
+            empty = Path(tmp) / "empty"
+            empty.mkdir()
+            got = trial_reward_files([flat, Path(tmp) / "nested", empty])
+            self.assertEqual(got, [flat / "reward.json", nested / "reward.json"])
 
     def test_p8_backs_up_outside_the_workspace(self):
         from render_report import run_folder_name
@@ -3607,7 +3515,9 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertEqual(spec["task"], "alpha")
             self.assertIn({"kind": "model", "host": "api.deepseek.com"}, spec["hosts"])
             self.assertIn("jenkins-dry", spec_arg)
-            differ = {"-a": 1, "--job-name": 1, "--jobs-dir": 1}
+            # The canary runs one trial, so it carries no -k/-r; everything else
+            # about the two commands has to match.
+            differ = {"-a": 1, "--job-name": 1, "--jobs-dir": 1, "-k": 1, "-r": 1}
             self.assertEqual(
                 self._without(canary, {**differ, "--ak": 1, "--disable-verification": 0}),
                 self._without(icode, differ),

@@ -2,17 +2,42 @@
 
 One Jenkins build scores the iCode harness. Harbor runs iCode for `N_ROLLOUTS` attempts on each question. A later comparison harness is not part of this run.
 
+**One build issues one `harbor run`.** mac-k3d selects the questions and prepares the environment; Harbor expands `n_attempts x tasks x agents` into trials, runs `-n` of them at a time, applies each task's declared limits, retries, and grades. mac-k3d does not loop over rollouts and does not schedule containers. See [architecture.md](architecture.md#evaluation-architecture) for the full responsibility split.
+
 Release and git both mount the supplied iCode at `/opt/icode-host` and run the same single-shot `icode run` (one question × one rollout, no improve-loop). DeepSeek official API uses `ICODE_PROVIDER=DeepSeek` and `ICODE_REASONING_EFFORT=high` (wire fields `thinking.type=enabled` and `reasoning_effort=high`) unless those env vars are already set. `ICODE_API_BASE` is `https://api.deepseek.com/v1`. `ICODE_MODEL` is the catalog id (`deepseek-flash` or `deepseek-v4-pro`). The artifact `model` field is still `openai/<catalog id>` (catalog label, not the provider string). P0 still checks `GET https://api.deepseek.com/models` for that id.
 
 After `icode run`, the Harbor agent force-commits a dirty git tree so DeepSWE can grade `git diff <base> HEAD` and LoLBench submit sees the same tree. That commit does not start another model call.
 
-Default packing stays `CPU_LOCK_QTY=4` as the **upper** concurrency bound, with `N_ROLLOUTS=4`. Live `EVAL_SLOTS` and `--override-memory-mb` are set **per question** from that question’s history peak (×1.5), falling back to suite defaults (LoLBench 4.0 GB, DeepSWE 1.5 GB) so Flink-class peaks shrink to one slot while light questions keep all CPUs. See [optimization.md](optimization.md). After an aborted full suite, set Jenkins `RESUME=true` with the same question selection so P5 skips units that already have `reward.json`.
+Each task's `cpus`, `memory_mb` and `storage_mb` come from its own `task.toml` and are **not** overridden: a DeepSWE task gets the 2 CPUs and 8 GB it declares, a LoLBench task gets its 4 CPUs. `pipeline/lib/task_resources.py` reads the declared values, plans how many fit on this worker (`EVAL_SLOTS`, which becomes Harbor's `-n`), and **fails the build before any container starts** if even one selected task does not fit. `CPU_LOCK_QTY` is the core budget the build reserves on its node; it is an upper bound on the plan, not the per-task limit. `artifact.json` records `resources.declared` against `resources.applied`. See [optimization.md](optimization.md).
 
 Harbor’s agent budget is the task’s `agent.timeout_sec` (often 10800s on DeepSWE) with timeout multiplier 1. A rollout that ends near 5100s is iCode stopping itself, not Harbor cutting the trial.
 
 P8 stores `eval_protocol` on `artifact.json` (iCode mode/version/source, model params, concurrency, `cpus_each`, the timeout note, and `isolation`: what the agent could see at `/opt/icode-host`) and repeats it in `summary.md` and `report.html`.
 
-DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-empty `TASKS` list wins; otherwise one `TASK`; otherwise `N_TASKS` is the first N sorted ids. Full suite sizes are DeepSWE 113, LoLBench 20, and SWE-bench Pro 731. `N_ROLLOUTS` is how many attempts each question gets. Job default is 4.
+DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-empty `TASKS` list wins; otherwise one `TASK`; otherwise `N_TASKS` is the first N sorted ids, skipping the first `TASK_OFFSET` of them. Full suite sizes are DeepSWE 113, LoLBench 20, and SWE-bench Pro 731. `N_ROLLOUTS` is how many attempts each question gets. Job default is 4.
+
+## Which job to run
+
+Three shapes per suite, plus one shared aggregator:
+
+| Job | Questions | Rollouts | Use it for |
+|---|---|---|---|
+| `<suite>_one_task` | 1 | 1 | smoke test after a code change; cheapest proof the pipeline still works |
+| `<suite>_some_task` | `N_TASKS` | `N_ROLLOUTS` | comparing a handful of questions against a known-good result |
+| `<suite>_full_suite_task` | whole suite | `N_ROLLOUTS` | the real run; dispatches shards and aggregates |
+
+`<suite>_full_suite_task` is a dispatcher on `agent none`. It slices the sorted id list into `SHARDS` contiguous ranges, triggers that many `<suite>_some_task` builds in parallel (each with its own `TASK_OFFSET` and a shared `RUN_GROUP`), then triggers `eval_aggregate`. Leave `SHARDS=0` to let it pick from registered cores divided by the suite's declared per-task CPUs.
+
+`eval_aggregate` pulls each shard's archived trials by `RUN_GROUP` and merges them into one `artifact.json` / `summary.md` / `report.html` under `aggregate/`. Verdict counts add; shard failures do not hide the shards that worked (`propagate: false`), so a partial suite still produces a report for what finished. If the shards ran different pipeline commits, the merged anti-cheat block is marked `status: mixed_versions` rather than silently averaged.
+
+Merge an already-collected set of shards by hand:
+
+```bash
+python3 pipeline/lib/aggregate_runs.py \
+  --shards <dir of shard eval-runs trees> \
+  --benchmark deepswe --run-group deepswe_full_suite_task-7 \
+  --n-rollouts 4 --out aggregate
+```
 
 ## Same protocol for every benchmark and model
 
@@ -31,6 +56,8 @@ A score measures the iCode harness only if every run sees the same rules. So eve
 | Leak scan | Gold lines of every selected task are searched in the mounted tree (`anticheat_leakscan.json`). `OFFICIAL=1` stops on a hit; smoke runs warn | `anticheat_leakscan.py` |
 | Secrets | Only `DEEPSEEK_API_KEY` reaches the agent. Clone tokens are unset before Harbor and never written to `.harbor-env` | `p5_harness.sh` |
 | Anti-cheat verdict | P7 gives every rollout `clean`, `flagged` or `rejected` from line/path Jaccard against the gold patch and a transcript scan (mounted-runtime reads, filesystem searches, network and retrieval tools, git archaeology, gold and grader paths). P8 scores `rejected` as unresolved with F2P/P2P zeroed, so `artifact["icode"]` is official and `artifact["icode_raw"]` keeps the raw numbers. Thresholds and rules: `pipeline/config/anticheat-v1.json`; reviewer decisions: `anticheat_overrides.json`. `OFFICIAL=1` requires the verdicts | `anticheat_verdict.py` |
+| Declared base commit | P7 compares each trial's capture receipt against the base commit the task declares and flags `base_commit_mismatch` when the agent started somewhere else. The check runs on the host because the agent env deliberately does not carry the declared base | `capture_receipt.py` (`base_mismatch`) |
+| Pinned pipeline | `OFFICIAL=1` requires `MAC_K3D_GIT_REF_KIND=commit`, so an official number can never come from a moving branch. The resolved SHA is in `artifact.json` under `pipeline.commit` | `jenkins_job.rs` (`eval_bootstrap_sh`) |
 | Isolation canary | Before the rollouts, P5 runs `CanaryAgent` with iCode's exact mounts, env and Harbor flags, but no model. In each task container it probes 13 source hosts (must be blocked), the model API (must answer), the task's declared hosts (a reached one warns), a filesystem search for the task's gold file names outside the repo, writes to `/opt/icode-host` as the agent and as root, git history beyond `HEAD`, env names that look like secrets, `PYTHONPATH`/`VIRTUAL_ENV`, and the iCode home before and after install. Any failed check stops the run before a token is spent. `OFFICIAL=1` requires it | `canary_verdict.py`, `canary_probe.sh` |
 | Model protocol | Same `ICODE_PROVIDER`, `ICODE_REASONING_EFFORT` and `ICODE_API_BASE` defaults for every suite | `p5_harness.sh` |
 
@@ -79,7 +106,7 @@ A tree sanitized by an older sanitizer version has already lost its stdlib sourc
 - Rescore an old run without changing it: `python3 pipeline/lib/anticheat_verdict.py --run-dir output/<suite>/<run> [--harbor-runs <jenkins harbor_runs/jenkins-N>]`. It writes `artifact.anticheat.json` and `anticheat/report.md` next to the original. Runs from before P0.5 keep their transcripts only in the Jenkins workspace, hence `--harbor-runs`.
 - The canary proves isolation on the tasks it ran on, on that worker. `CANARY=on` covers only the first selected task; run `CANARY=only` on the whole suite after a Harbor, Docker or kernel change.
 - LoLBench task allowlists declare `openrouter.ai`, `api.openai.com` and `api.anthropic.com` for the agent phase. The canary warns when they are reachable; closing them needs a versioned task overlay (tracked in the integration log).
-- Still open and tracked in the integration report: honoring each task's declared CPUs (P0.9).
+- **Harbor has no contamination gate.** `harbor job summarize` is a removed shim that only prints a deprecation notice, and `harbor analyze` is rubric-only. Neither reads the gold patch, scans a transcript for leakage, or can reject a trial. Every control in this table is therefore mac-k3d's, and delegating scheduling to Harbor did not delegate integrity.
 
 ## Where a run is stored
 

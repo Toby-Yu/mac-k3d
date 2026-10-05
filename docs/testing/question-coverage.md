@@ -14,7 +14,7 @@ Leave **TASK** empty. **N_ROLLOUTS=4**, **CPU_LOCK_QTY=4**. `TASKS` replaces `N_
 eicrud-keyset-pagination-cursor,scc-bounded-memory-spilling,meriyah-explicit-resource-declarations
 ```
 
-These three are not in jenkins-21 through jenkins-30. Do not rebuild or run `mac-k3d eval --sync-pipeline` while that job is in P5.
+These three are not in jenkins-21 through jenkins-30. A build clones its own pipeline at `MAC_K3D_GIT_REF`, so pushing to the branch mid-build is safe; rebuilding the worker binary while that job is in P5 is still not.
 
 ## DeepSWE
 

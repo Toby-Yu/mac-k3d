@@ -110,6 +110,18 @@ When Mac A is Jenkins controller and Mac B is a Jenkins worker, Jenkins does not
 
 Use all three. Executors provide coarse safety; locks provide workload-aware scheduling.
 
+### What the eval jobs actually do
+
+`mac-k3d setup -c worker.yaml` implements this for evaluation: it sets `numExecutors` to the worker's logical core count and creates lockable resources `<agent>-core-1..N`, each labelled with **both** the shared `CPU_CORES` label and the agent name. Each eval build then takes
+
+```groovy
+lock(label: env.NODE_NAME, quantity: params.CPU_LOCK_QTY as Integer, resource: null)
+```
+
+Locking the node name rather than the shared label is what makes multi-worker safe: with a shared label, a build running on Mac B could hold tokens that represent Mac C's cores, and both machines would oversubscribe. The lock wraps only the `Evaluate` stage, so image pulls and report rendering do not sit on cores another build is waiting for.
+
+**Keep exactly one controller.** Lockable-resources state lives on the controller, so a second controller would hand out tokens for cores the first one already lent out. Scale workers, not controllers. Adding a worker needs no pipeline change: the dispatcher sizes shards from total registered cores divided by the suite's declared per-task CPUs, and `env.NODE_NAME` resolves per build. See [architecture.md](architecture.md#evaluation-architecture).
+
 ### Recommended lock design: capacity slots
 
 Prefer **slot classes** over separate CPU and memory token locks to avoid lock-order deadlocks.
