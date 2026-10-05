@@ -40,7 +40,7 @@ Global `-c / --config` is honored.
 
 If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
 
-Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **ten** jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**, plus the shared **`eval_aggregate`**. They share the P0–P8 pipeline; pick the job or `--benchmark`. Which shape to use: [evaluation.md](evaluation.md#which-job-to-run).
+Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **nine** jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**, and delete the retired `eval_aggregate` job if an older version created it. They share the P0–P8 pipeline; pick the job or `--benchmark`. Which shape to use: [evaluation.md](evaluation.md#which-job-to-run).
 
 ---
 
@@ -89,21 +89,34 @@ There is no `--sync-pipeline`. A Jenkins build clones mac-k3d at `MAC_K3D_GIT_RE
 
 ### Jenkins job parameters
 
-Beyond the iCode and model parameters above, every eval job takes:
+Every job starts with `HARNESS`, `LLM` and `BENCHMARK`. Each is a one-option choice fixed by the job, so the page and every build name (`#12 icode/deepseek-v4-pro/deepswe`) say what is being evaluated. Change harness or LLM with `mac-k3d set --harness/--llm` on the controller, then `config --skip-secrets`; change the benchmark by running another suite's job.
+
+What else a job shows depends on its shape and on `jenkins_job.ui_profile` in the controller's config (`mac-k3d set --ui-profile user|developer`, default `user`).
+
+**Shown in both profiles:**
+
+| Job | Parameters |
+|---|---|
+| `<suite>_one_task` | `TASK`, `N_ROLLOUTS` (default 1), `ICODE_MODE`, `ICODE_RELEASE_FILE`, `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `DEEPSEEK_MODEL` |
+| `<suite>_some_task` | `TASKS` (a list; wins if set), `N_TASKS` (first N sorted when `TASKS` is empty), `N_ROLLOUTS` (default 4), the three `ICODE_GIT_*`, `DEEPSEEK_MODEL` |
+| `<suite>_full_suite_task` | `N_ROLLOUTS` (default 4), the three `ICODE_GIT_*`, `DEEPSEEK_MODEL` |
+
+**Developer profile only.** In `user` profile these are hidden parameters (Hidden Parameter plugin) that keep their defaults:
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `MAC_K3D_GIT_URL` | `https://github.com/Toby-Yu/mac-k3d.git` | repo the worker clones to get `pipeline/` |
 | `MAC_K3D_GIT_REF` | `main` | branch, tag, commit SHA, or PR number |
 | `MAC_K3D_GIT_REF_KIND` | `branch` | `branch` \| `tag` \| `commit` \| `pr`. `OFFICIAL=1` requires `commit` |
-| `N_TASKS` | per shape | questions to run when `TASK` and `TASKS` are empty |
-| `TASK_OFFSET` | `0` | skip the first N sorted ids; how the dispatcher gives each shard a disjoint slice |
-| `N_ROLLOUTS` | per shape | attempts per question (Harbor's `-k`) |
-| `CPU_LOCK_QTY` | `4` | cores this build reserves on its own node |
-| `RUN_GROUP` | empty | set by the dispatcher; when non-empty the build archives its trials for `eval_aggregate` |
-| `SHARDS` | `0` | `full_suite_task` only. `0` derives it from registered cores / declared per-task CPUs |
+| `AGENT_LABEL` | `lolbench` | label a worker must carry |
+| `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF`, `ICODE_EXPECT_SHA` | pinned | P1 / P2 / P3 pins |
+| `OFFICIAL`, `CANARY`, `CANARY_ALLOW_HOST` | `0`, `official`, empty | provenance gate and isolation canary |
+| `SHARD_SIZE` | `default_shard_size` (10) | `some_task` / `full_suite_task`: questions per shard |
+| `N_TASKS` | suite size | `full_suite_task` only: lower it for a rehearsal |
 
-`eval_aggregate` takes `BENCHMARK`, `RUN_GROUP`, `SHARD_JOB` and `N_ROLLOUTS`, and needs no iCode, Docker or core lock — it only merges.
+**Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`. A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API.
+
+There is no `CPU_LOCK_QTY`, `SHARDS` or `RESUME` parameter. A build locks every core of its worker (one executor per worker), and the dispatcher picks the shard count from `SHARD_SIZE` and the number of online workers.
 
 ---
 
@@ -163,7 +176,7 @@ If `config.yaml` already exists and stdin is a TTY, `prepare` (without `-i`) pro
 3. **Role**: standalone / controller / worker; set `jenkins.enabled` for controller.
 4. **Dependencies**: discover Docker Desktop, k3d, kubectl, helm, Harbor (`uv`/`pipx`), Java; prompt to use existing, specify path, or install.
 5. **LoLBench**: prefer a found checkout; otherwise print `git clone` / release unpack commands and optionally clone.
-6. **Resources**: controller → ensure the `CPU_CORES` Lockable Resources label; worker → Jenkins URL, download `agent.jar`, optional API registration, capacity = logical CPU cores. A worker's resources are named `<agent>-core-1..N` and carry **both** the shared label and the agent name, so a build can lock `label: env.NODE_NAME` and get only its own node's cores. `numExecutors` is set to the core count.
+6. **Resources**: controller → ensure the `CPU_CORES` Lockable Resources label; worker → Jenkins URL, download `agent.jar`, optional API registration, capacity = logical CPU cores. A worker's resources are named `<agent>-core-1..N` and carry **both** the shared label and the agent name, so a build can lock `label: env.NODE_NAME` and get only its own node's cores. `numExecutors` is 1: one eval build per worker, holding every core.
 7. **Disk check**: fail if free space on storage volume is below role minimum (standalone 40 GB, controller 60 GB, worker 40 GB). RAM preflight is 8 GB.
 8. Write `~/.config/mac-k3d/config.yaml` and run validation.
 
@@ -200,7 +213,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 2. Poll `docker info` until ready or timeout (`docker.startup_timeout_secs`).
 3. If cluster missing: `k3d cluster create` with port mappings from config.
 4. If cluster exists but stopped: `k3d cluster start`.
-5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins with `additionalPlugins` (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`), then create/update the ten eval jobs plus `eval_aggregate` unless `--skip-job`.
+5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins with `additionalPlugins` (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`), then create/update the nine eval jobs (and delete a leftover `eval_aggregate`) unless `--skip-job`.
 6. Write state file under `~/.local/state/mac-k3d/`.
 
 `--jenkins` overrides `jenkins.enabled` for this invocation only. If omitted, the config file value is used.
@@ -208,7 +221,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 ### Idempotency
 
 - Second `start` on a running cluster is a no-op aside from Helm upgrade when Jenkins is enabled.
-- Job create/update refreshes the ten eval jobs plus `eval_aggregate` on each `start`/`config`. Plugin list changes require **controller** `start` (Helm), not `config`.
+- Job create/update refreshes the nine eval jobs on each `start`/`config`, rendered for the current `ui_profile`. Plugin list changes require **controller** `start` (Helm), not `config`.
 
 ---
 
@@ -299,6 +312,7 @@ mac-k3d set -c ~/.config/mac-k3d/config.yaml --model deepseek-flash
 mac-k3d set --check-models
 mac-k3d set -c ~/.config/mac-k3d/config.yaml --benchmark deepswe --n-tasks 2
 mac-k3d set --icode-release /path/to/icode-linux-x86_64-full-v0.1.41
+mac-k3d set --ui-profile developer   # controller, while developing; `user` for handover
 ```
 
 TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, then question mode. Non-TTY requires flags (or `--check-models` / `--list`).
@@ -317,6 +331,8 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |
 | `--tasks a,b` | Explicit comma-separated ids |
 | `--icode-release PATH` | Worker `*-full-*` drop; writes `~/.config/mac-k3d/icode-paths.yaml` |
+| `--ui-profile user\|developer` | Jenkins job pages: `user` shows each shape's short list; `developer` also shows the pipeline ref, pins, canary and `SHARD_SIZE`. Apply with `config --skip-secrets` on the controller |
+| `--shard-size N` | Questions per shard when `some_task` / `full_suite_task` split work across workers (default 10) |
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.
 

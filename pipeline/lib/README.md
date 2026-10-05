@@ -18,7 +18,7 @@ Used by `mac-k3d eval` and Jenkins jobs `deepswe_one_task`, `lolbench_one_task`,
 | `harness_labels.py` | Loads `../config/harness/icode-pr2-eea9d66.yaml` (`tuned_on`, `hinted`); `generate` rebuilds it from the improve loop and iCode's matchers, read-only |
 | `task_resources.py` | `plan`: declared `cpus`/`memory_mb`/`storage_mb` per task.toml → `EVAL_SLOTS` (Harbor's `-n`), failing when one task does not fit this worker. `sample`: append a `docker stats` snapshot to the build's memory trace ([optimization.md](../../docs/optimization.md)) |
 | `eval_slots.py` | Memory and disk helpers only (`docker stats` parsing, container peak). Harbor owns scheduling, so there is no slot loop here |
-| `aggregate_runs.py` | `eval_aggregate`: merge the shard trials of one `RUN_GROUP` into one `artifact.json` / `summary.md` / `report.html` |
+| `aggregate_runs.py` | `Aggregate` stage of `_some_task` / `_full_suite_task`: merge the shard trials of one `RUN_GROUP` into one `artifact.json` / `summary.md` / `report.html` |
 | `eval_progress.py` | P5 `progress.json` and the 60s heartbeat (`done/needed`, inflight, slots) |
 | `pier-agent-icode/` | Unused by the current runner. Kept from the Pier path. |
 | `swebenchpro_tasks.py` | P2: materialize Harbor `tasks/<instance_id>/` (`task.toml`, tests) from the SWE-bench Pro dataset |

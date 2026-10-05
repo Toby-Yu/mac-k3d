@@ -50,6 +50,14 @@ pub struct SetArgs {
     /// Persist iCode `*-full-*` drop path on this worker
     #[arg(long)]
     pub icode_release: Option<String>,
+
+    /// Jenkins job UI: `user` (short parameter lists) or `developer` (also pins, canary, pipeline ref)
+    #[arg(long)]
+    pub ui_profile: Option<String>,
+
+    /// Questions per shard when some_task / full_suite_task split work across workers
+    #[arg(long)]
+    pub shard_size: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -61,6 +69,8 @@ pub struct SetPatch {
     pub task: Option<String>,
     pub n_tasks: Option<u32>,
     pub tasks: Option<String>,
+    pub ui_profile: Option<String>,
+    pub shard_size: Option<u32>,
 }
 
 /// Edit `jenkins_job` on a YAML file. Does not start Jenkins or upload secrets.
@@ -90,6 +100,8 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
         task: args.task,
         n_tasks: args.n_tasks,
         tasks: args.tasks,
+        ui_profile: args.ui_profile,
+        shard_size: args.shard_size,
     };
 
     let mut any_flag = patch.harness.is_some()
@@ -98,7 +110,9 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
         || patch.benchmark.is_some()
         || patch.task.is_some()
         || patch.n_tasks.is_some()
-        || patch.tasks.is_some();
+        || patch.tasks.is_some()
+        || patch.ui_profile.is_some()
+        || patch.shard_size.is_some();
     let path_flags = args.icode_release.is_some();
 
     if !any_flag && !args.check_models && !path_flags {
@@ -107,7 +121,7 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
             any_flag = true;
         } else {
             return Err(Error::Config(
-                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks / --icode-release, --check-models, or --list"
+                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks / --ui-profile / --shard-size / --icode-release, --check-models, or --list"
                     .into(),
             ));
         }
@@ -284,6 +298,22 @@ pub fn apply_set(config: &mut MacK3dConfig, patch: SetPatch) -> Result<()> {
     }
     if let Some(b) = patch.benchmark {
         job.default_benchmark = eval_catalog::require_benchmark(&b)?;
+    }
+    if let Some(p) = patch.ui_profile {
+        let p = p.trim().to_ascii_lowercase();
+        if !crate::config::UI_PROFILES.contains(&p.as_str()) {
+            return Err(Error::Config(format!(
+                "--ui-profile '{p}' not allowed: {}",
+                crate::config::UI_PROFILES.join(", ")
+            )));
+        }
+        job.ui_profile = p;
+    }
+    if let Some(n) = patch.shard_size {
+        if n == 0 {
+            return Err(Error::Config("--shard-size must be >= 1".into()));
+        }
+        job.default_shard_size = n;
     }
 
     let q = usize::from(patch.task.is_some())
@@ -467,6 +497,11 @@ fn print_set_summary(config: &MacK3dConfig, path: &Path) {
         println!("  n_tasks={} (first N sorted)", job.default_n_tasks.max(1));
     }
     println!(
+        "  ui_profile={}  shard_size={}",
+        job.ui_profile,
+        job.default_shard_size.max(1)
+    );
+    println!(
         "Controller: mac-k3d config -c {} --skip-secrets",
         path.display()
     );
@@ -599,6 +634,43 @@ mod tests {
             err.contains("allowed: deepseek-v4-pro, deepseek-flash"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn set_ui_profile_and_shard_size() {
+        let mut c = cfg();
+        apply_set(
+            &mut c,
+            SetPatch {
+                ui_profile: Some("Developer".into()),
+                shard_size: Some(4),
+                ..SetPatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(c.jenkins_job.ui_profile, "developer");
+        assert_eq!(c.jenkins_job.default_shard_size, 4);
+
+        let err = apply_set(
+            &mut c,
+            SetPatch {
+                ui_profile: Some("admin".into()),
+                ..SetPatch::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("user, developer"), "{err}");
+        let err = apply_set(
+            &mut c,
+            SetPatch {
+                shard_size: Some(0),
+                ..SetPatch::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains(">= 1"), "{err}");
     }
 
     #[test]

@@ -251,7 +251,7 @@ mac-k3d eval --stage p4
 mac-k3d eval --stage p5 --n-tasks 1
 ```
 
-**Expected:** `PROGRESS` lines; `harbor run` work units (`-n 1 -k 1`) under the `CPU_LOCK_QTY` slot pool ([optimization.md](../optimization.md)). The agent runs `icode -p … run -t <instruction> -C <repo> -a code --json`, plus `ICODE_API_BASE` / `ICODE_PROVIDER` / `ICODE_MODEL`. Allowlist is `api.deepseek.com` and `api.deepseek.ai`. A missing `reward.json` on one unit is a scored miss; reward `0.0` is a score. `harness/meta.json` (timing/model/tokens). `No such option` / usage errors **fail** the stage. Jenkins `mac-k3d eval --yes` embeds `pipeline/` from the **installed binary** — rebuild (`cargo build --release` and copy to `~/.local/bin/mac-k3d`) after changing the Harbor agent.
+**Expected:** `PROGRESS` lines; one `harbor run` with `-k N_ROLLOUTS` and `-n` slots planned from the locked cores ([optimization.md](../optimization.md)). The agent runs `icode -p … run -t <instruction> -C <repo> -a code --json`, plus `ICODE_API_BASE` / `ICODE_PROVIDER` / `ICODE_MODEL`. Allowlist is `api.deepseek.com` and `api.deepseek.ai`. A missing `reward.json` on one unit is a scored miss; reward `0.0` is a score. `harness/meta.json` (timing/model/tokens). `No such option` / usage errors **fail** the stage. Jenkins `mac-k3d eval --yes` embeds `pipeline/` from the **installed binary** — rebuild (`cargo build --release` and copy to `~/.local/bin/mac-k3d`) after changing the Harbor agent.
 
 ## P6 — Manual only, not part of a full eval
 

@@ -238,6 +238,24 @@ pub struct JenkinsJobConfig {
     /// Ref kind for the mac-k3d clone: `branch` | `tag` | `commit` | `pr`.
     #[serde(default = "default_mac_k3d_git_ref_kind")]
     pub default_mac_k3d_git_ref_kind: String,
+    /// `user` shows each job's short parameter list; `developer` also shows the
+    /// pipeline ref, pins, canary and scheduling knobs (`mac-k3d set --ui-profile`).
+    #[serde(default = "default_ui_profile")]
+    pub ui_profile: String,
+    /// Questions per shard when some_task / full_suite_task split their work
+    /// across workers (`mac-k3d set --shard-size`).
+    #[serde(default = "default_shard_size")]
+    pub default_shard_size: u32,
+}
+
+pub const UI_PROFILES: &[&str] = &["user", "developer"];
+
+fn default_ui_profile() -> String {
+    "user".into()
+}
+
+fn default_shard_size() -> u32 {
+    10
 }
 
 fn default_n_tasks_one() -> u32 {
@@ -288,6 +306,8 @@ impl Default for JenkinsJobConfig {
             default_mac_k3d_git_url: default_mac_k3d_git_url(),
             default_mac_k3d_git_ref: default_mac_k3d_git_ref(),
             default_mac_k3d_git_ref_kind: default_mac_k3d_git_ref_kind(),
+            ui_profile: default_ui_profile(),
+            default_shard_size: default_shard_size(),
         }
     }
 }
@@ -711,6 +731,23 @@ mod tests {
         );
         assert_eq!(exported.jenkins_job.default_benchmark, "deepswe");
         assert_eq!(exported.jenkins_job.default_tasks.len(), 2);
+    }
+
+    #[test]
+    fn ui_profile_defaults_to_user_and_roundtrips() {
+        let omitted: MacK3dConfig = serde_yaml::from_str("role: controller\n").unwrap();
+        assert_eq!(omitted.jenkins_job.ui_profile, "user");
+        assert_eq!(omitted.jenkins_job.default_shard_size, 10);
+
+        let mut cfg = MacK3dConfig::default();
+        cfg.jenkins_job.ui_profile = "developer".into();
+        cfg.jenkins_job.default_shard_size = 3;
+        let yaml = serde_yaml::to_string(&cfg).unwrap();
+        assert!(yaml.contains("ui_profile: developer"));
+        assert!(yaml.contains("default_shard_size: 3"));
+        let loaded: MacK3dConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(loaded.jenkins_job.ui_profile, "developer");
+        assert_eq!(loaded.jenkins_job.default_shard_size, 3);
     }
 
     #[test]

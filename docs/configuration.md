@@ -131,8 +131,9 @@ controller:
     - lockable-resources      # per-worker <agent>-core-N capacity locks
     - plain-credentials       # Secret text for LLM keys and forge PATs
     - file-parameters         # ICODE_RELEASE_FILE upload
-    - copyartifact            # eval_aggregate pulls each shard's trials by RUN_GROUP
-    - pipeline-utility-steps  # nodesWithLabel so SHARDS=0 can count online workers
+    - copyartifact            # dispatcher Aggregate stage pulls each shard's trials
+    - pipeline-utility-steps  # nodesWithLabel: at least one shard per online worker
+    - hidden-parameter        # ui_profile=user hides developer params
 ```
 
 Chart defaults still install kubernetes, workflow-aggregator, git, and configuration-as-code. `mac-k3d config` does not change this list; re-run **controller** `mac-k3d start` after a binary that added a plugin.
@@ -244,6 +245,8 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `default_llm` | *(empty → `deepseek`)* | Catalog LLM family (`mac-k3d set --llm`) |
 | `default_deepseek_model` | *(empty → `deepseek-v4-pro`)* | Catalog Chat Completions id (`mac-k3d set --model`; also `deepseek-flash`) |
 | `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench` \| `swebenchpro`) |
+| `ui_profile` | `user` | `user` hides developer parameters (pipeline ref, pins, canary, `SHARD_SIZE`) as hidden parameters that keep their defaults; `developer` shows them. `mac-k3d set --ui-profile`, then `config --skip-secrets` |
+| `default_shard_size` | `10` | Default `SHARD_SIZE` (questions per shard) for `some_task` / `full_suite_task` (`mac-k3d set --shard-size`) |
 
 ## Environment variables
 

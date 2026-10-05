@@ -103,7 +103,6 @@ pub fn try_register_node(
     agent_name: &str,
     remote_fs: &Path,
     labels: &[String],
-    executors: u32,
     api_user: Option<&str>,
     api_token: Option<&str>,
 ) -> Result<Option<String>> {
@@ -138,8 +137,8 @@ pub fn try_register_node(
     .map(|c| c == 200)
     .unwrap_or(false);
 
+    let xml = agent_config_xml(agent_name, remote_fs, &labels_joined);
     if !exists {
-        let xml = agent_config_xml(agent_name, remote_fs, &labels_joined, executors);
         // Modern Jenkins: POST /computer/createItem?name=… with XML body.
         // (doCreateItem expects a Stapler form submission and returns HTTP 400 for raw XML.)
         let create_url = format!(
@@ -194,7 +193,18 @@ pub fn try_register_node(
             return Ok(None);
         }
     } else {
-        println!("Jenkins agent '{agent_name}' already exists on controller.");
+        // Rewrite an existing node so executors and labels follow this config;
+        // the JNLP secret is derived from the node name and survives.
+        match post_node_config(base, &auth, agent_name, &xml, &crumb, &cookie_file) {
+            Ok(code) if code == "200" || code == "204" => println!(
+                "Jenkins agent '{agent_name}' already exists; updated it to {EXECUTORS} executor and labels '{labels_joined}'."
+            ),
+            Ok(code) => println!(
+                "Warning: Jenkins agent '{agent_name}' exists but its config could not be updated (HTTP {code}). \
+                 Set # of executors to {EXECUTORS} on {base}/computer/{agent_name}/configure."
+            ),
+            Err(err) => println!("Warning: could not update agent '{agent_name}' ({err})."),
+        }
     }
 
     let secret = fetch_jnlp_secret(base, &auth, agent_name, &crumb, &cookie_file);
@@ -215,11 +225,52 @@ pub fn try_register_node(
     }
 }
 
-fn agent_config_xml(name: &str, remote_fs: &Path, labels: &str, executors: u32) -> String {
-    // One executor per registered core. The CPU lock, not the executor count,
-    // is what bounds concurrent evaluation, so a single executor would stop a
-    // second shard from even queueing on a worker that has free tokens.
-    let executors = executors.max(1);
+/// One eval build per worker. Each build locks every core of its worker and
+/// Harbor fills them, so the queue hands the next shard to whichever worker
+/// frees up first instead of piling shards onto one node.
+const EXECUTORS: u32 = 1;
+
+fn post_node_config(
+    base: &str,
+    auth: &str,
+    agent_name: &str,
+    xml: &str,
+    crumb: &Option<(String, String)>,
+    cookie_file: &Path,
+) -> Result<String> {
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "-o",
+        "/dev/null",
+        "-b",
+        &cookie_file.display().to_string(),
+        "-c",
+        &cookie_file.display().to_string(),
+        "-u",
+        auth,
+        "-H",
+        "Content-Type: application/xml",
+        "-X",
+        "POST",
+        &format!("{base}/computer/{}/config.xml", urlencoding_simple(agent_name)),
+        "--data-binary",
+        xml,
+        "-w",
+        "%{http_code}",
+    ]);
+    if let Some((field, value)) = crumb {
+        cmd.args(["-H", &format!("{field}: {value}")]);
+    }
+    let output = cmd.output().map_err(|e| Error::CommandFailed {
+        cmd: "curl computer/config.xml".into(),
+        source: e.into(),
+    })?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn agent_config_xml(name: &str, remote_fs: &Path, labels: &str) -> String {
+    let executors = EXECUTORS;
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <slave>
@@ -451,7 +502,6 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
             &name,
             &remote_fs,
             &config.jenkins_agent.labels,
-            config.jenkins_agent.cpu_cores,
             config.jenkins_agent.api_user.as_deref(),
             config.jenkins_agent.api_token.as_deref(),
         )?
@@ -627,6 +677,14 @@ mod tests {
     fn parse_modern_jnlp_secret() {
         let xml = r#"<jnlp><application-desc><argument>abc123secret</argument><argument>mac-host</argument><argument>-webSocket</argument></application-desc></jnlp>"#;
         assert_eq!(parse_jnlp_secret(xml).as_deref(), Some("abc123secret"));
+    }
+
+    #[test]
+    fn agent_registers_with_one_executor() {
+        let xml = agent_config_xml("mac-host", Path::new("/tmp/agent"), "lolbench mac-host");
+        assert!(xml.contains("<numExecutors>1</numExecutors>"));
+        assert!(xml.contains("<label>lolbench mac-host</label>"));
+        assert!(xml.contains("<remoteFS>/tmp/agent</remoteFS>"));
     }
 
     #[test]

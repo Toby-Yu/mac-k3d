@@ -8,7 +8,7 @@ Release and git both mount the supplied iCode at `/opt/icode-host` and run the s
 
 After `icode run`, the Harbor agent force-commits a dirty git tree so DeepSWE can grade `git diff <base> HEAD` and LoLBench submit sees the same tree. That commit does not start another model call.
 
-Each task's `cpus`, `memory_mb` and `storage_mb` come from its own `task.toml` and are **not** overridden: a DeepSWE task gets the 2 CPUs and 8 GB it declares, a LoLBench task gets its 4 CPUs. `pipeline/lib/task_resources.py` reads the declared values, plans how many fit on this worker (`EVAL_SLOTS`, which becomes Harbor's `-n`), and **fails the build before any container starts** if even one selected task does not fit. `CPU_LOCK_QTY` is the core budget the build reserves on its node; it is an upper bound on the plan, not the per-task limit. `artifact.json` records `resources.declared` against `resources.applied`. See [optimization.md](optimization.md).
+Each task's `cpus`, `memory_mb` and `storage_mb` come from its own `task.toml` and are **not** overridden: a DeepSWE task gets the 2 CPUs and 8 GB it declares, a LoLBench task gets its 4 CPUs. `pipeline/lib/task_resources.py` reads the declared values, plans how many fit on this worker (`EVAL_SLOTS`, which becomes Harbor's `-n`), and **fails the build before any container starts** if even one selected task does not fit. The build locks every core of its worker (one eval build per worker); that count arrives as `CPU_LOCK_QTY` and is an upper bound on the plan, not the per-task limit. `artifact.json` records `resources.declared` against `resources.applied`. See [optimization.md](optimization.md).
 
 Harbor’s agent budget is the task’s `agent.timeout_sec` (often 10800s on DeepSWE) with timeout multiplier 1. A rollout that ends near 5100s is iCode stopping itself, not Harbor cutting the trial.
 
@@ -18,17 +18,17 @@ DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-e
 
 ## Which job to run
 
-Three shapes per suite, plus one shared aggregator:
+Three jobs per suite, nine in total:
 
-| Job | Questions | Rollouts | Use it for |
+| Job | Questions | Rollouts (default) | Use it for |
 |---|---|---|---|
-| `<suite>_one_task` | 1 | 1 | smoke test after a code change; cheapest proof the pipeline still works |
-| `<suite>_some_task` | `N_TASKS` | `N_ROLLOUTS` | comparing a handful of questions against a known-good result |
-| `<suite>_full_suite_task` | whole suite | `N_ROLLOUTS` | the real run; dispatches shards and aggregates |
+| `<suite>_one_task` | `TASK` | 1, editable | smoke test after a code change; cheapest proof the pipeline still works |
+| `<suite>_some_task` | `TASKS` list, or first `N_TASKS` | 4, editable | comparing a handful of questions against a known-good result |
+| `<suite>_full_suite_task` | whole suite | 4, editable | the real run |
 
-`<suite>_full_suite_task` is a dispatcher on `agent none`. It slices the sorted id list into `SHARDS` contiguous ranges, triggers that many `<suite>_some_task` builds in parallel (each with its own `TASK_OFFSET` and a shared `RUN_GROUP`), then triggers `eval_aggregate`. Leave `SHARDS=0` to let it pick from registered cores divided by the suite's declared per-task CPUs.
+`<suite>_one_task` is the only job that evaluates. `some_task` and `full_suite_task` are dispatchers on `agent none`: they split the questions into contiguous shards of `SHARD_SIZE` (default 10, at least one shard per online worker), queue every shard as a `<suite>_one_task` build with its own `TASKS` or `TASK_OFFSET` and a shared `RUN_GROUP`, and wait. Each worker has one executor, so a worker that finishes a shard takes the next one from the queue, and a faster worker simply runs more of them. A shard build's description reads `shard 3/12 of deepswe_full_suite_task #7`.
 
-`eval_aggregate` pulls each shard's archived trials by `RUN_GROUP` and merges them into one `artifact.json` / `summary.md` / `report.html` under `aggregate/`. Verdict counts add; shard failures do not hide the shards that worked (`propagate: false`), so a partial suite still produces a report for what finished. If the shards ran different pipeline commits, the merged anti-cheat block is marked `status: mixed_versions` rather than silently averaged.
+When the shards are done, the same dispatcher build runs an `Aggregate` stage on a worker: it copies each shard's archived trials by build number and merges them into one `artifact.json` / `summary.md` / `report.html` under `aggregate/`, archived on the dispatcher build. Verdict counts add; shard failures do not hide the shards that worked (`propagate: false`, the build turns UNSTABLE), so a partial suite still produces a report for what finished. If the shards ran different pipeline commits, the merged anti-cheat block is marked `status: mixed_versions` rather than silently averaged. There is no separate aggregate job.
 
 Merge an already-collected set of shards by hand:
 

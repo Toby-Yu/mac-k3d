@@ -148,9 +148,9 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
 
     if rewrite_jobs {
         println!(
-            "Ensuring Jenkins eval jobs (one / some / full suite for {}, plus '{}')…",
+            "Ensuring Jenkins eval jobs (one / some / full suite for {}; ui_profile={})…",
             jenkins_job::EVAL_BENCHMARKS.join(", "),
-            jenkins_job::EVAL_AGGREGATE
+            config.jenkins_job.ui_profile
         );
         if let Err(err) =
             jenkins_job::ensure_eval_jobs_from_cluster(&tools.kubectl, config, credential_ids).await

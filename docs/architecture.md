@@ -123,7 +123,7 @@ State is written after successful `start` and updated by `config`. `clean --purg
 When `--jenkins in-cluster` (or `jenkins.enabled: true` in config):
 
 1. Ensure Helm repo `jenkins` is added.
-2. Install chart `jenkins/jenkins` into namespace `jenkins`. Extra plugins come from `controller.additionalPlugins` on **controller `mac-k3d start`** (Helm `upgrade --install`, `overwritePlugins: true`): `lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`. Chart defaults already include Pipeline, Git, and Configuration as Code. `config` rewrites jobs only; it does not install plugins. Do not add plugins in the Jenkins UI.
+2. Install chart `jenkins/jenkins` into namespace `jenkins`. Extra plugins come from `controller.additionalPlugins` on **controller `mac-k3d start`** (Helm `upgrade --install`, `overwritePlugins: true`): `lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`. Chart defaults already include Pipeline, Git, and Configuration as Code. `config` rewrites jobs only; it does not install plugins. Do not add plugins in the Jenkins UI.
 3. Map `jenkins.host_port` → Service port 8080 via k3d `--port`.
 
 Jenkins runs inside the cluster; access is via `http://localhost:<host_port>`.
@@ -185,32 +185,40 @@ Harbor's own plan is `n_attempts x tasks x agents`, so `-k 4` over 10 selected i
 
 ### Job topology
 
-Nine evaluation jobs — three shapes for each of `deepswe`, `lolbench`, `swebenchpro` — plus one shared aggregator:
+Nine evaluation jobs — three shapes for each of `deepswe`, `lolbench`, `swebenchpro`:
 
 | Job | Shape | Purpose |
 |---|---|---|
-| `<suite>_one_task` | 1 question, 1 rollout | smoke test after a code change |
-| `<suite>_some_task` | N questions, full rollouts | comparison against a known-good result; also the shard worker |
-| `<suite>_full_suite_task` | dispatcher, `agent none` | slices the suite into `SHARDS` and fans out |
-| `eval_aggregate` | merge only | one report from many shards |
+| `<suite>_one_task` | 1 question, 1 rollout by default | smoke test after a code change; also runs every shard |
+| `<suite>_some_task` | dispatcher, `agent none` | a `TASKS` list or the first `N_TASKS`, at full rollouts |
+| `<suite>_full_suite_task` | dispatcher, `agent none` | the whole suite at full rollouts |
 
-A full suite does **not** queue one build per rollout. The dispatcher slices the sorted question list into `SHARDS` contiguous ranges, triggers that many `<suite>_some_task` builds in parallel with a `TASK_OFFSET` each, and then triggers `eval_aggregate`, which merges the shards' trials by `RUN_GROUP` into one `artifact.json`.
-
-### Per-worker core locks
-
-Each `<suite>_some_task` build is three stages — `Prepare`, `Evaluate`, `Report` — selected by `MAC_K3D_PHASE`. Only `Evaluate` takes the lock:
-
-```groovy
-lock(label: env.NODE_NAME, quantity: params.CPU_LOCK_QTY as Integer, resource: null)
+```mermaid
+flowchart LR
+  someTask["suite_some_task"] -->|"shards, propagate false"| shardBuilds["suite_one_task builds"]
+  fullSuite["suite_full_suite_task"] -->|"shards, propagate false"| shardBuilds
+  shardBuilds -->|"1 executor per worker; next shard goes to the first free worker"| workers["Workers"]
+  someTask --> mergeStage["Aggregate stage in the same build"]
+  fullSuite --> mergeStage
 ```
 
-The label is the **node name**, not a shared `CPU_CORES` label, because `mac-k3d setup` on a worker creates resources named `<agent>-core-1..N` labelled with both the shared label and the agent name, and the agent name is the Jenkins node name. Locking the shared label would let a build on one worker hold cores belonging to another. Image pulls (`Prepare`) and report rendering (`Report`) run unlocked so they do not sit on cores another build is waiting for.
+A dispatcher does **not** queue one build per rollout. It splits the sorted question list into contiguous shards of `SHARD_SIZE` (at least one per online worker, counted with `nodesWithLabel`), queues each as a `<suite>_one_task` build with its own `TASKS` or `TASK_OFFSET` and a shared `RUN_GROUP`, and waits. Its final `Aggregate` stage runs on a worker, copies each shard's archived trials by build number (`copyArtifacts selector: specific(n)`; `one_task` grants the two dispatchers `copyArtifactPermission`), and merges them with `aggregate_runs.py` into one `artifact.json` archived on the dispatcher build. The dispatcher holds no executor while its shards queue, so it cannot starve them.
 
-`numExecutors` on a registered node equals its core count; the lock, not the executor count, is what bounds concurrent evaluation.
+### One build per worker, every core
+
+Each registered node has **one executor**. Jenkins' default load balancer hashes the job name to a preferred node, so with several executors per node every shard of one dispatcher would pile onto the same worker while it had a free executor. With one executor, a worker that is busy is skipped, and when it finishes it takes the next queued shard: bigger or faster workers simply run more shards.
+
+Each `<suite>_one_task` build is three stages — `Prepare`, `Evaluate`, `Report` — selected by `MAC_K3D_PHASE`. Only `Evaluate` takes the lock:
+
+```groovy
+lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES')
+```
+
+With no quantity, lockable-resources locks **every** matching resource, so the build holds all of its worker's cores; their count becomes `CPU_LOCK_QTY`, which `task_resources.py` turns into Harbor's `-n`. The label is the **node name**, not a shared `CPU_CORES` label, because `mac-k3d setup` on a worker creates resources named `<agent>-core-1..N` labelled with both the shared label and the agent name, and the agent name is the Jenkins node name. Image pulls (`Prepare`) and report rendering (`Report`) run unlocked.
 
 ### Adding a worker
 
-`mac-k3d setup -c worker.yaml` registers the node and its core resources. Nothing in the pipeline is edited: the dispatcher derives shard count from registered cores divided by the suite's declared per-task CPUs, Jenkins places shards on whichever node has free tokens, and `lock(label: env.NODE_NAME)` resolves per build.
+`mac-k3d setup -c worker.yaml` registers the node (one executor) and its core resources. Nothing in the pipeline is edited: the dispatcher counts online workers when it plans shards, Jenkins hands each queued shard to the first free worker, and `lock(label: env.NODE_NAME)` resolves per build.
 
 Scale workers, not controllers. Lockable-resources state is per-controller, so a second controller would hand out tokens for cores the first one already lent out.
 

@@ -140,8 +140,9 @@ Open `http://localhost:17070` and complete the Jenkins setup wizard.
 - `lockable-resources` — per-worker `<agent>-core-N` capacity locks
 - `plain-credentials` — Secret text for LLM keys and forge PATs
 - `file-parameters` — `ICODE_RELEASE_FILE` upload onto the agent workspace
-- `copyartifact` — `eval_aggregate` copies each shard's `eval-runs/`
-- `pipeline-utility-steps` — `nodesWithLabel` so `SHARDS=0` can count online workers
+- `copyartifact` — the `some_task` / `full_suite_task` `Aggregate` stage copies each shard's `eval-runs/`
+- `pipeline-utility-steps` — `nodesWithLabel`, so a dispatcher plans at least one shard per online worker
+- `hidden-parameter` — `ui_profile: user` hides developer parameters while keeping their defaults
 
 `mac-k3d config` rewrites job XML and credentials. It does not Helm-upgrade plugins. Workers never install plugins.
 

@@ -14,28 +14,54 @@ const DESC_ICODE_RELEASE_FILE: &str = "Release: choose the icode / icode-*-full-
 const DESC_ICODE_GIT_URL: &str = "Git: https URL on github.com or gitcode.com. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
 const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-request number when KIND is pr. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
 const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, commit, or pr (no auto). For pr, REF is the pull-request number. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
-const DESC_TASKS: &str = "Comma-separated question ids. This field wins over TASK and N_TASKS. Example: ruff_1,fastapi_1. Leave empty to use TASK or N_TASKS.";
+const DESC_DISPATCH_ICODE_GIT_URL: &str = "iCode git URL (https on github.com or gitcode.com). Every shard clones it; an uploaded release cannot be handed on to the shards.";
+const DESC_TASKS: &str = "Comma-separated question ids. This field wins over N_TASKS. Example: ruff_1,fastapi_1. Leave empty to run the first N_TASKS sorted ids.";
 const DESC_CANARY: &str = "Isolation canary (P0.6). official: on when OFFICIAL=1, off otherwise. on: canary on the first task, then the rollouts. only: canary on every selected task and no rollouts (no tokens). off: smoke runs only; OFFICIAL=1 refuses it. A canary failure stops the build.";
 const DESC_CANARY_ALLOW_HOST: &str = "Test only: open this host (for example github.com) for the canary alone, to prove the canary fails when isolation is broken. Leave empty. OFFICIAL=1 refuses it.";
-const DESC_RESUME: &str = "After agent death or an aborted full suite: set true and keep the same TASK/TASKS/N_TASKS. P5 seeds from the aborted harbor_runs/jenkins-* tree (override with RESUME_FROM=jenkins-N) and continues units that lack reward.json. Works for LoLBench and DeepSWE.";
 const DESC_MAC_K3D_GIT_URL: &str = "Git URL of the mac-k3d repo whose pipeline/ runs this build. The build clones it and records the resolved commit in artifact.json, so every result names the pipeline version that produced it.";
 const DESC_MAC_K3D_GIT_REF: &str = "Branch name, tag, commit SHA, or pull-request number for MAC_K3D_GIT_URL. Push a fix to a branch and enter it here; to revert a bad commit, enter the previous SHA.";
 const DESC_MAC_K3D_GIT_REF_KIND: &str = "Pick branch, tag, commit, or pr to match MAC_K3D_GIT_REF. OFFICIAL=1 requires commit, so an official number always names an exact pipeline revision.";
-const DESC_SHARDS: &str = "How many parallel shard builds to split the selected tasks across. Each shard is one some_task build holding its own worker CPU lock. 0 derives it from the registered cores.";
-const DESC_RUN_GROUP: &str = "Id that ties the shards of one suite run together. The dispatcher generates it; the aggregator collects every shard carrying the same value. Leave empty on a direct build.";
+const DESC_SHARD_SIZE: &str = "Questions per shard. All shards are queued at once and each worker takes the next one when it finishes, so a faster worker runs more of them. There is always at least one shard per online worker.";
+const DESC_RUN_GROUP: &str = "Set by some_task or full_suite_task on a shard build: ties the shards of one run together. Empty on a direct build.";
+const DESC_SHARD: &str = "Set by some_task or full_suite_task on a shard build: which shard this is. Shown as the build description.";
+const DESC_SHARD_TASKS: &str = "Set by some_task or full_suite_task on a shard build: the question ids this shard runs. Empty on a direct build.";
+const DESC_SHARD_N_TASKS: &str = "Set by some_task or full_suite_task on a shard build: how many sorted ids to take after TASK_OFFSET. 1 on a direct build.";
+const DESC_TASK_OFFSET: &str = "Set by some_task or full_suite_task on a shard build: sorted ids to skip before taking N_TASKS. 0 on a direct build.";
+const DESC_AGENT_LABEL: &str = "Label a worker must carry to run this build or its shards.";
+const DESC_DEEPSEEK_MODEL: &str = "DeepSeek Chat Completions model id (catalog).";
 
-/// What a job is for. All eval shapes share one Jenkinsfile; only the defaults
-/// and the dispatcher/aggregator bodies differ.
+/// Parameters a dispatcher hands to every shard unchanged.
+const FORWARDED_PARAMS: &[&str] = &[
+    "HARNESS",
+    "LLM",
+    "BENCHMARK",
+    "AGENT_LABEL",
+    "ICODE_GIT_URL",
+    "ICODE_GIT_REF",
+    "ICODE_GIT_REF_KIND",
+    "MAC_K3D_GIT_URL",
+    "MAC_K3D_GIT_REF",
+    "MAC_K3D_GIT_REF_KIND",
+    "HARBOR_VERSION",
+    "DEEPSWE_REF",
+    "LOLBENCH_REF",
+    "ICODE_EXPECT_SHA",
+    "OFFICIAL",
+    "CANARY",
+    "CANARY_ALLOW_HOST",
+    "DEEPSEEK_MODEL",
+];
+
+/// What a job is for. `one_task` is the only shape that evaluates; the other
+/// two split their questions into shards that run as `one_task` builds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobShape {
-    /// One question, one rollout. Smoke test.
+    /// One question, one rollout by default. Also the shard runner.
     One,
-    /// A few questions at the full rollout count. Also the shard runner.
+    /// Dispatcher over a list of questions (TASKS) or the first N (N_TASKS).
     Some_,
-    /// Dispatcher: split the suite into shards and trigger them in parallel.
+    /// Dispatcher over the whole suite.
     FullSuite,
-    /// Merge every shard of one RUN_GROUP into a single report.
-    Aggregate,
 }
 
 impl JobShape {
@@ -44,16 +70,34 @@ impl JobShape {
             JobShape::One => "one_task",
             JobShape::Some_ => "some_task",
             JobShape::FullSuite => "full_suite_task",
-            JobShape::Aggregate => "aggregate",
+        }
+    }
+
+    fn is_dispatcher(self) -> bool {
+        self != JobShape::One
+    }
+}
+
+/// Who reads the job page. `User` sees each shape's short parameter list;
+/// `Developer` also sees the pipeline ref, pins, canary and scheduling knobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiProfile {
+    User,
+    Developer,
+}
+
+impl UiProfile {
+    pub fn parse(s: &str) -> Self {
+        if s.trim().eq_ignore_ascii_case("developer") {
+            UiProfile::Developer
+        } else {
+            UiProfile::User
         }
     }
 }
 
 /// `deepswe_one_task`, `lolbench_some_task`, `swebenchpro_full_suite_task`, …
 pub fn eval_job_name(job_benchmark: &str, shape: JobShape) -> String {
-    if shape == JobShape::Aggregate {
-        return EVAL_AGGREGATE.to_string();
-    }
     format!("{job_benchmark}_{}", shape.suffix())
 }
 
@@ -82,15 +126,18 @@ fn job_description(job_benchmark: &str) -> String {
 fn shape_description(job_benchmark: &str, shape: JobShape) -> String {
     let label = benchmark_label(job_benchmark);
     let size = full_suite_size(job_benchmark);
+    let shard_job = eval_job_name(job_benchmark, JobShape::One);
     match shape {
-        JobShape::One => job_description(job_benchmark),
+        JobShape::One => format!(
+            "{} It also runs each shard of {job_benchmark}_some_task and {job_benchmark}_full_suite_task; those builds say so in their description.",
+            job_description(job_benchmark)
+        ),
         JobShape::Some_ => format!(
-            "Evaluate the iCode harness on a few {label} questions at the full rollout count. Use it to compare a handful of questions against an earlier result, and as the shard runner the full suite dispatcher triggers. One Harbor run per build. See docs/user-guide.md."
+            "Evaluate the iCode harness on a list of {label} questions (TASKS) or the first N (N_TASKS) at the full rollout count. The questions are split into shards that run as {shard_job} builds on whichever workers are free, then merged into one report on this build. See docs/user-guide.md."
         ),
         JobShape::FullSuite => format!(
-            "Run the whole {label} suite ({size} questions) by splitting it into SHARDS parallel {job_benchmark}_some_task builds, then collecting them into one report. This job only dispatches; the shards do the work on whichever workers have free CPU tokens. See docs/harbor-delegation-multiworker/README.md."
+            "Run the whole {label} suite ({size} questions) at N_ROLLOUTS attempts each. The suite is split into shards that run as {shard_job} builds on whichever workers are free, then merged into one report on this build. See docs/harbor-delegation-multiworker/README.md."
         ),
-        JobShape::Aggregate => "Merge every shard of one RUN_GROUP into a single artifact.json, summary.md and report.html. Triggered by a full_suite_task build; you can also run it by hand with the same BENCHMARK and RUN_GROUP. See docs/harbor-delegation-multiworker/README.md.".to_string(),
     }
 }
 
@@ -106,31 +153,43 @@ fn full_suite_size(job_benchmark: &str) -> u32 {
 fn task_param_description(job_benchmark: &str) -> String {
     match job_benchmark {
         "lolbench" => {
-            "One LoLBench question id. A non-empty TASKS list replaces this. Leave empty to use N_TASKS. Example: ruff_1".into()
+            "One LoLBench question id. Example: ruff_1. Leave empty to run the first sorted id. For several questions use lolbench_some_task.".into()
         }
         "deepswe" => {
-            "One DeepSWE question id. A non-empty TASKS list replaces this. Leave empty to use N_TASKS.".into()
+            "One DeepSWE question id. Leave empty to run the first sorted id. For several questions use deepswe_some_task.".into()
         }
         "swebenchpro" => {
-            "One SWE-bench Pro instance id. A non-empty TASKS list replaces this. Leave empty to use N_TASKS. The image is large.".into()
+            "One SWE-bench Pro instance id. Leave empty to run the first sorted id. The image is large. For several questions use swebenchpro_some_task.".into()
         }
-        _ => "One question id. A non-empty TASKS list replaces this. Leave empty to use N_TASKS.".into(),
+        _ => "One question id. Leave empty to run the first sorted id.".into(),
     }
 }
 
-fn n_tasks_param_description(job_benchmark: &str) -> String {
-    format!(
-        "Used only when TASK and TASKS are empty: the first N sorted question ids. Full suite is {}. Set {} with TASK and TASKS empty to run every question.",
-        full_suite_size(job_benchmark),
-        full_suite_size(job_benchmark)
-    )
+fn n_tasks_param_description(job_benchmark: &str, shape: JobShape) -> String {
+    let size = full_suite_size(job_benchmark);
+    match shape {
+        JobShape::FullSuite => format!(
+            "How many questions of the suite to run, lowest ids first. The full suite is {size}; lower it for a rehearsal."
+        ),
+        _ => format!(
+            "Used only when TASKS is empty: the first N sorted question ids. Full suite is {size}; use the full_suite_task job for all of them."
+        ),
+    }
 }
 
 fn benchmark_param_description(job_benchmark: &str) -> String {
     format!(
-        "This job uses {} to evaluate the iCode harness with an LLM call. Do not change it.",
+        "The benchmark this job evaluates the iCode harness on: {}. Fixed for this job; run another suite job to use a different benchmark.",
         benchmark_label(job_benchmark)
     )
+}
+
+fn harness_param_description() -> &'static str {
+    "The harness this job evaluates. Fixed so every build names what it tested; to change it run mac-k3d set --harness on the controller, then mac-k3d config --skip-secrets."
+}
+
+fn llm_param_description() -> &'static str {
+    "The LLM family the harness calls. Fixed for this job; to change it run mac-k3d set --llm on the controller, then mac-k3d config --skip-secrets. DEEPSEEK_MODEL picks the exact model."
 }
 
 /// Options used when rendering / updating `lolbench_one_task`.
@@ -154,6 +213,8 @@ pub struct JobOpts {
     pub default_n_tasks: u32,
     pub default_n_rollouts: u32,
     pub default_tasks: Vec<String>,
+    pub default_shard_size: u32,
+    pub ui_profile: UiProfile,
     /// Credential IDs present in Jenkins (only these are bound in the Pipeline).
     pub credential_ids: Vec<String>,
 }
@@ -245,6 +306,8 @@ impl JobOpts {
             default_n_tasks: config.jenkins_job.default_n_tasks.max(1),
             default_n_rollouts: n_rollouts,
             default_tasks: config.jenkins_job.default_tasks.clone(),
+            default_shard_size: config.jenkins_job.default_shard_size.max(1),
+            ui_profile: UiProfile::parse(&config.jenkins_job.ui_profile),
             credential_ids,
         }
     }
@@ -595,7 +658,7 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
 }
 
 fn job_config_xml(opts: &JobOpts) -> String {
-    one_task_job_xml("lolbench", &job_description("lolbench"), opts)
+    one_task_job_xml("lolbench", &shape_description("lolbench", JobShape::One), opts)
 }
 
 fn xml_escape(s: &str) -> String {
@@ -625,13 +688,20 @@ fn question_defaults_for_job(opts: &JobOpts, job_benchmark: &str) -> (String, u3
 /// TASK / N_TASKS / TASKS / N_ROLLOUTS defaults for one shape.
 ///
 /// `one_task` pins a single question at one rollout so a smoke run costs one
-/// agent call. `some_task` clears TASK so N_TASKS decides, and keeps the full
-/// rollout count. `full_suite_task` defaults N_TASKS to the whole suite.
+/// agent call. `some_task` keeps the configured list or N at the full rollout
+/// count. `full_suite_task` defaults N_TASKS to the whole suite.
 fn shape_defaults(opts: &JobOpts, job_benchmark: &str, shape: JobShape) -> (String, u32, String, u32) {
     let (task, n_tasks, tasks) = question_defaults_for_job(opts, job_benchmark);
     let rollouts = opts.default_n_rollouts.max(1);
     match shape {
-        JobShape::One => (task, 1, tasks, 1),
+        JobShape::One => {
+            let task = if task.is_empty() {
+                opts.default_tasks.first().cloned().unwrap_or_default()
+            } else {
+                task
+            };
+            (task, 1, String::new(), 1)
+        }
         JobShape::Some_ => (String::new(), n_tasks.max(2), tasks, rollouts),
         JobShape::FullSuite => (
             String::new(),
@@ -639,14 +709,13 @@ fn shape_defaults(opts: &JobOpts, job_benchmark: &str, shape: JobShape) -> (Stri
             String::new(),
             rollouts,
         ),
-        JobShape::Aggregate => (String::new(), n_tasks, tasks, rollouts),
     }
 }
 
 fn groovy_quoted_list(items: &[&str]) -> String {
     items
         .iter()
-        .map(|s| format!("'{s}'"))
+        .map(|s| format!("'{}'", groovy_escape(s)))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -659,106 +728,291 @@ fn xml_choice_strings(items: &[&str]) -> String {
         .join("\n")
 }
 
+/// Who sees a parameter on Build with Parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Show {
+    Always,
+    /// Developer profile only; in the user profile it is a hidden param that keeps its default.
+    Developer,
+    /// Always hidden: the dispatcher sets it on a shard build.
+    Never,
+}
+
+#[derive(Debug, Clone)]
+enum ParamKind {
+    /// The first choice is the default.
+    Choice(Vec<String>),
+    Text(String),
+    StashedFile,
+}
+
+/// One job parameter. The Groovy `parameters {}` block and the XML
+/// `<parameterDefinitions>` both render from the same list, so they cannot drift.
+#[derive(Debug, Clone)]
+struct ParamSpec {
+    name: &'static str,
+    kind: ParamKind,
+    description: String,
+    show: Show,
+}
+
+impl ParamSpec {
+    fn visible(&self, profile: UiProfile) -> bool {
+        match self.show {
+            Show::Always => true,
+            Show::Developer => profile == UiProfile::Developer,
+            Show::Never => false,
+        }
+    }
+
+    fn default_value(&self) -> String {
+        match &self.kind {
+            ParamKind::Choice(c) => c.first().cloned().unwrap_or_default(),
+            ParamKind::Text(d) => d.clone(),
+            ParamKind::StashedFile => String::new(),
+        }
+    }
+}
+
+fn choice_param(name: &'static str, choices: &[&str], description: &str, show: Show) -> ParamSpec {
+    ParamSpec {
+        name,
+        kind: ParamKind::Choice(choices.iter().map(|s| s.to_string()).collect()),
+        description: description.to_string(),
+        show,
+    }
+}
+
+fn text_param(name: &'static str, default: impl ToString, description: &str, show: Show) -> ParamSpec {
+    ParamSpec {
+        name,
+        kind: ParamKind::Text(default.to_string()),
+        description: description.to_string(),
+        show,
+    }
+}
+
+/// Every parameter of one job, in display order. HARNESS / LLM / BENCHMARK come
+/// first on every shape and profile so a build always says what it evaluates.
+fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<ParamSpec> {
+    use Show::{Always, Developer, Never};
+    let (task, n_tasks, tasks, n_rollouts) = shape_defaults(opts, job_benchmark, shape);
+    let model_choices =
+        eval_catalog::choices_preferred_first(eval_catalog::MODELS, &opts.default_deepseek_model);
+    let git_kind_choices = eval_catalog::choices_preferred_first(
+        eval_catalog::ICODE_GIT_REF_KINDS,
+        &opts.default_icode_git_ref_kind,
+    );
+    let mac_k3d_kind_choices = eval_catalog::choices_preferred_first(
+        eval_catalog::ICODE_GIT_REF_KINDS,
+        &opts.default_mac_k3d_git_ref_kind,
+    );
+
+    let mut p = vec![
+        choice_param("HARNESS", &[opts.default_harness.as_str()], harness_param_description(), Always),
+        choice_param("LLM", &[opts.default_llm.as_str()], llm_param_description(), Always),
+        choice_param("BENCHMARK", &[job_benchmark], &benchmark_param_description(job_benchmark), Always),
+    ];
+    match shape {
+        JobShape::One => {
+            p.push(text_param("TASK", task, &task_param_description(job_benchmark), Always));
+            p.push(text_param(
+                "N_ROLLOUTS",
+                n_rollouts,
+                "Attempts at the question. 1 is a smoke run; each extra attempt is another full agent run.",
+                Always,
+            ));
+            p.push(choice_param(
+                "ICODE_MODE",
+                &eval_catalog::choices_preferred_first(eval_catalog::ICODE_CI_MODES, jenkins_icode_mode(opts)),
+                DESC_ICODE_MODE,
+                Always,
+            ));
+            p.push(ParamSpec {
+                name: "ICODE_RELEASE_FILE",
+                kind: ParamKind::StashedFile,
+                description: DESC_ICODE_RELEASE_FILE.into(),
+                show: Always,
+            });
+        }
+        JobShape::Some_ => {
+            p.push(text_param("TASKS", tasks, DESC_TASKS, Always));
+            p.push(text_param("N_TASKS", n_tasks, &n_tasks_param_description(job_benchmark, shape), Always));
+        }
+        JobShape::FullSuite => {}
+    }
+    if shape.is_dispatcher() {
+        p.push(text_param(
+            "N_ROLLOUTS",
+            n_rollouts,
+            &format!("Attempts per question. Default {n_rollouts}. Every shard uses the same value, and pass@k is reported up to this k."),
+            Always,
+        ));
+    }
+    let git_url_desc = if shape.is_dispatcher() { DESC_DISPATCH_ICODE_GIT_URL } else { DESC_ICODE_GIT_URL };
+    p.push(text_param("ICODE_GIT_URL", opts.default_icode_git_url.trim(), git_url_desc, Always));
+    p.push(text_param("ICODE_GIT_REF", &opts.default_icode_git_ref, DESC_ICODE_GIT_REF, Always));
+    p.push(choice_param("ICODE_GIT_REF_KIND", &git_kind_choices, DESC_ICODE_GIT_REF_KIND, Always));
+    p.push(choice_param("DEEPSEEK_MODEL", &model_choices, DESC_DEEPSEEK_MODEL, Always));
+
+    match shape {
+        JobShape::One => {
+            p.push(text_param("TASKS", "", DESC_SHARD_TASKS, Never));
+            p.push(text_param("N_TASKS", 1, DESC_SHARD_N_TASKS, Never));
+            p.push(text_param("TASK_OFFSET", 0, DESC_TASK_OFFSET, Never));
+            p.push(text_param("RUN_GROUP", "", DESC_RUN_GROUP, Never));
+            p.push(text_param("SHARD", "", DESC_SHARD, Never));
+        }
+        JobShape::Some_ => {}
+        JobShape::FullSuite => {
+            p.push(text_param("N_TASKS", n_tasks, &n_tasks_param_description(job_benchmark, shape), Developer));
+        }
+    }
+    if shape.is_dispatcher() {
+        p.push(text_param("SHARD_SIZE", opts.default_shard_size.max(1), DESC_SHARD_SIZE, Developer));
+    }
+    p.extend([
+        text_param("MAC_K3D_GIT_URL", opts.default_mac_k3d_git_url.trim(), DESC_MAC_K3D_GIT_URL, Developer),
+        text_param("MAC_K3D_GIT_REF", &opts.default_mac_k3d_git_ref, DESC_MAC_K3D_GIT_REF, Developer),
+        choice_param("MAC_K3D_GIT_REF_KIND", &mac_k3d_kind_choices, DESC_MAC_K3D_GIT_REF_KIND, Developer),
+        text_param("AGENT_LABEL", "lolbench", DESC_AGENT_LABEL, Developer),
+        text_param("HARBOR_VERSION", "0.22.0", "Harbor version installed in P1. A mismatch fails the stage.", Developer),
+        text_param("DEEPSWE_REF", "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea", "DeepSWE commit pinned by P2.", Developer),
+        text_param("LOLBENCH_REF", "1b10d10bb4a10cea54374ac34b8f76b69dc8ce75", "LoLBench commit pinned by P2.", Developer),
+        text_param("ICODE_EXPECT_SHA", "", "When set, P3 fails unless the iCode checkout SHA equals this value.", Developer),
+        text_param("OFFICIAL", 0, "1 requires full provenance and the pinned iCode commit. 0 is a smoke run.", Developer),
+        choice_param("CANARY", &["official", "only", "on", "off"], DESC_CANARY, Developer),
+        text_param("CANARY_ALLOW_HOST", "", DESC_CANARY_ALLOW_HOST, Developer),
+    ]);
+    p
+}
+
+fn groovy_params(params: &[ParamSpec], profile: UiProfile) -> String {
+    params
+        .iter()
+        .map(|p| {
+            let name = p.name;
+            let desc = groovy_escape(&p.description);
+            if !p.visible(profile) {
+                let default = groovy_escape(&p.default_value());
+                return format!("    hidden(name: '{name}', defaultValue: '{default}', description: '{desc}')");
+            }
+            match &p.kind {
+                ParamKind::Choice(choices) => {
+                    let refs: Vec<&str> = choices.iter().map(String::as_str).collect();
+                    format!(
+                        "    choice(name: '{name}', choices: [{}], description: '{desc}')",
+                        groovy_quoted_list(&refs)
+                    )
+                }
+                ParamKind::Text(default) => format!(
+                    "    string(name: '{name}', defaultValue: '{}', description: '{desc}')",
+                    groovy_escape(default)
+                ),
+                ParamKind::StashedFile => format!("    stashedFile(name: '{name}', description: '{desc}')"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn xml_params(params: &[ParamSpec], profile: UiProfile) -> String {
+    params
+        .iter()
+        .map(|p| {
+            let name = xml_escape(p.name);
+            let desc = xml_escape(&p.description);
+            if !p.visible(profile) {
+                return format!(
+                    r#"        <com.wangyin.parameter.WHideParameterDefinition plugin="hidden-parameter">
+          <name>{name}</name>
+          <description>{desc}</description>
+          <defaultValue>{}</defaultValue>
+        </com.wangyin.parameter.WHideParameterDefinition>"#,
+                    xml_escape(&p.default_value())
+                );
+            }
+            match &p.kind {
+                ParamKind::Choice(choices) => {
+                    let refs: Vec<&str> = choices.iter().map(String::as_str).collect();
+                    format!(
+                        r#"        <hudson.model.ChoiceParameterDefinition>
+          <name>{name}</name>
+          <description>{desc}</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+{}
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>"#,
+                        xml_choice_strings(&refs)
+                    )
+                }
+                ParamKind::Text(default) => format!(
+                    r#"        <hudson.model.StringParameterDefinition>
+          <name>{name}</name>
+          <description>{desc}</description>
+          <defaultValue>{}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>"#,
+                    xml_escape(default)
+                ),
+                ParamKind::StashedFile => format!(
+                    r#"        <io.jenkins.plugins.file_parameters.StashedFileParameterDefinition>
+          <name>{name}</name>
+          <description>{desc}</description>
+        </io.jenkins.plugins.file_parameters.StashedFileParameterDefinition>"#
+                ),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Jobs allowed to copy a one_task build's artifacts: the two dispatchers that
+/// run their shards as one_task builds.
+fn shard_readers(job_benchmark: &str) -> Vec<String> {
+    [JobShape::Some_, JobShape::FullSuite]
+        .into_iter()
+        .map(|s| eval_job_name(job_benchmark, s))
+        .collect()
+}
+
+const DISPLAY_NAME_GROOVY: &str =
+    r##"currentBuild.displayName = "#${env.BUILD_NUMBER} ${params.HARNESS}/${params.DEEPSEEK_MODEL}/${params.BENCHMARK}""##;
+
 fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     eval_jenkinsfile(job_benchmark, JobShape::One, opts)
 }
 
 fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> String {
-    match shape {
-        JobShape::FullSuite => return dispatcher_jenkinsfile(job_benchmark, opts),
-        JobShape::Aggregate => return aggregate_jenkinsfile(opts),
-        _ => {}
+    if shape.is_dispatcher() {
+        return dispatcher_jenkinsfile(job_benchmark, shape, opts);
     }
     let (cred_open, cred_close) = with_credentials_block(&opts.credential_ids);
-    let bench = groovy_escape(job_benchmark);
-    let (task, n_tasks, tasks, n_rollouts) = shape_defaults(opts, job_benchmark, shape);
-    let task = groovy_escape(&task);
-    let tasks = groovy_escape(&tasks);
-    let harness_choices =
-        eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness);
-    let llm_choices = eval_catalog::choices_preferred_first(eval_catalog::LLMS, &opts.default_llm);
-    let model_choices =
-        eval_catalog::choices_preferred_first(eval_catalog::MODELS, &opts.default_deepseek_model);
-    let harness_g = groovy_quoted_list(&harness_choices);
-    let llm_g = groovy_quoted_list(&llm_choices);
-    let model_g = groovy_quoted_list(&model_choices);
-    let icode_mode_choices = eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_CI_MODES,
-        jenkins_icode_mode(opts),
-    );
-    let icode_mode_g = groovy_quoted_list(&icode_mode_choices);
-    let icode_git_url_g = groovy_escape(opts.default_icode_git_url.trim());
-    let icode_git_ref_g = groovy_escape(&opts.default_icode_git_ref);
-    let icode_git_ref_kind_choices = eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_icode_git_ref_kind,
-    );
-    let icode_git_ref_kind_g = groovy_quoted_list(&icode_git_ref_kind_choices);
-    let mac_k3d_git_url_g = groovy_escape(opts.default_mac_k3d_git_url.trim());
-    let mac_k3d_git_ref_g = groovy_escape(&opts.default_mac_k3d_git_ref);
-    let mac_k3d_kind_g = groovy_quoted_list(&eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_mac_k3d_git_ref_kind,
-    ));
-    let mac_k3d_git_url_desc_g = groovy_escape(DESC_MAC_K3D_GIT_URL);
-    let mac_k3d_git_ref_desc_g = groovy_escape(DESC_MAC_K3D_GIT_REF);
-    let mac_k3d_kind_desc_g = groovy_escape(DESC_MAC_K3D_GIT_REF_KIND);
-    let run_group_desc_g = groovy_escape(DESC_RUN_GROUP);
-    let task_desc_g = groovy_escape(&task_param_description(job_benchmark));
-    let bench_desc_g = groovy_escape(&benchmark_param_description(job_benchmark));
-    let icode_mode_desc_g = groovy_escape(DESC_ICODE_MODE);
-    let icode_release_file_desc_g = groovy_escape(DESC_ICODE_RELEASE_FILE);
-    let icode_git_url_desc_g = groovy_escape(DESC_ICODE_GIT_URL);
-    let icode_git_ref_desc_g = groovy_escape(DESC_ICODE_GIT_REF);
-    let icode_git_ref_kind_desc_g = groovy_escape(DESC_ICODE_GIT_REF_KIND);
-    let tasks_desc_g = groovy_escape(DESC_TASKS);
-    let resume_desc_g = groovy_escape(DESC_RESUME);
-    let canary_desc_g = groovy_escape(DESC_CANARY);
-    let canary_allow_desc_g = groovy_escape(DESC_CANARY_ALLOW_HOST);
-    let n_tasks_desc_g = groovy_escape(&n_tasks_param_description(job_benchmark));
+    let params = groovy_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
+    let readers = groovy_escape(&shard_readers(job_benchmark).join(","));
     format!(
         r#"pipeline {{
   agent {{ label params.AGENT_LABEL }}
 
   options {{
     timeout(time: 96, unit: 'HOURS')
+    copyArtifactPermission('{readers}')
   }}
 
   parameters {{
-    choice(name: 'HARNESS', choices: [{harness_g}], description: 'Eval harness (catalog; v1: icode)')
-    choice(name: 'LLM', choices: [{llm_g}], description: 'LLM family (catalog; v1: deepseek)')
-    choice(name: 'BENCHMARK', choices: ['{bench}'], description: '{bench_desc_g}')
-    string(name: 'TASK', defaultValue: '{task}', description: '{task_desc_g}')
-    string(name: 'TASKS', defaultValue: '{tasks}', description: '{tasks_desc_g}')
-    string(name: 'N_TASKS', defaultValue: '{n_tasks}', description: '{n_tasks_desc_g}')
-    string(name: 'N_ROLLOUTS', defaultValue: '{n_rollouts}', description: 'Number of iCode attempts for the selected question. Default 4. Each extra attempt is another full agent run.')
-    booleanParam(name: 'RESUME', defaultValue: false, description: '{resume_desc_g}')
-    choice(name: 'ICODE_MODE', choices: [{icode_mode_g}], description: '{icode_mode_desc_g}')
-    stashedFile(name: 'ICODE_RELEASE_FILE', description: '{icode_release_file_desc_g}')
-    string(name: 'ICODE_GIT_URL', defaultValue: '{icode_git_url_g}', description: '{icode_git_url_desc_g}')
-    string(name: 'ICODE_GIT_REF', defaultValue: '{icode_git_ref_g}', description: '{icode_git_ref_desc_g}')
-    choice(name: 'ICODE_GIT_REF_KIND', choices: [{icode_git_ref_kind_g}], description: '{icode_git_ref_kind_desc_g}')
-    string(name: 'MAC_K3D_GIT_URL', defaultValue: '{mac_k3d_git_url_g}', description: '{mac_k3d_git_url_desc_g}')
-    string(name: 'MAC_K3D_GIT_REF', defaultValue: '{mac_k3d_git_ref_g}', description: '{mac_k3d_git_ref_desc_g}')
-    choice(name: 'MAC_K3D_GIT_REF_KIND', choices: [{mac_k3d_kind_g}], description: '{mac_k3d_kind_desc_g}')
-    string(name: 'RUN_GROUP', defaultValue: '', description: '{run_group_desc_g}')
-    string(name: 'TASK_OFFSET', defaultValue: '0', description: 'Skip this many sorted question ids before taking N_TASKS. The full suite dispatcher uses it to give each shard a disjoint slice; leave 0 otherwise.')
-    string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
-    string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'CPU cores this build reserves on its own worker. Harbor gives each trial the cpus its task.toml declares, so this divided by that number is how many trials run at once. The lock is held for the rollouts only.')
-    string(name: 'HARBOR_VERSION', defaultValue: '0.22.0', description: 'Harbor version installed in P1. A mismatch fails the stage.')
-    string(name: 'DEEPSWE_REF', defaultValue: '0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea', description: 'DeepSWE commit pinned by P2.')
-    string(name: 'LOLBENCH_REF', defaultValue: '1b10d10bb4a10cea54374ac34b8f76b69dc8ce75', description: 'LoLBench commit pinned by P2.')
-    string(name: 'ICODE_EXPECT_SHA', defaultValue: '', description: 'When set, P3 fails unless the iCode checkout SHA equals this value.')
-    string(name: 'OFFICIAL', defaultValue: '0', description: '1 requires full provenance and the pinned iCode commit. 0 is a smoke run.')
-    choice(name: 'CANARY', choices: ['official', 'only', 'on', 'off'], description: '{canary_desc_g}')
-    string(name: 'CANARY_ALLOW_HOST', defaultValue: '', description: '{canary_allow_desc_g}')
-    choice(name: 'DEEPSEEK_MODEL', choices: [{model_g}], description: 'DeepSeek Chat Completions model id (catalog)')
+{params}
   }}
 
   stages {{
     stage('Prepare') {{
       steps {{
 {cred_open}          script {{
+            {display_name}
+            if (params.RUN_GROUP?.trim()) {{
+              currentBuild.description = "shard ${{params.SHARD}}"
+            }}
             try {{
               unstash 'ICODE_RELEASE_FILE'
             }} catch (Throwable t) {{
@@ -776,10 +1030,17 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
     stage('Evaluate') {{
       steps {{
 {cred_open}          script {{
-            // Lock this worker's own cores. The resources are named
+            // Lock every core of this worker. The resources are named
             // <node>-core-N and carry the node name as a label, so two workers
-            // never draw from one pool. Held for the rollouts only.
-            lock(label: env.NODE_NAME, quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
+            // never draw from one pool. No quantity means every matching
+            // resource. Held for the rollouts only.
+            lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES') {{
+              String heldCores = env.HELD_CORES ?: ''
+              int held = heldCores.trim() ? heldCores.split(',').size() : 0
+              if (held < 1) {{
+                error "No ${{env.NODE_NAME}}-core-N lockable resources. Run mac-k3d config on this worker to register them."
+              }}
+              env.CPU_LOCK_QTY = "${{held}}"
               sh '''
 {bootstrap}
                 echo "PROGRESS 40% P5 canary + the Harbor run (holding $CPU_LOCK_QTY cores on $NODE_NAME)"
@@ -814,7 +1075,7 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
             archiveArtifacts artifacts: pattern, allowEmptyArchive: true
           }}
         }}
-        // A shard archives its trials so eval_aggregate can pull them by RUN_GROUP.
+        // A shard archives its trials so the dispatcher can merge them.
         if (params.RUN_GROUP?.trim()) {{
           archiveArtifacts artifacts: 'eval-runs/harness/harbor_runs/**', allowEmptyArchive: true
           archiveArtifacts artifacts: 'eval-runs/selected_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json', allowEmptyArchive: true
@@ -824,69 +1085,28 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
   }}
 }}
 "#,
-        bench = bench,
-        task = task,
-        tasks = tasks,
-        n_tasks = n_tasks,
-        n_rollouts = n_rollouts,
-        harness_g = harness_g,
-        llm_g = llm_g,
-        model_g = model_g,
-        cred_open = cred_open,
-        cred_close = cred_close,
+        display_name = DISPLAY_NAME_GROOVY,
         bootstrap = eval_bootstrap_sh(job_benchmark, opts, 12),
-        icode_mode_g = icode_mode_g,
-        icode_git_url_g = icode_git_url_g,
-        icode_git_ref_g = icode_git_ref_g,
-        icode_git_ref_kind_g = icode_git_ref_kind_g,
-        mac_k3d_git_url_g = mac_k3d_git_url_g,
-        mac_k3d_git_ref_g = mac_k3d_git_ref_g,
-        mac_k3d_kind_g = mac_k3d_kind_g,
-        mac_k3d_git_url_desc_g = mac_k3d_git_url_desc_g,
-        mac_k3d_git_ref_desc_g = mac_k3d_git_ref_desc_g,
-        mac_k3d_kind_desc_g = mac_k3d_kind_desc_g,
-        run_group_desc_g = run_group_desc_g,
-        task_desc_g = task_desc_g,
-        bench_desc_g = bench_desc_g,
-        icode_mode_desc_g = icode_mode_desc_g,
-        icode_release_file_desc_g = icode_release_file_desc_g,
-        icode_git_url_desc_g = icode_git_url_desc_g,
-        icode_git_ref_desc_g = icode_git_ref_desc_g,
-        icode_git_ref_kind_desc_g = icode_git_ref_kind_desc_g,
-        tasks_desc_g = tasks_desc_g,
-        resume_desc_g = resume_desc_g,
-        n_tasks_desc_g = n_tasks_desc_g,
     )
 }
 
-/// Full-suite dispatcher. Splits the suite into shards and triggers one
-/// `<suite>_some_task` build per shard in parallel, then the aggregator.
-/// It holds no CPU lock and runs no Docker: the shards do the work wherever
-/// Jenkins finds free tokens, which is what makes adding a worker enough.
-fn dispatcher_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
-    let bench = groovy_escape(job_benchmark);
-    let size = full_suite_size(job_benchmark);
-    let shard_job = eval_job_name(job_benchmark, JobShape::Some_);
-    let n_rollouts = opts.default_n_rollouts.max(1);
-    let model_choices =
-        eval_catalog::choices_preferred_first(eval_catalog::MODELS, &opts.default_deepseek_model);
-    let model_g = groovy_quoted_list(&model_choices);
-    let icode_mode_g = groovy_quoted_list(&eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_CI_MODES,
-        jenkins_icode_mode(opts),
-    ));
-    let icode_git_url_g = groovy_escape(opts.default_icode_git_url.trim());
-    let icode_git_ref_g = groovy_escape(&opts.default_icode_git_ref);
-    let icode_kind_g = groovy_quoted_list(&eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_icode_git_ref_kind,
-    ));
-    let mac_k3d_git_url_g = groovy_escape(opts.default_mac_k3d_git_url.trim());
-    let mac_k3d_git_ref_g = groovy_escape(&opts.default_mac_k3d_git_ref);
-    let mac_k3d_kind_g = groovy_quoted_list(&eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_mac_k3d_git_ref_kind,
-    ));
+/// some_task / full_suite_task. Splits the questions into small shards, queues
+/// every shard as a `<suite>_one_task` build, then merges what came back. It
+/// runs on `agent none` until the merge, so it never holds a worker executor
+/// while its own shards wait for one.
+fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> String {
+    let params = groovy_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
+    let shard_job = groovy_escape(&eval_job_name(job_benchmark, JobShape::One));
+    let ids_from_tasks = if shape == JobShape::Some_ {
+        "          if (params.TASKS?.trim()) {\n            ids = params.TASKS.split(',').collect { it.trim() }.findAll { it }\n          }\n"
+    } else {
+        ""
+    };
+    let forwarded = FORWARDED_PARAMS
+        .iter()
+        .map(|n| format!("                  string(name: '{n}', value: params.{n}),"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         r#"pipeline {{
   agent none
@@ -896,200 +1116,99 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
   }}
 
   parameters {{
-    choice(name: 'BENCHMARK', choices: ['{bench}'], description: '{bench_desc_g}')
-    string(name: 'N_TASKS', defaultValue: '{size}', description: 'How many questions of the suite to run, lowest ids first. The full suite is {size}; lower it for a rehearsal.')
-    string(name: 'TASKS', defaultValue: '', description: '{tasks_desc_g}')
-    string(name: 'N_ROLLOUTS', defaultValue: '{n_rollouts}', description: 'Attempts per question. Every shard uses the same value.')
-    string(name: 'SHARDS', defaultValue: '0', description: '{shards_desc_g}')
-    string(name: 'AGENT_LABEL', defaultValue: 'lolbench', description: 'Label the shard builds ask for. Every worker carrying it is a candidate.')
-    string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'Cores each shard reserves on the worker that runs it.')
-    choice(name: 'ICODE_MODE', choices: [{icode_mode_g}], description: '{icode_mode_desc_g}')
-    string(name: 'ICODE_GIT_URL', defaultValue: '{icode_git_url_g}', description: '{icode_git_url_desc_g}')
-    string(name: 'ICODE_GIT_REF', defaultValue: '{icode_git_ref_g}', description: '{icode_git_ref_desc_g}')
-    choice(name: 'ICODE_GIT_REF_KIND', choices: [{icode_kind_g}], description: '{icode_git_ref_kind_desc_g}')
-    string(name: 'MAC_K3D_GIT_URL', defaultValue: '{mac_k3d_git_url_g}', description: '{mac_k3d_git_url_desc_g}')
-    string(name: 'MAC_K3D_GIT_REF', defaultValue: '{mac_k3d_git_ref_g}', description: '{mac_k3d_git_ref_desc_g}')
-    choice(name: 'MAC_K3D_GIT_REF_KIND', choices: [{mac_k3d_kind_g}], description: '{mac_k3d_kind_desc_g}')
-    string(name: 'OFFICIAL', defaultValue: '0', description: '1 requires full provenance and pinned commits. Passed through to every shard.')
-    choice(name: 'CANARY', choices: ['official', 'only', 'on', 'off'], description: '{canary_desc_g}')
-    choice(name: 'DEEPSEEK_MODEL', choices: [{model_g}], description: 'DeepSeek Chat Completions model id (catalog)')
+{params}
   }}
 
   stages {{
-    stage('Plan shards') {{
+    stage('Shards') {{
       steps {{
         script {{
+          {display_name}
           int rollouts = (params.N_ROLLOUTS as Integer)
-          int lockQty = (params.CPU_LOCK_QTY as Integer)
-          if (rollouts < 1 || lockQty < 1) {{
-            error 'N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1'
+          int shardSize = (params.SHARD_SIZE as Integer)
+          if (rollouts < 1 || shardSize < 1) {{
+            error 'N_ROLLOUTS and SHARD_SIZE must be integers >= 1'
           }}
           // Explicit ids win over N_TASKS, exactly as in a shard build.
           List<String> ids = []
-          if (params.TASKS?.trim()) {{
-            ids = params.TASKS.split(',').collect {{ it.trim() }}.findAll {{ it }}
-          }}
-          int total = ids ? ids.size() : (params.N_TASKS as Integer)
+{ids_from_tasks}          int total = ids ? ids.size() : (params.N_TASKS as Integer)
           if (total < 1) {{
             error 'nothing to run: set N_TASKS >= 1 or a non-empty TASKS list'
           }}
-          int shards = (params.SHARDS as Integer)
-          if (shards < 1) {{
-            // One shard per worker that can take the label, so every worker
-            // gets work without the dispatcher knowing how many there are.
-            // nodesWithLabel needs pipeline-utility-steps; fall back to 1.
-            try {{
-              shards = nodesWithLabel(label: params.AGENT_LABEL, offline: false).size()
-            }} catch (Throwable t) {{
-              echo "Could not count nodes for label ${{params.AGENT_LABEL}} (${{t}}); using SHARDS=1. Set SHARDS explicitly to fan out."
-              shards = 1
-            }}
-            if (shards < 1) {{ shards = 1 }}
+          int shards = (int) ((total + shardSize - 1) / shardSize)
+          // At least one shard per online worker. nodesWithLabel needs
+          // pipeline-utility-steps; without it SHARD_SIZE alone decides.
+          int workers = 0
+          try {{
+            workers = nodesWithLabel(label: params.AGENT_LABEL, offline: false).size()
+          }} catch (Throwable t) {{
+            echo "Could not count workers for label ${{params.AGENT_LABEL}} (${{t}}); using SHARD_SIZE alone."
           }}
+          if (shards < workers) {{ shards = workers }}
           if (shards > total) {{ shards = total }}
           env.RUN_GROUP = "${{env.JOB_NAME}}-${{env.BUILD_NUMBER}}".replaceAll('[^A-Za-z0-9_.-]', '_')
-          echo "RUN_GROUP=${{env.RUN_GROUP}} total=${{total}} shards=${{shards}} rollouts=${{rollouts}}"
+          echo "RUN_GROUP=${{env.RUN_GROUP}} total=${{total}} shards=${{shards}} shard_size=${{shardSize}} workers=${{workers}} rollouts=${{rollouts}}"
 
+          Map<String, Integer> shardBuilds = [:]
+          List<String> notOk = []
           Map<String, Closure> branches = [:]
           for (int i = 0; i < shards; i++) {{
             int index = i
-            // Contiguous, non-overlapping slices. With explicit ids the shard
-            // gets its own TASKS; otherwise it gets an offset into the suite.
+            // Contiguous, non-overlapping slices of the same sorted id list.
             int from = (int) (((long) total * index) / shards)
             int to = (int) (((long) total * (index + 1)) / shards)
             if (to <= from) {{ continue }}
             String shardTasks = ids ? ids.subList(from, to).join(',') : ''
             int shardCount = to - from
-            branches["shard-${{index + 1}}"] = {{
-              build job: '{shard_job}',
+            String name = "shard-${{index + 1}}"
+            String note = "${{index + 1}}/${{shards}} of ${{env.JOB_NAME}} #${{env.BUILD_NUMBER}}"
+            branches[name] = {{
+              def run = build job: '{shard_job}',
                 wait: true,
                 propagate: false,
                 parameters: [
-                  string(name: 'BENCHMARK', value: params.BENCHMARK),
+{forwarded}
                   string(name: 'TASK', value: ''),
                   string(name: 'TASKS', value: shardTasks),
                   string(name: 'N_TASKS', value: "${{shardCount}}"),
                   string(name: 'TASK_OFFSET', value: ids ? '0' : "${{from}}"),
                   string(name: 'N_ROLLOUTS', value: "${{rollouts}}"),
                   string(name: 'RUN_GROUP', value: env.RUN_GROUP),
-                  string(name: 'AGENT_LABEL', value: params.AGENT_LABEL),
-                  string(name: 'CPU_LOCK_QTY', value: "${{lockQty}}"),
-                  string(name: 'ICODE_MODE', value: params.ICODE_MODE),
-                  string(name: 'ICODE_GIT_URL', value: params.ICODE_GIT_URL),
-                  string(name: 'ICODE_GIT_REF', value: params.ICODE_GIT_REF),
-                  string(name: 'ICODE_GIT_REF_KIND', value: params.ICODE_GIT_REF_KIND),
-                  string(name: 'MAC_K3D_GIT_URL', value: params.MAC_K3D_GIT_URL),
-                  string(name: 'MAC_K3D_GIT_REF', value: params.MAC_K3D_GIT_REF),
-                  string(name: 'MAC_K3D_GIT_REF_KIND', value: params.MAC_K3D_GIT_REF_KIND),
-                  string(name: 'OFFICIAL', value: params.OFFICIAL),
-                  string(name: 'CANARY', value: params.CANARY),
-                  string(name: 'DEEPSEEK_MODEL', value: params.DEEPSEEK_MODEL),
+                  string(name: 'SHARD', value: note),
+                  string(name: 'ICODE_MODE', value: 'git'),
                 ]
+              shardBuilds[name] = run.number
+              if (run.result != 'SUCCESS') {{
+                notOk << "${{name}} #${{run.number}} ${{run.result}}"
+              }}
             }}
           }}
-          env.SHARD_COUNT = "${{branches.size()}}"
           parallel branches
+          env.SHARD_BUILDS = shardBuilds.values().join(',')
+          if (notOk) {{
+            unstable "Shards that did not succeed: ${{notOk.join(', ')}}. The report merges the rest."
+          }}
         }}
       }}
     }}
 
     stage('Aggregate') {{
+      agent {{ label params.AGENT_LABEL }}
       steps {{
         script {{
-          build job: '{aggregate_job}',
-            wait: true,
-            propagate: true,
-            parameters: [
-              string(name: 'BENCHMARK', value: params.BENCHMARK),
-              string(name: 'RUN_GROUP', value: env.RUN_GROUP),
-              string(name: 'SHARD_JOB', value: '{shard_job}'),
-              string(name: 'N_ROLLOUTS', value: params.N_ROLLOUTS),
-              string(name: 'AGENT_LABEL', value: params.AGENT_LABEL),
-              string(name: 'MAC_K3D_GIT_URL', value: params.MAC_K3D_GIT_URL),
-              string(name: 'MAC_K3D_GIT_REF', value: params.MAC_K3D_GIT_REF),
-              string(name: 'MAC_K3D_GIT_REF_KIND', value: params.MAC_K3D_GIT_REF_KIND),
-            ]
-        }}
-      }}
-    }}
-  }}
-}}
-"#,
-        bench = bench,
-        size = size,
-        n_rollouts = n_rollouts,
-        shard_job = groovy_escape(&shard_job),
-        aggregate_job = EVAL_AGGREGATE,
-        model_g = model_g,
-        icode_mode_g = icode_mode_g,
-        icode_git_url_g = icode_git_url_g,
-        icode_git_ref_g = icode_git_ref_g,
-        icode_kind_g = icode_kind_g,
-        mac_k3d_git_url_g = mac_k3d_git_url_g,
-        mac_k3d_git_ref_g = mac_k3d_git_ref_g,
-        mac_k3d_kind_g = mac_k3d_kind_g,
-        bench_desc_g = groovy_escape(&benchmark_param_description(job_benchmark)),
-        tasks_desc_g = groovy_escape(DESC_TASKS),
-        shards_desc_g = groovy_escape(DESC_SHARDS),
-        icode_mode_desc_g = groovy_escape(DESC_ICODE_MODE),
-        icode_git_url_desc_g = groovy_escape(DESC_ICODE_GIT_URL),
-        icode_git_ref_desc_g = groovy_escape(DESC_ICODE_GIT_REF),
-        icode_git_ref_kind_desc_g = groovy_escape(DESC_ICODE_GIT_REF_KIND),
-        mac_k3d_git_url_desc_g = groovy_escape(DESC_MAC_K3D_GIT_URL),
-        mac_k3d_git_ref_desc_g = groovy_escape(DESC_MAC_K3D_GIT_REF),
-        mac_k3d_kind_desc_g = groovy_escape(DESC_MAC_K3D_GIT_REF_KIND),
-        canary_desc_g = groovy_escape(DESC_CANARY),
-    )
-}
-
-/// One shared job that merges the shards of a RUN_GROUP into a single report.
-/// It copies each shard's archived trials, then runs `aggregate_runs.py`.
-fn aggregate_jenkinsfile(opts: &JobOpts) -> String {
-    let mac_k3d_git_url_g = groovy_escape(opts.default_mac_k3d_git_url.trim());
-    let mac_k3d_git_ref_g = groovy_escape(&opts.default_mac_k3d_git_ref);
-    let mac_k3d_kind_g = groovy_quoted_list(&eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_mac_k3d_git_ref_kind,
-    ));
-    format!(
-        r#"pipeline {{
-  agent {{ label params.AGENT_LABEL }}
-
-  options {{
-    timeout(time: 4, unit: 'HOURS')
-  }}
-
-  parameters {{
-    choice(name: 'BENCHMARK', choices: ['deepswe', 'lolbench', 'swebenchpro'], description: 'Which suite the shards ran.')
-    string(name: 'RUN_GROUP', defaultValue: '', description: '{run_group_desc_g}')
-    string(name: 'SHARD_JOB', defaultValue: '', description: 'Job the shards ran under, for example deepswe_some_task. Its archived builds are searched for RUN_GROUP.')
-    string(name: 'N_ROLLOUTS', defaultValue: '4', description: 'Attempts per question the shards used. Decides the pass@k ladder.')
-    string(name: 'AGENT_LABEL', defaultValue: 'lolbench', description: 'Where to run the merge. No Docker and no CPU lock; any worker will do.')
-    string(name: 'MAC_K3D_GIT_URL', defaultValue: '{mac_k3d_git_url_g}', description: '{mac_k3d_git_url_desc_g}')
-    string(name: 'MAC_K3D_GIT_REF', defaultValue: '{mac_k3d_git_ref_g}', description: '{mac_k3d_git_ref_desc_g}')
-    choice(name: 'MAC_K3D_GIT_REF_KIND', choices: [{mac_k3d_kind_g}], description: '{mac_k3d_kind_desc_g}')
-  }}
-
-  stages {{
-    stage('Collect shards') {{
-      steps {{
-        script {{
-          if (!params.RUN_GROUP?.trim()) {{ error 'RUN_GROUP is required' }}
-          if (!params.SHARD_JOB?.trim()) {{ error 'SHARD_JOB is required' }}
           deleteDir()
-          copyArtifacts projectName: params.SHARD_JOB,
-            selector: specific('*'),
-            parameters: "RUN_GROUP=${{params.RUN_GROUP}}",
-            filter: 'eval-runs/**',
-            target: 'shards',
-            flatten: false,
-            optional: false
+          if (!env.SHARD_BUILDS?.trim()) {{
+            error 'No shard build started, so there is nothing to merge.'
+          }}
+          for (String n : env.SHARD_BUILDS.split(',')) {{
+            copyArtifacts projectName: '{shard_job}',
+              selector: specific(n),
+              filter: 'eval-runs/**',
+              target: "shards/${{n}}",
+              flatten: false,
+              optional: true
+          }}
         }}
-      }}
-    }}
-
-    stage('Merge') {{
-      steps {{
         sh '''
           set -euo pipefail
           export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
@@ -1114,23 +1233,16 @@ fn aggregate_jenkinsfile(opts: &JobOpts) -> String {
             --out "${{WORKSPACE}}/aggregate"
         '''
       }}
-    }}
-  }}
-
-  post {{
-    always {{
-      archiveArtifacts artifacts: 'aggregate/**', allowEmptyArchive: true
+      post {{
+        always {{
+          archiveArtifacts artifacts: 'aggregate/**', allowEmptyArchive: true
+        }}
+      }}
     }}
   }}
 }}
 "#,
-        run_group_desc_g = groovy_escape(DESC_RUN_GROUP),
-        mac_k3d_git_url_g = mac_k3d_git_url_g,
-        mac_k3d_git_ref_g = mac_k3d_git_ref_g,
-        mac_k3d_kind_g = mac_k3d_kind_g,
-        mac_k3d_git_url_desc_g = groovy_escape(DESC_MAC_K3D_GIT_URL),
-        mac_k3d_git_ref_desc_g = groovy_escape(DESC_MAC_K3D_GIT_REF),
-        mac_k3d_kind_desc_g = groovy_escape(DESC_MAC_K3D_GIT_REF_KIND),
+        display_name = DISPLAY_NAME_GROOVY,
     )
 }
 
@@ -1181,14 +1293,12 @@ echo "mac-k3d pipeline: $MAC_K3D_GIT_URL ${{MAC_K3D_GIT_REF_KIND}}=${{MAC_K3D_GI
 
 export N_TASKS="${{N_TASKS:-1}}"
 export N_ROLLOUTS="${{N_ROLLOUTS:-4}}"
-export RESUME="${{RESUME:-false}}"
-export RESUME_FROM="${{RESUME_FROM:-}}"
 export RUN_GROUP="${{RUN_GROUP:-}}"
 export TASK_OFFSET="${{TASK_OFFSET:-0}}"
 case "$TASK_OFFSET" in
   "" | *[!0-9]*) echo "TASK_OFFSET must be an integer >= 0 (got '$TASK_OFFSET')" >&2; exit 1 ;;
 esac
-for pair in "N_ROLLOUTS=$N_ROLLOUTS" "N_TASKS=$N_TASKS" "CPU_LOCK_QTY=${{CPU_LOCK_QTY:-4}}"; do
+for pair in "N_ROLLOUTS=$N_ROLLOUTS" "N_TASKS=$N_TASKS"; do
   name="${{pair%%=*}}"
   value="${{pair#*=}}"
   case "$value" in
@@ -1196,7 +1306,6 @@ for pair in "N_ROLLOUTS=$N_ROLLOUTS" "N_TASKS=$N_TASKS" "CPU_LOCK_QTY=${{CPU_LOC
   esac
   [ "$value" -ge 1 ] || {{ echo "$name must be an integer >= 1 (got '$value')" >&2; exit 1; }}
 done
-export CPU_LOCK_QTY="${{CPU_LOCK_QTY:-4}}"
 export TASK="${{TASK:-}}"
 export TASKS="${{TASKS:-}}"
 export ICODE_MODE="${{ICODE_MODE:-{icode_mode_fb}}}"
@@ -1262,253 +1371,35 @@ fn eval_job_xml(
     description: &str,
     opts: &JobOpts,
 ) -> String {
-    if shape == JobShape::FullSuite || shape == JobShape::Aggregate {
-        return dispatch_job_xml(job_benchmark, shape, description, opts);
-    }
     let script = eval_jenkinsfile(job_benchmark, shape, opts);
-    let (task, n_tasks, tasks, n_rollouts) = shape_defaults(opts, job_benchmark, shape);
-    let bench_xml = xml_escape(job_benchmark);
-    let task_xml = xml_escape(&task);
-    let tasks_xml = xml_escape(&tasks);
+    let params = xml_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
     let desc_xml = xml_escape(description);
-    let task_desc_xml = xml_escape(&task_param_description(job_benchmark));
-    let bench_desc_xml = xml_escape(&benchmark_param_description(job_benchmark));
-    let harness_choices =
-        eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness);
-    let llm_choices = eval_catalog::choices_preferred_first(eval_catalog::LLMS, &opts.default_llm);
-    let model_choices =
-        eval_catalog::choices_preferred_first(eval_catalog::MODELS, &opts.default_deepseek_model);
-    let harness_xml = xml_choice_strings(&harness_choices);
-    let llm_xml = xml_choice_strings(&llm_choices);
-    let model_xml = xml_choice_strings(&model_choices);
-    let icode_mode_choices = eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_CI_MODES,
-        jenkins_icode_mode(opts),
-    );
-    let icode_mode_xml = xml_choice_strings(&icode_mode_choices);
-    let icode_git_url_xml = xml_escape(opts.default_icode_git_url.trim());
-    let icode_git_ref_xml = xml_escape(&opts.default_icode_git_ref);
-    let icode_git_ref_kind_choices = eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_icode_git_ref_kind,
-    );
-    let icode_git_kind_xml = xml_choice_strings(&icode_git_ref_kind_choices);
-    let mac_k3d_git_url_xml = xml_escape(opts.default_mac_k3d_git_url.trim());
-    let mac_k3d_git_ref_xml = xml_escape(&opts.default_mac_k3d_git_ref);
-    let mac_k3d_kind_xml = xml_choice_strings(&eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_mac_k3d_git_ref_kind,
-    ));
-    let mac_k3d_git_url_desc_xml = xml_escape(DESC_MAC_K3D_GIT_URL);
-    let mac_k3d_git_ref_desc_xml = xml_escape(DESC_MAC_K3D_GIT_REF);
-    let mac_k3d_kind_desc_xml = xml_escape(DESC_MAC_K3D_GIT_REF_KIND);
-    let run_group_desc_xml = xml_escape(DESC_RUN_GROUP);
-    let icode_mode_desc_xml = xml_escape(DESC_ICODE_MODE);
-    let icode_release_file_desc_xml = xml_escape(DESC_ICODE_RELEASE_FILE);
-    let icode_git_url_desc_xml = xml_escape(DESC_ICODE_GIT_URL);
-    let icode_git_ref_desc_xml = xml_escape(DESC_ICODE_GIT_REF);
-    let icode_git_ref_kind_desc_xml = xml_escape(DESC_ICODE_GIT_REF_KIND);
-    let tasks_desc_xml = xml_escape(DESC_TASKS);
-    let resume_desc_xml = xml_escape(DESC_RESUME);
-    let canary_desc_xml = xml_escape(DESC_CANARY);
-    let canary_allow_desc_xml = xml_escape(DESC_CANARY_ALLOW_HOST);
-    let n_tasks_desc_xml = xml_escape(&n_tasks_param_description(job_benchmark));
+    let copy_permission = if shape == JobShape::One {
+        let readers = shard_readers(job_benchmark)
+            .iter()
+            .map(|r| format!("        <string>{}</string>", xml_escape(r)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            r#"    <hudson.plugins.copyartifact.CopyArtifactPermissionProperty plugin="copyartifact">
+      <projectNameList>
+{readers}
+      </projectNameList>
+    </hudson.plugins.copyartifact.CopyArtifactPermissionProperty>
+"#
+        )
+    } else {
+        String::new()
+    };
     format!(
         r#"<?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
   <description>{desc_xml}</description>
   <keepDependencies>false</keepDependencies>
   <properties>
-    <hudson.model.ParametersDefinitionProperty>
+{copy_permission}    <hudson.model.ParametersDefinitionProperty>
       <parameterDefinitions>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>HARNESS</name>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{harness_xml}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>LLM</name>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{llm_xml}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>BENCHMARK</name>
-          <description>{bench_desc_xml}</description>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-              <string>{bench_xml}</string>
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>TASK</name>
-          <description>{task_desc_xml}</description>
-          <defaultValue>{task_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>TASKS</name>
-          <description>{tasks_desc_xml}</description>
-          <defaultValue>{tasks_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>N_TASKS</name>
-          <description>{n_tasks_desc_xml}</description>
-          <defaultValue>{n_tasks}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>N_ROLLOUTS</name>
-          <description>Number of iCode attempts for the selected question. Default 4. Each extra attempt is another full agent run.</description>
-          <defaultValue>{n_rollouts}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.BooleanParameterDefinition>
-          <name>RESUME</name>
-          <description>{resume_desc_xml}</description>
-          <defaultValue>false</defaultValue>
-        </hudson.model.BooleanParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>ICODE_MODE</name>
-          <description>{icode_mode_desc_xml}</description>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{icode_mode_xml}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <io.jenkins.plugins.file_parameters.StashedFileParameterDefinition>
-          <name>ICODE_RELEASE_FILE</name>
-          <description>{icode_release_file_desc_xml}</description>
-        </io.jenkins.plugins.file_parameters.StashedFileParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>ICODE_GIT_URL</name>
-          <description>{icode_git_url_desc_xml}</description>
-          <defaultValue>{icode_git_url_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>ICODE_GIT_REF</name>
-          <description>{icode_git_ref_desc_xml}</description>
-          <defaultValue>{icode_git_ref_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>ICODE_GIT_REF_KIND</name>
-          <description>{icode_git_ref_kind_desc_xml}</description>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{icode_git_kind_xml}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>MAC_K3D_GIT_URL</name>
-          <description>{mac_k3d_git_url_desc_xml}</description>
-          <defaultValue>{mac_k3d_git_url_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>MAC_K3D_GIT_REF</name>
-          <description>{mac_k3d_git_ref_desc_xml}</description>
-          <defaultValue>{mac_k3d_git_ref_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>MAC_K3D_GIT_REF_KIND</name>
-          <description>{mac_k3d_kind_desc_xml}</description>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{mac_k3d_kind_xml}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>RUN_GROUP</name>
-          <description>{run_group_desc_xml}</description>
-          <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>TASK_OFFSET</name>
-          <description>Skip this many sorted question ids before taking N_TASKS. The full suite dispatcher uses it to give each shard a disjoint slice; leave 0 otherwise.</description>
-          <defaultValue>0</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>AGENT_LABEL</name>
-          <defaultValue>lolbench</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>CPU_LOCK_QTY</name>
-          <description>CPU cores this build reserves on its own worker. Harbor gives each trial the cpus its task.toml declares, so this divided by that number is how many trials run at once. The lock is held for the rollouts only.</description>
-          <defaultValue>4</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>HARBOR_VERSION</name>
-          <description>Harbor version installed in P1. A mismatch fails the stage.</description>
-          <defaultValue>0.22.0</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>DEEPSWE_REF</name>
-          <description>DeepSWE commit pinned by P2.</description>
-          <defaultValue>0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>LOLBENCH_REF</name>
-          <description>LoLBench commit pinned by P2.</description>
-          <defaultValue>1b10d10bb4a10cea54374ac34b8f76b69dc8ce75</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>ICODE_EXPECT_SHA</name>
-          <description>When set, P3 fails unless the iCode checkout SHA equals this value.</description>
-          <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>OFFICIAL</name>
-          <description>1 requires full provenance and the pinned iCode commit. 0 is a smoke run.</description>
-          <defaultValue>0</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>CANARY</name>
-          <description>{canary_desc_xml}</description>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-              <string>official</string>
-              <string>only</string>
-              <string>on</string>
-              <string>off</string>
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>CANARY_ALLOW_HOST</name>
-          <description>{canary_allow_desc_xml}</description>
-          <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>DEEPSEEK_MODEL</name>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{model_xml}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
+{params}
       </parameterDefinitions>
     </hudson.model.ParametersDefinitionProperty>
   </properties>
@@ -1520,134 +1411,6 @@ fn eval_job_xml(
   <disabled>false</disabled>
 </flow-definition>
 "#
-    )
-}
-
-/// Dispatcher and aggregator config.xml. Both take their parameters from the
-/// Jenkinsfile's own `parameters {}` block on the first build, so the XML only
-/// has to carry the script plus the few fields the UI needs before that.
-fn dispatch_job_xml(
-    job_benchmark: &str,
-    shape: JobShape,
-    description: &str,
-    opts: &JobOpts,
-) -> String {
-    let script = eval_jenkinsfile(job_benchmark, shape, opts);
-    let desc_xml = xml_escape(description);
-    let bench_xml = xml_escape(job_benchmark);
-    let bench_choices = if shape == JobShape::Aggregate {
-        "              <string>deepswe</string>\n              <string>lolbench</string>\n              <string>swebenchpro</string>".to_string()
-    } else {
-        format!("              <string>{bench_xml}</string>")
-    };
-    let extra = if shape == JobShape::FullSuite {
-        format!(
-            r#"        <hudson.model.StringParameterDefinition>
-          <name>N_TASKS</name>
-          <description>{n_tasks_desc}</description>
-          <defaultValue>{size}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>SHARDS</name>
-          <description>{shards_desc}</description>
-          <defaultValue>0</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-"#,
-            n_tasks_desc = xml_escape(&n_tasks_param_description(job_benchmark)),
-            shards_desc = xml_escape(DESC_SHARDS),
-            size = full_suite_size(job_benchmark),
-        )
-    } else {
-        format!(
-            r#"        <hudson.model.StringParameterDefinition>
-          <name>SHARD_JOB</name>
-          <description>Job the shards ran under, for example deepswe_some_task. Its archived builds are searched for RUN_GROUP.</description>
-          <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>RUN_GROUP</name>
-          <description>{run_group_desc}</description>
-          <defaultValue></defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-"#,
-            run_group_desc = xml_escape(DESC_RUN_GROUP),
-        )
-    };
-    format!(
-        r#"<?xml version='1.0' encoding='UTF-8'?>
-<flow-definition plugin="workflow-job">
-  <description>{desc_xml}</description>
-  <keepDependencies>false</keepDependencies>
-  <properties>
-    <hudson.model.ParametersDefinitionProperty>
-      <parameterDefinitions>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>BENCHMARK</name>
-          <description>{bench_desc_xml}</description>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{bench_choices}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-{extra}        <hudson.model.StringParameterDefinition>
-          <name>N_ROLLOUTS</name>
-          <description>Attempts per question. Every shard uses the same value.</description>
-          <defaultValue>{n_rollouts}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>AGENT_LABEL</name>
-          <defaultValue>lolbench</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>MAC_K3D_GIT_URL</name>
-          <description>{mac_k3d_git_url_desc_xml}</description>
-          <defaultValue>{mac_k3d_git_url_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>MAC_K3D_GIT_REF</name>
-          <description>{mac_k3d_git_ref_desc_xml}</description>
-          <defaultValue>{mac_k3d_git_ref_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition>
-          <name>MAC_K3D_GIT_REF_KIND</name>
-          <description>{mac_k3d_kind_desc_xml}</description>
-          <choices class="java.util.Arrays$ArrayList">
-            <a class="string-array">
-{mac_k3d_kind_xml}
-            </a>
-          </choices>
-        </hudson.model.ChoiceParameterDefinition>
-      </parameterDefinitions>
-    </hudson.model.ParametersDefinitionProperty>
-  </properties>
-  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
-    <script><![CDATA[{script}]]></script>
-    <sandbox>true</sandbox>
-  </definition>
-  <triggers/>
-  <disabled>false</disabled>
-</flow-definition>
-"#,
-        bench_desc_xml = xml_escape(&benchmark_param_description(job_benchmark)),
-        n_rollouts = opts.default_n_rollouts.max(1),
-        mac_k3d_git_url_xml = xml_escape(opts.default_mac_k3d_git_url.trim()),
-        mac_k3d_git_ref_xml = xml_escape(&opts.default_mac_k3d_git_ref),
-        mac_k3d_kind_xml = xml_choice_strings(&eval_catalog::choices_preferred_first(
-            eval_catalog::ICODE_GIT_REF_KINDS,
-            &opts.default_mac_k3d_git_ref_kind,
-        )),
-        mac_k3d_git_url_desc_xml = xml_escape(DESC_MAC_K3D_GIT_URL),
-        mac_k3d_git_ref_desc_xml = xml_escape(DESC_MAC_K3D_GIT_REF),
-        mac_k3d_kind_desc_xml = xml_escape(DESC_MAC_K3D_GIT_REF_KIND),
     )
 }
 
@@ -1738,14 +1501,15 @@ fn urlencoding_simple(s: &str) -> String {
 
 pub const DEEPSWE_ONE_TASK: &str = "deepswe_one_task";
 pub const SWEBENCHPRO_ONE_TASK: &str = "swebenchpro_one_task";
-/// One aggregator shared by every suite; it takes BENCHMARK as a parameter.
-pub const EVAL_AGGREGATE: &str = "eval_aggregate";
 /// Every suite the job generator knows about.
 pub const EVAL_BENCHMARKS: &[&str] = &["deepswe", "lolbench", "swebenchpro"];
+pub const EVAL_SHAPES: &[JobShape] = &[JobShape::One, JobShape::Some_, JobShape::FullSuite];
+/// Jobs an older mac-k3d created that the current shapes replace.
+const RETIRED_JOBS: &[&str] = &["eval_aggregate"];
 
-/// Create or update every eval job: one / some / full-suite per suite, plus the
-/// shared aggregator. Jobs that already exist are rewritten, so running it again
-/// after an upgrade is how a controller picks up a new shape.
+/// Create or update every eval job: one / some / full-suite per suite, and
+/// delete retired ones. Jobs that already exist are rewritten, so running it
+/// again after an upgrade is how a controller picks up a new shape.
 pub fn ensure_eval_jobs(
     jenkins_url: &str,
     api_user: &str,
@@ -1753,25 +1517,67 @@ pub fn ensure_eval_jobs(
     opts: &JobOpts,
 ) -> Result<()> {
     for bench in EVAL_BENCHMARKS {
-        for shape in [JobShape::One, JobShape::Some_, JobShape::FullSuite] {
-            let name = eval_job_name(bench, shape);
-            let xml = eval_job_xml(bench, shape, &shape_description(bench, shape), opts);
+        for shape in EVAL_SHAPES {
+            let name = eval_job_name(bench, *shape);
+            let xml = eval_job_xml(bench, *shape, &shape_description(bench, *shape), opts);
             ensure_named_one_task_xml(&name, &xml, jenkins_url, api_user, api_token_or_password)?;
         }
     }
-    let xml = eval_job_xml(
-        "deepswe",
-        JobShape::Aggregate,
-        &shape_description("deepswe", JobShape::Aggregate),
-        opts,
-    );
-    ensure_named_one_task_xml(
-        EVAL_AGGREGATE,
-        &xml,
-        jenkins_url,
-        api_user,
-        api_token_or_password,
-    )
+    for name in RETIRED_JOBS {
+        delete_job_if_present(name, jenkins_url, api_user, api_token_or_password)?;
+    }
+    Ok(())
+}
+
+fn delete_job_if_present(
+    job_name: &str,
+    jenkins_url: &str,
+    api_user: &str,
+    api_token_or_password: &str,
+) -> Result<()> {
+    let base = jenkins_url.trim_end_matches('/');
+    let auth = format!("{api_user}:{api_token_or_password}");
+    let cookie_file = tempfile_path(&format!("mac-k3d-{job_name}-cookies"))?;
+    let crumb = fetch_crumb(base, &auth, &cookie_file);
+    let exists = curl_status(base, &auth, &format!("/job/{job_name}/api/json"), &crumb, &cookie_file)
+        .map(|c| c == 200)
+        .unwrap_or(false);
+    if !exists {
+        let _ = std::fs::remove_file(&cookie_file);
+        return Ok(());
+    }
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "-o",
+        "/dev/null",
+        "-b",
+        &cookie_file.display().to_string(),
+        "-c",
+        &cookie_file.display().to_string(),
+        "-u",
+        &auth,
+        "-X",
+        "POST",
+        &format!("{base}/job/{job_name}/doDelete"),
+        "-w",
+        "%{http_code}",
+    ]);
+    if let Some((field, value)) = &crumb {
+        cmd.args(["-H", &format!("{field}: {value}")]);
+    }
+    let output = cmd.output().map_err(|e| Error::CommandFailed {
+        cmd: format!("curl doDelete {job_name}"),
+        source: e.into(),
+    })?;
+    let _ = std::fs::remove_file(&cookie_file);
+    let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if code == "200" || code == "302" || code == "303" {
+        println!("Deleted retired job '{job_name}'.");
+    } else {
+        println!("Warning: could not delete retired job '{job_name}' (HTTP {code}); delete it in the UI.");
+    }
+    Ok(())
 }
 
 pub async fn ensure_eval_jobs_from_cluster(
@@ -1980,11 +1786,11 @@ pub async fn ensure_swebenchpro_one_task_from_cluster(
 }
 
 fn deepswe_one_task_job_xml(opts: &JobOpts) -> String {
-    one_task_job_xml("deepswe", &job_description("deepswe"), opts)
+    one_task_job_xml("deepswe", &shape_description("deepswe", JobShape::One), opts)
 }
 
 fn swebenchpro_one_task_job_xml(opts: &JobOpts) -> String {
-    one_task_job_xml("swebenchpro", &job_description("swebenchpro"), opts)
+    one_task_job_xml("swebenchpro", &shape_description("swebenchpro", JobShape::One), opts)
 }
 
 #[cfg(test)]
@@ -2011,6 +1817,8 @@ mod tests {
             default_n_tasks: 1,
             default_n_rollouts: 4,
             default_tasks: Vec::new(),
+            default_shard_size: 10,
+            ui_profile: UiProfile::Developer,
             credential_ids: vec!["deepseek-api-key".into(), "gitcode-pat".into()],
         }
     }
@@ -2034,8 +1842,49 @@ mod tests {
             default_n_tasks: 1,
             default_n_rollouts: 4,
             default_tasks: Vec::new(),
+            default_shard_size: 10,
+            ui_profile: UiProfile::User,
             credential_ids,
         }
+    }
+
+    /// The `parameters { ... }` block of a Jenkinsfile.
+    fn params_block(jf: &str) -> &str {
+        let start = jf.find("  parameters {\n").expect("parameters block") + "  parameters {\n".len();
+        let end = start + jf[start..].find("\n  }\n").expect("end of parameters block");
+        &jf[start..end]
+    }
+
+    fn groovy_param_names(jf: &str) -> Vec<String> {
+        params_block(jf)
+            .lines()
+            .map(|l| {
+                let rest = &l[l.find("name: '").expect("name") + "name: '".len()..];
+                rest[..rest.find('\'').unwrap()].to_string()
+            })
+            .collect()
+    }
+
+    fn xml_param_names(xml: &str) -> Vec<String> {
+        let start = xml.find("<parameterDefinitions>").unwrap();
+        let end = xml.find("</parameterDefinitions>").unwrap();
+        xml[start..end]
+            .lines()
+            .filter_map(|l| {
+                let l = l.trim();
+                l.strip_prefix("<name>")
+                    .and_then(|r| r.strip_suffix("</name>"))
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    fn visible_names(bench: &str, shape: JobShape, opts: &JobOpts) -> Vec<&'static str> {
+        eval_params(bench, shape, opts)
+            .into_iter()
+            .filter(|p| p.visible(opts.ui_profile))
+            .map(|p| p.name)
+            .collect()
     }
 
     #[test]
@@ -2089,7 +1938,10 @@ mod tests {
         // Each worker locks its own cores; a shared pool would let a build on
         // worker A hold tokens that belong to worker B.
         assert!(!jf.contains("lock(label: 'CPU_CORES'"));
-        assert!(jf.contains("lock(label: env.NODE_NAME"));
+        assert!(jf.contains("lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES')"));
+        // No quantity: the build takes every core of its worker.
+        assert!(!jf.contains("quantity:"));
+        assert!(jf.contains("env.CPU_LOCK_QTY = \"${held}\""));
         // And it holds them for the rollouts only.
         assert!(jf.contains("stage('Prepare')"));
         assert!(jf.contains("stage('Evaluate')"));
@@ -2108,14 +1960,10 @@ mod tests {
     }
 
     #[test]
-    fn every_suite_gets_three_shapes_plus_one_aggregator() {
+    fn every_suite_gets_exactly_three_jobs() {
         let names: Vec<String> = EVAL_BENCHMARKS
             .iter()
-            .flat_map(|b| {
-                [JobShape::One, JobShape::Some_, JobShape::FullSuite]
-                    .into_iter()
-                    .map(move |s| eval_job_name(b, s))
-            })
+            .flat_map(|b| EVAL_SHAPES.iter().map(move |s| eval_job_name(b, *s)))
             .collect();
         assert_eq!(
             names,
@@ -2131,85 +1979,260 @@ mod tests {
                 "swebenchpro_full_suite_task",
             ]
         );
-        // The aggregator is shared; it takes BENCHMARK as a parameter.
+        // The merge happens inside the dispatcher build; no separate job.
+        assert_eq!(RETIRED_JOBS, &["eval_aggregate"]);
+        let opts = deepswe_opts(Vec::new());
         for bench in EVAL_BENCHMARKS {
-            assert_eq!(eval_job_name(bench, JobShape::Aggregate), EVAL_AGGREGATE);
+            for shape in EVAL_SHAPES {
+                let xml = eval_job_xml(bench, *shape, "d", &opts);
+                assert!(!xml.contains("eval_aggregate"), "{bench} {shape:?}");
+            }
         }
     }
 
     #[test]
-    fn shapes_differ_only_in_their_defaults() {
+    fn each_shape_shows_only_its_params() {
+        let opts = deepswe_opts(Vec::new());
+        assert_eq!(
+            visible_names("deepswe", JobShape::One, &opts),
+            vec![
+                "HARNESS",
+                "LLM",
+                "BENCHMARK",
+                "TASK",
+                "N_ROLLOUTS",
+                "ICODE_MODE",
+                "ICODE_RELEASE_FILE",
+                "ICODE_GIT_URL",
+                "ICODE_GIT_REF",
+                "ICODE_GIT_REF_KIND",
+                "DEEPSEEK_MODEL",
+            ]
+        );
+        assert_eq!(
+            visible_names("deepswe", JobShape::Some_, &opts),
+            vec![
+                "HARNESS",
+                "LLM",
+                "BENCHMARK",
+                "TASKS",
+                "N_TASKS",
+                "N_ROLLOUTS",
+                "ICODE_GIT_URL",
+                "ICODE_GIT_REF",
+                "ICODE_GIT_REF_KIND",
+                "DEEPSEEK_MODEL",
+            ]
+        );
+        assert_eq!(
+            visible_names("deepswe", JobShape::FullSuite, &opts),
+            vec![
+                "HARNESS",
+                "LLM",
+                "BENCHMARK",
+                "N_ROLLOUTS",
+                "ICODE_GIT_URL",
+                "ICODE_GIT_REF",
+                "ICODE_GIT_REF_KIND",
+                "DEEPSEEK_MODEL",
+            ]
+        );
+    }
+
+    #[test]
+    fn shapes_get_their_own_defaults() {
         let mut opts = deepswe_opts(vec!["deepseek-api-key".into()]);
         opts.default_n_tasks = 5;
         opts.default_n_rollouts = 4;
         opts.default_task = "abs-stepped-slices".into();
         let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
         let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
+        let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
         // one_task: a single named question, a single attempt.
         assert!(one.contains("string(name: 'TASK', defaultValue: 'abs-stepped-slices'"));
-        assert!(one.contains("string(name: 'N_TASKS', defaultValue: '1'"));
         assert!(one.contains("string(name: 'N_ROLLOUTS', defaultValue: '1'"));
-        // some_task: N questions at the full rollout count, no pinned TASK.
-        assert!(some.contains("string(name: 'TASK', defaultValue: ''"));
+        assert!(one.contains("hidden(name: 'N_TASKS', defaultValue: '1'"));
+        // some_task: N questions at the full rollout count.
         assert!(some.contains("string(name: 'N_TASKS', defaultValue: '5'"));
         assert!(some.contains("string(name: 'N_ROLLOUTS', defaultValue: '4'"));
-        // Everything else is the same pipeline.
-        assert_eq!(
-            one.replace("defaultValue: 'abs-stepped-slices'", "defaultValue: ''")
-                .replace("'N_TASKS', defaultValue: '1'", "'N_TASKS', defaultValue: '5'")
-                .replace("'N_ROLLOUTS', defaultValue: '1'", "'N_ROLLOUTS', defaultValue: '4'"),
-            some
-        );
+        assert!(some.contains("string(name: 'TASKS', defaultValue: ''"));
+        // full_suite_task: the whole suite at the full rollout count.
+        assert!(full.contains("string(name: 'N_ROLLOUTS', defaultValue: '4'"));
+        assert!(full.contains("hidden(name: 'N_TASKS', defaultValue: '113'"));
+    }
+
+    #[test]
+    fn user_profile_hides_dev_params() {
+        let opts = deepswe_opts(Vec::new());
+        assert_eq!(opts.ui_profile, UiProfile::User);
+        for shape in EVAL_SHAPES {
+            let jf = eval_jenkinsfile("deepswe", *shape, &opts);
+            let block = params_block(&jf);
+            assert!(block.contains("hidden(name: 'MAC_K3D_GIT_REF', defaultValue: 'main'"), "{shape:?}");
+            assert!(block.contains("hidden(name: 'MAC_K3D_GIT_REF_KIND', defaultValue: 'branch'"));
+            assert!(block.contains("hidden(name: 'OFFICIAL', defaultValue: '0'"));
+            assert!(block.contains("hidden(name: 'CANARY', defaultValue: 'official'"));
+            assert!(block.contains("hidden(name: 'AGENT_LABEL', defaultValue: 'lolbench'"));
+            assert!(block.contains("string(name: 'N_ROLLOUTS'"));
+            assert!(!block.contains("string(name: 'OFFICIAL'"));
+            let xml = eval_job_xml("deepswe", *shape, "d", &opts);
+            assert!(xml.contains(
+                "<com.wangyin.parameter.WHideParameterDefinition plugin=\"hidden-parameter\">\n          <name>OFFICIAL</name>"
+            ));
+        }
+        let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
+        assert!(params_block(&one).contains("string(name: 'TASK'"));
+        let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
+        assert!(params_block(&full).contains("hidden(name: 'SHARD_SIZE', defaultValue: '10'"));
+    }
+
+    #[test]
+    fn developer_profile_shows_dev_params() {
+        let mut opts = deepswe_opts(Vec::new());
+        opts.ui_profile = UiProfile::Developer;
+        let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
+        let block = params_block(&one);
+        assert!(block.contains("string(name: 'MAC_K3D_GIT_REF', defaultValue: 'main'"));
+        assert!(block.contains("choice(name: 'CANARY', choices: ['official', 'only', 'on', 'off']"));
+        assert!(block.contains("string(name: 'HARBOR_VERSION', defaultValue: '0.22.0'"));
+        // Shard plumbing stays hidden for developers too: the dispatcher owns it.
+        assert!(block.contains("hidden(name: 'RUN_GROUP', defaultValue: ''"));
+        assert!(block.contains("hidden(name: 'TASK_OFFSET', defaultValue: '0'"));
+        assert!(block.contains("hidden(name: 'SHARD', defaultValue: ''"));
+        let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
+        assert!(params_block(&full).contains("string(name: 'SHARD_SIZE', defaultValue: '10'"));
+        assert!(params_block(&full).contains("string(name: 'N_TASKS', defaultValue: '113'"));
+    }
+
+    #[test]
+    fn harness_llm_benchmark_always_visible() {
+        for profile in [UiProfile::User, UiProfile::Developer] {
+            let mut opts = deepswe_opts(Vec::new());
+            opts.ui_profile = profile;
+            for bench in EVAL_BENCHMARKS {
+                for shape in EVAL_SHAPES {
+                    let jf = eval_jenkinsfile(bench, *shape, &opts);
+                    let first: Vec<&str> = params_block(&jf).lines().take(3).collect();
+                    assert!(first[0].starts_with("    choice(name: 'HARNESS', choices: ['icode']"), "{first:?}");
+                    assert!(first[1].starts_with("    choice(name: 'LLM', choices: ['deepseek']"));
+                    assert!(first[2].starts_with(&format!("    choice(name: 'BENCHMARK', choices: ['{bench}']")));
+                    assert!(jf.contains(DISPLAY_NAME_GROOVY), "{bench} {shape:?}");
+                    let xml = eval_job_xml(bench, *shape, "d", &opts);
+                    assert_eq!(&xml_param_names(&xml)[..3], &["HARNESS", "LLM", "BENCHMARK"]);
+                }
+            }
+        }
+        let some = eval_jenkinsfile("deepswe", JobShape::Some_, &deepswe_opts(Vec::new()));
+        for name in ["HARNESS", "LLM", "BENCHMARK"] {
+            assert!(some.contains(&format!("string(name: '{name}', value: params.{name})")));
+        }
+    }
+
+    #[test]
+    fn no_resume_or_cpu_lock_qty_param() {
+        for profile in [UiProfile::User, UiProfile::Developer] {
+            let mut opts = deepswe_opts(Vec::new());
+            opts.ui_profile = profile;
+            for bench in EVAL_BENCHMARKS {
+                for shape in EVAL_SHAPES {
+                    let xml = eval_job_xml(bench, *shape, "d", &opts);
+                    assert!(!xml.contains("RESUME"), "{bench} {shape:?}");
+                    assert!(!xml.contains("name: 'CPU_LOCK_QTY'"));
+                    assert!(!xml.contains("<name>CPU_LOCK_QTY</name>"));
+                    assert!(!xml.contains("'SHARDS'"));
+                    assert!(!xml.contains("SHARD_JOB"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn some_task_dispatches_to_one_task() {
+        let jf = eval_jenkinsfile("deepswe", JobShape::Some_, &deepswe_opts(Vec::new()));
+        // The dispatcher holds no executor while its shards queue for one.
+        assert!(jf.starts_with("pipeline {\n  agent none"));
+        assert!(!jf.contains("lock("));
+        assert!(!jf.contains("run_all.sh"));
+        assert!(jf.contains("build job: 'deepswe_one_task'"));
+        assert!(jf.contains("params.TASKS?.trim()"));
+        assert!(jf.contains("parallel branches"));
+        assert!(jf.contains("propagate: false"));
+        assert!(jf.contains("string(name: 'TASK_OFFSET', value: ids ? '0' : \"${from}\")"));
+        assert!(jf.contains("string(name: 'SHARD', value: note)"));
+        assert!(jf.contains("string(name: 'ICODE_MODE', value: 'git')"));
+        assert!(jf.contains("unstable \"Shards that did not succeed"));
+        // The merge runs in this build, on a worker, from the shard build numbers.
+        assert!(jf.contains("stage('Aggregate') {\n      agent { label params.AGENT_LABEL }"));
+        assert!(jf.contains("copyArtifacts projectName: 'deepswe_one_task'"));
+        assert!(jf.contains("selector: specific(n)"));
+        assert!(jf.contains("env.SHARD_BUILDS = shardBuilds.values().join(',')"));
+        assert!(jf.contains("aggregate_runs.py"));
+        assert!(jf.contains("archiveArtifacts artifacts: 'aggregate/**'"));
+        for name in FORWARDED_PARAMS {
+            assert!(jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
+        }
     }
 
     #[test]
     fn full_suite_dispatches_shards_then_aggregates() {
         let opts = deepswe_opts(vec!["deepseek-api-key".into()]);
         let jf = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
-        // The dispatcher does no work itself: no node, no Docker, no lock.
         assert!(jf.contains("agent none"));
         assert!(!jf.contains("lock("));
-        assert!(!jf.contains("run_all.sh"));
-        assert!(jf.contains("build job: 'deepswe_some_task'"));
-        assert!(jf.contains("build job: 'eval_aggregate'"));
+        assert!(jf.contains("build job: 'deepswe_one_task'"));
+        assert!(!jf.contains("params.TASKS"));
         assert!(jf.contains("parallel branches"));
         assert!(jf.contains("env.RUN_GROUP"));
-        // Shards take disjoint, contiguous slices of the same sorted id list.
         assert!(jf.contains("TASK_OFFSET"));
-        assert!(jf.contains("string(name: 'N_TASKS', defaultValue: '113'"));
-        assert!(jf.contains("string(name: 'SHARDS', defaultValue: '0'"));
-        // Shard failures must not hide the ones that worked.
-        assert!(jf.contains("propagate: false"));
+        // Small shards, at least one per online worker.
+        assert!(jf.contains("int shards = (int) ((total + shardSize - 1) / shardSize)"));
+        assert!(jf.contains("nodesWithLabel(label: params.AGENT_LABEL, offline: false)"));
+        assert!(jf.contains("if (shards < workers) { shards = workers }"));
+        assert!(jf.contains("hidden(name: 'N_TASKS', defaultValue: '113'"));
+        assert!(jf.contains("stage('Aggregate')"));
+        assert!(!jf.contains("eval_aggregate"));
+        assert!(!jf.contains("SHARDS"));
 
         let lol = eval_jenkinsfile("lolbench", JobShape::FullSuite, &opts);
-        assert!(lol.contains("build job: 'lolbench_some_task'"));
-        assert!(lol.contains("string(name: 'N_TASKS', defaultValue: '20'"));
+        assert!(lol.contains("build job: 'lolbench_one_task'"));
+        assert!(lol.contains("hidden(name: 'N_TASKS', defaultValue: '20'"));
     }
 
     #[test]
-    fn aggregate_collects_by_run_group() {
-        let opts = deepswe_opts(Vec::new());
-        let jf = eval_jenkinsfile("deepswe", JobShape::Aggregate, &opts);
-        assert!(jf.contains("copyArtifacts"));
-        assert!(jf.contains("RUN_GROUP=${params.RUN_GROUP}"));
-        assert!(jf.contains("aggregate_runs.py"));
-        assert!(jf.contains("RUN_GROUP is required"));
-        // It only merges, so it needs no Docker, no iCode and no lock.
-        assert!(!jf.contains("lock("));
-        assert!(!jf.contains("ICODE_MODE"));
-        assert!(!jf.contains("docker info"));
-        // Every suite shares it.
-        for bench in EVAL_BENCHMARKS {
-            assert!(jf.contains(&format!("<string>{bench}</string>")) || jf.contains(bench));
+    fn groovy_and_xml_param_sets_match() {
+        for profile in [UiProfile::User, UiProfile::Developer] {
+            let mut opts = deepswe_opts(vec!["deepseek-api-key".into()]);
+            opts.ui_profile = profile;
+            for bench in EVAL_BENCHMARKS {
+                for shape in EVAL_SHAPES {
+                    let jf = eval_jenkinsfile(bench, *shape, &opts);
+                    let xml = eval_job_xml(bench, *shape, "d", &opts);
+                    assert_eq!(groovy_param_names(&jf), xml_param_names(&xml), "{bench} {shape:?}");
+                    assert_eq!(
+                        params_block(&jf).matches("    hidden(").count(),
+                        xml.matches("<com.wangyin.parameter.WHideParameterDefinition").count(),
+                        "{bench} {shape:?} {profile:?}"
+                    );
+                }
+            }
         }
     }
 
     #[test]
-    fn a_shard_archives_its_trials_for_the_aggregator() {
-        let jf = eval_jenkinsfile("deepswe", JobShape::Some_, &deepswe_opts(Vec::new()));
+    fn a_shard_archives_its_trials_for_the_dispatcher() {
+        let opts = deepswe_opts(Vec::new());
+        let jf = eval_jenkinsfile("deepswe", JobShape::One, &opts);
         assert!(jf.contains("params.RUN_GROUP?.trim()"));
         assert!(jf.contains("eval-runs/harness/harbor_runs/**"));
         assert!(jf.contains("eval-runs/selected_tasks.txt"));
+        assert!(jf.contains("currentBuild.description = \"shard ${params.SHARD}\""));
+        // Copy Artifact refuses cross-job copies unless the source job allows them.
+        assert!(jf.contains("copyArtifactPermission('deepswe_some_task,deepswe_full_suite_task')"));
+        let xml = eval_job_xml("deepswe", JobShape::One, "d", &opts);
+        assert!(xml.contains("CopyArtifactPermissionProperty"));
+        assert!(xml.contains("<string>deepswe_full_suite_task</string>"));
+        let some = eval_job_xml("deepswe", JobShape::Some_, "d", &opts);
+        assert!(!some.contains("CopyArtifactPermissionProperty"));
     }
 
     #[test]
@@ -2258,15 +2281,9 @@ mod tests {
             !xml.contains("<string>auto</string>"),
             "Jenkins KIND list is branch/tag/commit/pr only"
         );
-        assert!(xml.contains("Full suite is 20"));
-        assert!(xml.contains("wins over TASK and N_TASKS"));
         assert!(
-            !xml.contains('\u{2013}'),
-            "en-dash breaks Jenkins XML 1.1 POST"
-        );
-        assert!(
-            !xml.contains('\u{2192}'),
-            "unicode arrow breaks Jenkins XML 1.1 POST"
+            xml.is_ascii(),
+            "non-ASCII (en-dash, arrow) breaks Jenkins XML 1.1 POST"
         );
         assert!(!xml.contains("<name>ICODE_SOURCE</name>"));
         assert!(!xml.contains("<string>source</string>"));
@@ -2288,10 +2305,23 @@ mod tests {
         assert_eq!(opts.default_icode_git_ref, "2");
         assert_eq!(opts.default_icode_git_ref_kind, "pr");
         assert_eq!(opts.default_n_rollouts, 4);
+        assert_eq!(opts.ui_profile, UiProfile::User);
+        assert_eq!(opts.default_shard_size, 10);
         assert_eq!(
             opts.default_icode_git_url,
             "https://gitcode.com/michaelling/jiuwenicode"
         );
+    }
+
+    #[test]
+    fn job_opts_from_config_reads_ui_profile() {
+        let mut cfg = crate::config::MacK3dConfig::default();
+        cfg.jenkins_job.ui_profile = "developer".into();
+        cfg.jenkins_job.default_shard_size = 0;
+        let opts = JobOpts::from_config(&cfg, Vec::new());
+        assert_eq!(opts.ui_profile, UiProfile::Developer);
+        assert_eq!(opts.default_shard_size, 1);
+        assert_eq!(UiProfile::parse("anything else"), UiProfile::User);
     }
 
     #[test]
@@ -2334,8 +2364,6 @@ mod tests {
         assert!(xml.contains("ParametersDefinitionProperty"));
         assert!(xml.contains("<name>N_TASKS</name>"));
         assert!(xml.contains("<name>N_ROLLOUTS</name>"));
-        assert!(xml.contains("<name>RESUME</name>"));
-        assert!(xml.contains("BooleanParameterDefinition"));
         assert!(xml.contains("<defaultValue>1</defaultValue>"));
         assert!(xml.contains("<name>TASK</name>"));
         // A worker no longer needs a pre-extracted pipeline, so the old "run
@@ -2349,8 +2377,8 @@ mod tests {
             !xml.contains("/home/Toby/Documents/Toby/iCode-main"),
             "job must not hardcode a lab iCode path"
         );
-        assert!(xml.contains("export RESUME="));
-        assert!(xml.contains("booleanParam(name: 'RESUME'"));
+        assert!(!xml.contains("RESUME"));
+        assert!(!xml.contains("BooleanParameterDefinition"));
     }
 
     #[test]
@@ -2417,20 +2445,19 @@ mod tests {
         assert!(deepswe.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
         assert!(lolbench.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
         assert!(swebenchpro.contains("<defaultValue>abs-stepped-slices</defaultValue>"));
-        assert!(deepswe.contains("<name>N_TASKS</name>"));
-        assert!(deepswe.contains("Full suite is 113"));
-        assert!(swebenchpro.contains("Full suite is 731"));
         assert!(deepswe.contains("<name>N_ROLLOUTS</name>"));
         // one_task is the smoke shape: one question, one rollout, whatever the
         // config's N_TASKS says. some_task is where the configured count lands.
-        assert!(deepswe.contains("<name>N_TASKS</name>\n          <description>Used only when TASK and TASKS are empty"));
         let some = eval_job_xml("deepswe", JobShape::Some_, "d", &opts);
+        assert!(some.contains("<name>N_TASKS</name>\n          <description>Used only when TASKS is empty"));
         assert!(some.contains("<defaultValue>2</defaultValue>"));
+        assert!(some.contains("Full suite is 113"));
+        let some_pro = eval_job_xml("swebenchpro", JobShape::Some_, "d", &opts);
+        assert!(some_pro.contains("Full suite is 731"));
         let (task, n, tasks) = question_defaults_for_job(&opts, "swebenchpro");
         assert_eq!(task, "abs-stepped-slices");
         assert_eq!(n, 2);
         assert!(tasks.is_empty());
-        assert!(swebenchpro.contains("<name>N_TASKS</name>"));
         assert!(swebenchpro.contains("<name>N_ROLLOUTS</name>"));
         assert!(lolbench.contains("<name>N_ROLLOUTS</name>"));
         assert!(lolbench.contains("<name>HARNESS</name>"));
@@ -2444,12 +2471,16 @@ mod tests {
         let mut opts = deepswe_opts(Vec::new());
         opts.default_task.clear();
         opts.default_tasks = vec!["abs-module-cache-flags".into(), "abs-stepped-slices".into()];
-        let xml = deepswe_one_task_job_xml(&opts);
-        assert!(xml.contains("<name>TASKS</name>"));
+        // some_task takes the list; one_task takes its first id.
+        let some = eval_job_xml("deepswe", JobShape::Some_, "d", &opts);
+        assert!(some.contains("<name>TASKS</name>"));
         assert!(
-            xml.contains("<defaultValue>abs-module-cache-flags,abs-stepped-slices</defaultValue>")
+            some.contains("<defaultValue>abs-module-cache-flags,abs-stepped-slices</defaultValue>")
         );
-        assert!(xml.contains("export TASKS="));
+        let one = deepswe_one_task_job_xml(&opts);
+        assert!(one.contains("<name>TASK</name>\n          <description>One DeepSWE question id"));
+        assert!(one.contains("<defaultValue>abs-module-cache-flags</defaultValue>"));
+        assert!(one.contains("export TASKS="));
         let (task, n, tasks) = question_defaults_for_job(&opts, "deepswe");
         assert!(task.is_empty());
         assert_eq!(n, 2);

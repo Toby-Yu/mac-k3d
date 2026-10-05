@@ -336,9 +336,9 @@ Git (optional): same UI with `ICODE_MODE=git`, or `mac-k3d eval --n-tasks 1 --ic
 
 ### Phase 5b — multi-worker (needs a second worker)
 
-Only after Phase 5 passes on one node. Register the second worker (`mac-k3d setup -c worker.yaml` on it; nothing to change on the controller), then run `deepswe_full_suite_task` with `N_TASKS=10` and `SHARDS=4`.
+Only after Phase 5 passes on one node. Register the second worker (`mac-k3d setup -c worker.yaml` on it; nothing to change on the controller), then run `deepswe_full_suite_task` with `N_TASKS=10` and `SHARD_SIZE=2` (`SHARD_SIZE` shows when the controller has `ui_profile: developer`).
 
-**Expected:** four `deepswe_some_task` builds, spread across both workers and running concurrently; **Lockable Resources** shows each build holding only `<its own node>-core-*` tokens; the four `selected_tasks.txt` files are disjoint; and `eval_aggregate` produces one `aggregate/artifact.json` with `shards: 4`, `n_tasks: 10` and `10 x N_ROLLOUTS` rollout records. Checklist: [../harbor-delegation-multiworker/testing.md](../harbor-delegation-multiworker/testing.md).
+**Expected:** five `deepswe_one_task` shard builds, one running on each worker at a time and the rest queued until a worker frees up; **Lockable Resources** shows each build holding all of `<its own node>-core-*` and nothing else; the five `selected_tasks.txt` files are disjoint; and the dispatcher build's `Aggregate` stage archives one `aggregate/artifact.json` with `shards: 5`, `n_tasks: 10` and `10 x N_ROLLOUTS` rollout records. Checklist: [../harbor-delegation-multiworker/testing.md](../harbor-delegation-multiworker/testing.md).
 
 If the job still uses `deepseek-chat`, on the **cloud root** session after `git pull`:
 
@@ -369,7 +369,7 @@ LoLBench and SWE-bench Pro use the same Harbor stages as DeepSWE, with their own
 | 3 | P0–P4 + `check_report.sh` testdata | | |
 | 4 | P5–P8 n=1 + named JSON | | |
 | 5 | `deepswe_one_task` on this node | | |
-| 5b | `deepswe_full_suite_task` `N_TASKS=10` `SHARDS=4` across two workers | | needs a second worker |
+| 5b | `deepswe_full_suite_task` `N_TASKS=10` `SHARD_SIZE=2` across two workers | | needs a second worker |
 
 ---
 

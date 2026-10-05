@@ -120,9 +120,9 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig, config_path: Option<&Pa
             };
             if let Some(credential_ids) = credential_ids {
                 println!(
-                    "Ensuring Jenkins eval jobs (one / some / full suite for {}, plus '{}')…",
+                    "Ensuring Jenkins eval jobs (one / some / full suite for {}; ui_profile={})…",
                     jenkins_job::EVAL_BENCHMARKS.join(", "),
-                    jenkins_job::EVAL_AGGREGATE
+                    config.jenkins_job.ui_profile
                 );
                 // Best-effort: config will retry if Jenkins is still warming up.
                 if let Err(err) = jenkins_job::ensure_eval_jobs_from_cluster(

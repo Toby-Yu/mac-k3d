@@ -48,7 +48,7 @@ python3 pipeline/lib/task_resources.py plan \
   --cpu 8 --n-rollouts 4 --workdir eval-runs
 ```
 
-A local stage run that leaves `CPU_LOCK_QTY` unset uses 1. The Jenkins parameter defaults to 4. Set `EVAL_RESOURCE_CAP=0` only for fixture tests that must ignore RAM.
+On Jenkins, `CPU_LOCK_QTY` is not a parameter: the `Evaluate` stage locks every `<node>-core-N` resource of its worker and exports how many it got. A local stage run that leaves `CPU_LOCK_QTY` unset uses 1. Set `EVAL_RESOURCE_CAP=0` only for fixture tests that must ignore RAM.
 
 Later stages do not re-derive any of this: `eval_parallel_degree` reads the `eval_resources.json` that P5 wrote, so the report describes the run that happened rather than a fresh guess about the current machine.
 
@@ -62,13 +62,13 @@ python3 pipeline/lib/task_resources.py sample --harness-dir eval-runs/harness --
 
 ## Scaling out instead of up
 
-Packing more trials onto one worker has a ceiling; adding workers does not. The real lever for a full suite is `SHARDS` on `<suite>_full_suite_task`, which splits the suite across nodes and merges the results — see [evaluation.md](evaluation.md#which-job-to-run). Within one build, the useful knob is `CPU_LOCK_QTY`, which raises the core budget this build reserves on its node.
+Packing more trials onto one worker has a ceiling; adding workers does not. `<suite>_some_task` and `<suite>_full_suite_task` split their questions into shards of `SHARD_SIZE` and queue them; each worker runs one build at a time with all its cores and takes the next shard when it finishes, so adding a worker is the whole change — see [evaluation.md](evaluation.md#which-job-to-run). Smaller shards balance better across uneven workers; larger shards pay the per-build prepare cost fewer times.
 
 Time and token cost are reduced by `ICODE_REASONING_EFFORT=high` (less explore soft-stop), not by cutting rollouts.
 
 ## Retries
 
-Harbor's `-r` (max retries) handles a trial that dies on infrastructure, so mac-k3d has no resume mode of its own. To re-run a suite that aborted, trigger the dispatcher again: the shards that already finished are archived under their `RUN_GROUP`, and `eval_aggregate` reports on whatever is present (`propagate: false`), so a partial suite still yields a report.
+Harbor's `-r` (max retries) handles a trial that dies on infrastructure, so mac-k3d has no resume mode of its own. To re-run a suite that aborted, trigger the dispatcher again: within one dispatcher build, shards that fail do not stop the others (`propagate: false`), and the `Aggregate` stage reports on whatever finished, so a partial suite still yields a report.
 
 ## Disk and I/O
 

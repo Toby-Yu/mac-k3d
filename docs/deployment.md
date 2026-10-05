@@ -112,15 +112,15 @@ Use all three. Executors provide coarse safety; locks provide workload-aware sch
 
 ### What the eval jobs actually do
 
-`mac-k3d setup -c worker.yaml` implements this for evaluation: it sets `numExecutors` to the worker's logical core count and creates lockable resources `<agent>-core-1..N`, each labelled with **both** the shared `CPU_CORES` label and the agent name. Each eval build then takes
+`mac-k3d setup -c worker.yaml` implements this for evaluation: it sets `numExecutors` to **1** and creates lockable resources `<agent>-core-1..N`, each labelled with **both** the shared `CPU_CORES` label and the agent name. Each eval build then takes every core of its own node:
 
 ```groovy
-lock(label: env.NODE_NAME, quantity: params.CPU_LOCK_QTY as Integer, resource: null)
+lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES')
 ```
 
-Locking the node name rather than the shared label is what makes multi-worker safe: with a shared label, a build running on Mac B could hold tokens that represent Mac C's cores, and both machines would oversubscribe. The lock wraps only the `Evaluate` stage, so image pulls and report rendering do not sit on cores another build is waiting for.
+Locking the node name rather than the shared label is what makes multi-worker safe: with a shared label, a build running on Mac B could hold tokens that represent Mac C's cores, and both machines would oversubscribe. With no quantity the build holds all of its node's cores, and their count sets Harbor's `-n`. One executor matters too: Jenkins' default load balancer prefers the same node for every build of one job, so with several executors per node the shards of one suite would pile onto one worker. The lock wraps only the `Evaluate` stage.
 
-**Keep exactly one controller.** Lockable-resources state lives on the controller, so a second controller would hand out tokens for cores the first one already lent out. Scale workers, not controllers. Adding a worker needs no pipeline change: the dispatcher sizes shards from total registered cores divided by the suite's declared per-task CPUs, and `env.NODE_NAME` resolves per build. See [architecture.md](architecture.md#evaluation-architecture).
+**Keep exactly one controller.** Lockable-resources state lives on the controller, so a second controller would hand out tokens for cores the first one already lent out. Scale workers, not controllers. Adding a worker needs no pipeline change: the dispatcher counts online workers when it plans shards, the queue hands each shard to the first free worker, and `env.NODE_NAME` resolves per build. See [architecture.md](architecture.md#evaluation-architecture).
 
 ### Recommended lock design: capacity slots
 

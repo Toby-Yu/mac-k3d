@@ -8,7 +8,7 @@ A skip (`skip question=` / `skipped_questions.txt`) stays **not run**. An out-of
 
 ## Next DeepSWE TASKS
 
-Leave **TASK** empty. **N_ROLLOUTS=4**, **CPU_LOCK_QTY=4**. `TASKS` replaces `N_TASKS`.
+Paste into **TASKS** on `deepswe_some_task`, **N_ROLLOUTS=4**. `TASKS` replaces `N_TASKS`.
 
 ```text
 eicrud-keyset-pagination-cursor,scc-bounded-memory-spilling,meriyah-explicit-resource-declarations

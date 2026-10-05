@@ -14,7 +14,7 @@ Do not add a new top-level folder for each feature branch. Update these product 
 | [workflow.md](workflow.md) | End-to-end: new machine → controller/worker → JSON |
 | [export-import.md](export-import.md) | Worker vs controller YAML; `--force` vs `--skip-secrets` |
 | [secrets.md](secrets.md) | Jenkins credentials on the controller; local `.env` for `--local` |
-| [lolbench-jenkins.md](lolbench-jenkins.md) | The ten jobs `config` writes: three shapes x three benchmarks, plus `eval_aggregate` |
+| [lolbench-jenkins.md](lolbench-jenkins.md) | The nine jobs `config` writes: three shapes x three benchmarks |
 | [evaluation.md](evaluation.md) | What a run stores, which job shape to pick, and what the fields mean |
 | [optimization.md](optimization.md) | Declared per-task resources, how many fit, RAM/disk gates |
 

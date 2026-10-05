@@ -186,9 +186,9 @@ Detect host cores via `sysctl -n hw.logicalcpu` (fallback `hw.ncpu`).
 
 After Jenkins is up (`mac-k3d start` / `config`), prepare records intent and those commands:
 
-1. Ensure extra Jenkins plugins via Helm `additionalPlugins` on **controller `mac-k3d start`** (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`). Do not add them in the UI.
+1. Ensure extra Jenkins plugins via Helm `additionalPlugins` on **controller `mac-k3d start`** (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`). Do not add them in the UI.
 2. The `CPU_CORES` label exists on the controller plugin; workers create capacity (`<agent>-core-1..N`) when they run `config`.
-3. Create/update the ten eval jobs plus `eval_aggregate` (inline Jenkinsfile; see [lolbench-jenkins.md](lolbench-jenkins.md)).
+3. Create/update the nine eval jobs, rendered for `jenkins_job.ui_profile` (inline Jenkinsfile; see [lolbench-jenkins.md](lolbench-jenkins.md)).
 4. **CI secrets + job defaults** (see [secrets.md](secrets.md)):
    - Prepare prompts for `jenkins_job.default_eval_mode` / `default_task` / `default_icode_release` / `default_icode_git_url` / `default_icode_git_ref` / `default_icode_args` (YAML).
    - Prepare optionally collects API keys / PATs into `~/.config/mac-k3d/credentials.pending.yaml` (mode 0600) — **not** into `config.yaml`.
@@ -212,7 +212,7 @@ Then prepare:
 2. Downloads `agent.jar` from `{url}/jnlpJars/agent.jar` into `{storage.downloads}/jenkins-agent/` (or `lolbench` storage).
 3. **Registers the node on the controller** via Jenkins REST API (`POST /computer/createItem` with agent XML; needs API token with Computer/Configure):
 
-   - Create node if missing: name, remote FS, labels (`macos docker lolbench`), executors, launch method **Inbound**.
+   - Create node if missing (or rewrite its config if present): name, remote FS, labels (`macos docker lolbench`), **1 executor**, launch method **Inbound**.
    - Read connection secret from `slave-agent.jnlp`.
 4. Writes a local launch script and installs a persistent agent daemon:
    - **macOS:** LaunchAgent `com.mac-k3d.jenkins-agent` with `KeepAlive`

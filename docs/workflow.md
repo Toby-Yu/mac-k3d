@@ -10,7 +10,7 @@ The product is a CI path for AI harness evaluation: many short jobs, each in its
 
 | Piece | What it does now | Why it matches the goal |
 |-------|------------------|-------------------------|
-| **Jenkins** | Three job shapes per benchmark (`_one_task`, `_some_task`, `_full_suite_task`) plus a shared `eval_aggregate`. A build locks cores on **its own node** (`lock(label: env.NODE_NAME)`) and only for the rollouts. The workspace dies with the build. | Parallelism across agents, and a short lifetime: nothing from the last trial is the next trial's machine. |
+| **Jenkins** | Three jobs per benchmark (`_one_task`, `_some_task`, `_full_suite_task`), nine in total. `_one_task` evaluates; the other two split their questions into `_one_task` shard builds and merge the results in the same build. One executor per worker; a build locks every core of **its own node** (`lock(label: env.NODE_NAME)`) and only for the rollouts. The workspace dies with the build. | Parallelism across agents, and a short lifetime: nothing from the last trial is the next trial's machine. |
 | **Harbor** | P5 is one `harbor run` + `icode_harbor_agent:ICodeAgent` for all three benchmarks. Harbor expands rollouts, applies each task's declared limits, retries and grades. `--allow-agent-host` is only `api.deepseek.com` and `api.deepseek.ai`. | One runner, used as a runner. mac-k3d no longer schedules containers. The allowlist is the isolation that ships today: the agent can call the model and cannot browse the answer online. |
 | **k3d** | The controller uses k3d to host Jenkins. Eval sandboxes still run as Harbor containers on the worker's Docker. | A later job will `k3d cluster create` per build, apply a default-deny NetworkPolicy (DeepSeek API only), pull images through a Harbor registry proxy cache, run Harbor, then delete the cluster. That cluster, the NetworkPolicy, and the registry cache are **not** implemented yet. |
 
@@ -37,7 +37,7 @@ New Mac/Linux
   → output/{benchmark}/jenkins-<build>-<UTC>.tar.gz in the git checkout
 ```
 
-A full suite adds one hop: `_full_suite_task` slices the suite into `SHARDS`, runs that many `_some_task` builds in parallel across workers, then `eval_aggregate` merges them into one report.
+Several questions add one hop: `_some_task` or `_full_suite_task` splits them into shards of `SHARD_SIZE`, queues each as a `_one_task` build (each worker takes the next shard when it frees up), then merges the shards into one report in its own `Aggregate` stage.
 
 ```mermaid
 flowchart TD
@@ -49,11 +49,11 @@ flowchart TD
   work["Worker: Docker Java agent Harbor"]
   evalCli["mac-k3d eval: icode / deepseek / deepswe or lolbench or swebenchpro / TASK"]
   shape{"how many questions?"}
-  job["<benchmark>_one_task or _some_task (runs on a worker)"]
-  disp["<benchmark>_full_suite_task (agent none, slices into SHARDS)"]
+  job["<benchmark>_one_task (runs on a worker, holds all its cores)"]
+  disp["<benchmark>_some_task or _full_suite_task (agent none, splits into shards)"]
   harborA["Harbor + iCode allowlist"]
   grade["Verifier reward.json"]
-  agg["eval_aggregate: merge shards by RUN_GROUP"]
+  agg["Aggregate stage of the dispatcher: merge shard builds"]
   json["eval JSON, summary, HTML, checkout backup"]
 
   newHost --> bin --> setup --> role
@@ -62,9 +62,9 @@ flowchart TD
   ctrl --> evalCli
   work --> job
   evalCli --> shape
-  shape -->|one or a few| job
-  shape -->|whole suite| disp
-  disp -->|parallel, one TASK_OFFSET each| job
+  shape -->|one| job
+  shape -->|a list or the whole suite| disp
+  disp -->|queued shards, one TASK_OFFSET or TASKS each| job
   job --> harborA
   harborA --> grade
   grade --> agg
@@ -85,7 +85,7 @@ flowchart TD
 | `chmod +x` / quarantine strip | Make the asset executable | Unsigned downloads are blocked on macOS |
 | `mac-k3d setup` | Wizard: role, Install Docker / k3d / Java | One entry point for controller or worker |
 | Controller: `start` + `config` | k3d cluster + Jenkins UI `:17070` + credentials | Job queue and `deepseek-api-key` live here |
-| Worker: token + `config` | Inbound agent + `<agent>-core-N` locks, one executor per core | Workloads run on the worker’s Docker, not inside the controller’s k3d nodes. Adding the Nth worker needs no pipeline edit |
+| Worker: token + `config` | Inbound agent with one executor + `<agent>-core-N` locks | Workloads run on the worker’s Docker, not inside the controller’s k3d nodes. Adding the Nth worker needs no pipeline edit |
 
 Honest leftovers: Linux **logout** after docker group; macOS first **Docker Desktop** window; worker **API token**; DeepSeek key on the **controller** credentials store.
 
@@ -115,7 +115,7 @@ mac-k3d eval                  # interactive → Jenkins <benchmark>_one_task (or
 mac-k3d eval --stage p5 --n-tasks 1   # isolated stage test
 ```
 
-Nine Jenkins jobs — `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro** — plus a shared **`eval_aggregate`**. All run Harbor from the same `run_all.sh`; each job pins `BENCHMARK`. Logs print `PROGRESS n% …`. Agent label `lolbench`; a build locks cores on its own node for the `Evaluate` stage only. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor slots is in [optimization.md](optimization.md).
+Nine Jenkins jobs — `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**. Every evaluation runs as a `one_task` build from the same `run_all.sh`; each job pins `HARNESS`, `LLM` and `BENCHMARK` and shows them first. Logs print `PROGRESS n% …`. Agent label `lolbench`; a build locks every core of its own node for the `Evaluate` stage only. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor slots is in [optimization.md](optimization.md).
 
 ---
 
@@ -129,7 +129,14 @@ git commit -am "fix: <what>"
 git push origin <branch>
 ```
 
-Then in the Jenkins UI, **Build with Parameters**:
+These parameters are developer-only. While developing, set the controller's profile so they show up, and switch back before handing Jenkins to users:
+
+```bash
+mac-k3d set --ui-profile developer && mac-k3d config --skip-secrets   # on the controller
+mac-k3d set --ui-profile user && mac-k3d config --skip-secrets        # handover
+```
+
+In `user` profile the same parameters are hidden but keep their config defaults (`default_mac_k3d_git_*`), so users run the pinned pipeline without seeing it. Then in the Jenkins UI, **Build with Parameters**:
 
 | Parameter | Value while developing |
 |---|---|
@@ -146,6 +153,21 @@ The `Prepare` stage prints the resolved SHA and `artifact.json` records it under
 `MAC_K3D_GIT_REF_KIND=pr` fetches `refs/pull/<n>/head`, which is how the iCode inputs are already pinned — the two halves of a run are now traceable the same way.
 
 The binary still embeds `pipeline/` via `include_dir!`, but only so `setup` and `config` can bootstrap a bare machine with no network. Evaluation always runs the clone.
+
+### When the binary still has to move
+
+URL + branch does **not** replace the `mac-k3d` binary on the controller or on workers. Use `MAC_K3D_GIT_*` for anything under `pipeline/`. Rebuild and copy the binary only when the change is not in that clone:
+
+| What changed | What to update |
+|---|---|
+| `pipeline/stages/**`, `pipeline/lib/**` | Commit, push, set `MAC_K3D_GIT_REF`. Every worker clones that ref. No `scp`. |
+| Job XML, parameters, Jenkinsfile, `ui_profile` | New binary on the **controller** (not needed for a `ui_profile` flip), then `mac-k3d config --skip-secrets` |
+| Jenkins plugins (`ADDITIONAL_PLUGINS` in Helm) | New binary on the controller, then **`mac-k3d start`** (`config` does not install plugins) |
+| `setup`, Jenkins agent registration (executors, labels), `eval` CLI | New binary on each **worker** (`$(which mac-k3d)`), then `mac-k3d config -c worker.yaml`; an existing node is rewritten in place. Never `start` with `worker.yaml` |
+
+On a machine that already has Jenkins, `which mac-k3d` is the path that must receive the new file. Copying only to `/usr/local/bin` is not enough if `PATH` prefers `~/.local/bin`.
+
+Lab copy-paste for this controller and worker (IPs, `scp`) lives in the gitignored `LOCAL_DEPLOY_CHEATSHEET.md` in the checkout, not in this repo.
 
 ---
 

@@ -17,8 +17,8 @@ The cases that cover this branch:
 ## Live Jenkins
 
 1. Worker already has this CLI. The job’s Prepare stage runs `mac-k3d eval --sync-pipeline` once. Do not rebuild or sync again while the build is inside P5. Bash reads `p5_harness.sh` as it runs; replacing that file mid-build exits 127.
-2. Open `deepswe_one_task` → **Build with Parameters**.
-3. Paste the **Next DeepSWE TASKS** line from [question-coverage](../testing/question-coverage.md) into **TASKS**. Leave **TASK** empty. Set **N_ROLLOUTS=4** and **CPU_LOCK_QTY=4**.
+2. Open `deepswe_some_task` → **Build with Parameters**.
+3. Paste the **Next DeepSWE TASKS** line from [question-coverage](../testing/question-coverage.md) into **TASKS**. Set **N_ROLLOUTS=4**.
 
 Console lines that show this branch:
 

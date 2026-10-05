@@ -3330,7 +3330,6 @@ class AgentIsolationTests(unittest.TestCase):
         env = os.environ.copy()
         for key in (
             "OFFICIAL",
-            "RESUME",
             "TASK",
             "TASKS",
             "ICODE_SOURCELESS_STDLIB",

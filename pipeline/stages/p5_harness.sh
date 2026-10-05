@@ -126,26 +126,13 @@ if [ -z "${ICODE_PROVIDER:-}" ]; then
 fi
 export ICODE_REASONING_EFFORT="${ICODE_REASONING_EFFORT:-high}"
 mkdir -p "$HARNESS_DIR"
-RESUME_RAW="$(printf '%s' "${RESUME:-0}" | tr '[:upper:]' '[:lower:]')"
-case "$RESUME_RAW" in
-  1|true|yes|on) RESUME=1 ;;
-  *) RESUME=0 ;;
-esac
-if [ "$RESUME" = "1" ]; then
-  echo "P5 harbor: RESUME=1 keeping prior harbor_runs; seeding completed units"
-  rm -f "$HARNESS_DIR/container_mem_peak_gb" \
-    "$HARNESS_DIR/container_mem_current.json" \
-    "$HARNESS_DIR/active_question.txt" \
-    "$HARNESS_DIR/skipped_questions.txt"
-else
-  rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
-  rm -f "$HARNESS_DIR/container_mem_peak_gb" \
-    "$HARNESS_DIR/container_mem.jsonl" \
-    "$HARNESS_DIR/container_mem_current.json" \
-    "$HARNESS_DIR/active_question.txt" \
-    "$HARNESS_DIR/skipped_questions.txt"
-  echo "P5 harbor: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
-fi
+rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
+rm -f "$HARNESS_DIR/container_mem_peak_gb" \
+  "$HARNESS_DIR/container_mem.jsonl" \
+  "$HARNESS_DIR/container_mem_current.json" \
+  "$HARNESS_DIR/active_question.txt" \
+  "$HARNESS_DIR/skipped_questions.txt"
+echo "P5 harbor: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
 ensure_selected_tasks
 JOBS_DIR="$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
 case "${BENCHMARK:-deepswe}" in

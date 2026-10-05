@@ -161,29 +161,29 @@ Rebuild/extract pipeline on the worker (`mac-k3d eval --stage p0` or `config`) s
 ### Jenkins UI (recommended)
 
 1. Open `http://CONTROLLER_IP:17070` → job **`<benchmark>_one_task`** for a first run (all Harbor + iCode). Do not flip `BENCHMARK` across jobs. For more than one question use `<benchmark>_some_task`, and for the whole suite `<benchmark>_full_suite_task`.
-2. **Build with Parameters**:
+2. **Build with Parameters**. Each job lists only what its shape needs; `HARNESS`, `LLM` and `BENCHMARK` are always first so the build says what it evaluates, and the build is named `#<n> <harness>/<model>/<benchmark>`:
 
-| Field | Value |
-|-------|--------|
-| HARNESS / LLM / BENCHMARK | `icode` / `deepseek` / `deepswe` or `lolbench` (fixed on that job) |
-| TASK | One question id. A non-empty TASKS list replaces this. Empty plus empty TASKS uses N_TASKS. LoLBench default `ruff_1` |
-| TASKS | Comma-separated ids. This field wins over TASK and N_TASKS. Example: `ruff_1,fastapi_1` |
-| N_TASKS | Used only when TASK and TASKS are empty: first N sorted ids. Full suite: DeepSWE `113`, LoLBench `20`, SWE-bench Pro `731` |
-| ICODE_MODE | Choose `release` (upload a drop) or `git` (clone URL + ref). Fill only the fields for that choice; leave the other group as it is. |
-| ICODE_RELEASE_FILE | **release:** choose the `icode` / `icode-*-full-*` drop here. **git:** do not choose a file; leave this control as it is. Vice versa: if you chose git, ignore this; if you chose release, this is the file you upload. |
-| ICODE_GIT_URL | **git:** https URL on github.com or gitcode.com. **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required. |
-| ICODE_GIT_REF | **git:** branch name, tag, commit SHA, or pull-request number when KIND is `pr`. **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required. |
-| ICODE_GIT_REF_KIND | **git:** pick `branch`, `tag`, `commit`, or `pr` (no auto). **release:** do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF. |
-| AGENT_LABEL | `lolbench` |
-| CPU_LOCK_QTY | `4` (cores reserved on the node this build lands on). How that becomes Harbor slots: [optimization.md](optimization.md). |
-| MAC_K3D_GIT_URL / MAC_K3D_GIT_REF / MAC_K3D_GIT_REF_KIND | Leave the defaults (`…/mac-k3d.git`, `main`, `branch`) for a normal run. To test your own branch, set REF to the branch name; to reproduce an old build, set KIND to `commit` and paste its `pipeline.commit`. See [workflow.md](workflow.md#development-loop-test-a-commit-not-a-path). |
-| DEEPSEEK_MODEL | `deepseek-v4-pro` (catalog default; or `deepseek-flash`). iCode sends this id to `https://api.deepseek.com/v1` with provider `DeepSeek` and reasoning effort `high` |
+| Field | Jobs | Value |
+|-------|------|--------|
+| HARNESS / LLM / BENCHMARK | all | `icode` / `deepseek` / `deepswe`, `lolbench` or `swebenchpro` (fixed on that job) |
+| TASK | `_one_task` | One question id. Empty runs the first sorted id. LoLBench default `ruff_1` |
+| TASKS | `_some_task` | Comma-separated ids. Wins over N_TASKS. Example: `ruff_1,fastapi_1` |
+| N_TASKS | `_some_task` | Used only when TASKS is empty: first N sorted ids. Full suite: DeepSWE `113`, LoLBench `20`, SWE-bench Pro `731` |
+| N_ROLLOUTS | all | Attempts per question. `1` on `_one_task` (a smoke run), `4` on the others |
+| ICODE_MODE | `_one_task` | Choose `release` (upload a drop) or `git` (clone URL + ref). Fill only the fields for that choice; leave the other group as it is. Shards of `_some_task` / `_full_suite_task` always use `git` |
+| ICODE_RELEASE_FILE | `_one_task` | **release:** choose the `icode` / `icode-*-full-*` drop here. **git:** do not choose a file; leave this control as it is. |
+| ICODE_GIT_URL | all | **git:** https URL on github.com or gitcode.com. **release:** leave it as it is. |
+| ICODE_GIT_REF | all | **git:** branch name, tag, commit SHA, or pull-request number when KIND is `pr`. **release:** leave it as it is. |
+| ICODE_GIT_REF_KIND | all | **git:** pick `branch`, `tag`, `commit`, or `pr` (no auto). **release:** leave it as it is. |
+| DEEPSEEK_MODEL | all | `deepseek-v4-pro` (catalog default; or `deepseek-flash`). iCode sends this id to `https://api.deepseek.com/v1` with provider `DeepSeek` and reasoning effort `high` |
+
+A build locks every core of the worker it lands on, and Harbor sizes its slots from them ([optimization.md](optimization.md)). Pipeline ref (`MAC_K3D_GIT_*`), `AGENT_LABEL`, pins, canary and `SHARD_SIZE` are developer parameters: they show only when the controller has `jenkins_job.ui_profile: developer`, and otherwise keep their config defaults. See [workflow.md](workflow.md#development-loop-test-a-commit-not-a-path) and [commands.md](commands.md#jenkins-job-parameters).
 
 Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND`. The archived JSON includes `icode_git` (resolved SHA + subject). Full split: [icode-harness-inputs.md](icode-harness-inputs.md).
 
 Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --yes` cannot attach a file (it uses GET `buildWithParameters`).
 
-3. Click **Build**. Console must say `Running on <this-worker-name>`. The build is allowed **120 hours** (Thursday afternoon through Monday). Re-run `mac-k3d setup` so the Jenkins job picks up that limit; an already installed job still has the old cap.
+3. Click **Build**. Console must say `Running on <this-worker-name>`. The build is allowed **96 hours**. Re-run `mac-k3d config` on the controller so the Jenkins job picks up that limit; an already installed job still has the old cap.
 4. Download **Build Artifacts** → `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, plus `summary.md` and `report.html` in that same folder. Token totals are input, output, and the sum.
    The worker also keeps a compressed copy in the git checkout at `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` (override with `MAC_K3D_OUTPUT_ROOT`). The workspace copy Jenkins shows is still the loose folder at `$HOME/jenkins-agent/workspace/<job>/eval-runs/output/` (or `{remote_fs}/workspace/<job>/eval-runs/output/` if `jenkins_agent.remote_fs` was changed).
 
