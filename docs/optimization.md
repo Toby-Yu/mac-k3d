@@ -48,7 +48,16 @@ python3 pipeline/lib/task_resources.py plan \
   --cpu 8 --n-rollouts 4 --workdir eval-runs
 ```
 
-On Jenkins, `CPU_LOCK_QTY` is not a parameter: the `Evaluate` stage locks every `<node>-core-N` resource of its worker and exports how many it got. A local stage run that leaves `CPU_LOCK_QTY` unset uses 1. Set `EVAL_RESOURCE_CAP=0` only for fixture tests that must ignore RAM.
+On Jenkins, `CPU_LOCK_QTY` is not a parameter: the `Evaluate` stage locks every `<node>-core-N` resource of its worker and exports how many it got. That count is `jenkins_agent.cpu_cores` in the worker's `~/.config/mac-k3d/worker.yaml`: `mac-k3d config -c worker.yaml` creates `<node>-core-1..N` and deletes any `<node>-core-M` above N. A core that a running build holds is reported `busy` and kept until the next `config`.
+
+`mac-k3d eval --local` and `mac-k3d eval --stage` plan with the same number, so a local run packs the same `EVAL_SLOTS` as a Jenkins build on that machine. They print one line before the phase starts, for example `CPU_LOCK_QTY=16 (from /home/you/.config/mac-k3d/worker.yaml jenkins_agent.cpu_cores; Jenkins locks the same on this node)`. The number comes from the first of these that is set:
+
+1. `CPU_LOCK_QTY` already in the environment (must be an integer of at least 1)
+2. `jenkins_agent.cpu_cores` in `~/.config/mac-k3d/worker.yaml`, when above 0
+3. `jenkins_agent.cpu_cores` in the config `eval` loaded, when above 0
+4. this host's logical CPU count
+
+To use fewer cores on a shared host, lower `jenkins_agent.cpu_cores` in `worker.yaml` and re-run `mac-k3d config -c worker.yaml` (or `scripts/redeploy.sh`); Jenkins and local runs both follow. `bash pipeline/stages/run_all.sh` started by hand with `CPU_LOCK_QTY` unset still uses 1. Set `EVAL_RESOURCE_CAP=0` only for fixture tests that must ignore RAM.
 
 Later stages do not re-derive any of this: `eval_parallel_degree` reads the `eval_resources.json` that `evaluate/slots` wrote, so the report describes the run that happened rather than a fresh guess about the current machine.
 

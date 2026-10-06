@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -313,21 +314,22 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
         }
     }
 
+    let local_run = LocalRun {
+        repo: &repo,
+        workdir: &workdir,
+        n_tasks,
+        task: &task,
+        benchmark: &benchmark,
+        model: &model,
+        icode_mode: &icode_mode,
+        icode_release: &icode_release,
+        icode_git_url: &icode_git_url,
+        icode_git_ref: &icode_git_ref,
+        icode_git_ref_kind: &icode_git_ref_kind,
+    };
+
     if let Some(stage) = args.stage.as_deref() {
-        return run_stage(
-            &repo,
-            stage,
-            n_tasks,
-            &icode_mode,
-            &icode_release,
-            &icode_git_url,
-            &icode_git_ref,
-            &icode_git_ref_kind,
-            &workdir,
-            &model,
-            &benchmark,
-            &task,
-        );
+        return run_stage(&local_run, stage, config);
     }
 
     let run_local = if local {
@@ -348,20 +350,7 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
     };
 
     if run_local {
-        return run_stage(
-            &repo,
-            "all",
-            n_tasks,
-            &icode_mode,
-            &icode_release,
-            &icode_git_url,
-            &icode_git_ref,
-            &icode_git_ref_kind,
-            &workdir,
-            &model,
-            &benchmark,
-            &task,
-        );
+        return run_stage(&local_run, "all", config);
     }
 
     trigger_jenkins_one_task(
@@ -684,46 +673,80 @@ fn stage_script(stage: &str) -> Result<(&'static str, Option<String>)> {
     )))
 }
 
-fn run_stage(
-    repo: &Path,
-    stage: &str,
+/// What a local `--stage` / `--local` run evaluates.
+struct LocalRun<'a> {
+    repo: &'a Path,
+    workdir: &'a Path,
     n_tasks: u32,
-    icode_mode: &str,
-    icode_release: &str,
-    icode_git_url: &str,
-    icode_git_ref: &str,
-    icode_git_ref_kind: &str,
-    workdir: &Path,
-    model: &str,
-    benchmark: &str,
-    task: &str,
-) -> Result<()> {
+    task: &'a str,
+    benchmark: &'a str,
+    model: &'a str,
+    icode_mode: &'a str,
+    icode_release: &'a str,
+    icode_git_url: &'a str,
+    icode_git_ref: &'a str,
+    icode_git_ref_kind: &'a str,
+}
+
+impl LocalRun<'_> {
+    /// Env for the stage's bash. `cpu_lock_qty` is None when the caller already
+    /// exported CPU_LOCK_QTY, which bash then inherits unchanged.
+    fn env(&self, phase: Option<&str>, cpu_lock_qty: Option<u32>) -> Vec<(&'static str, OsString)> {
+        let mut env: Vec<(&'static str, OsString)> = Vec::new();
+        if let Some(phase) = phase {
+            env.push(("MAC_K3D_PHASE", phase.into()));
+        }
+        env.extend([
+            ("MAC_K3D_ROOT", self.repo.into()),
+            ("MAC_K3D_EVAL_WORKDIR", self.workdir.into()),
+            ("N_TASKS", self.n_tasks.to_string().into()),
+            ("TASK", self.task.into()),
+            ("ICODE_MODE", self.icode_mode.into()),
+            ("ICODE_RELEASE", self.icode_release.into()),
+            ("ICODE_GIT_URL", self.icode_git_url.into()),
+            ("ICODE_GIT_REF", self.icode_git_ref.into()),
+            ("ICODE_GIT_REF_KIND", self.icode_git_ref_kind.into()),
+            ("HARNESS", "icode".into()),
+            ("LLM", "deepseek".into()),
+            ("BENCHMARK", self.benchmark.into()),
+            ("DEEPSEEK_MODEL", self.model.into()),
+        ]);
+        if let Some(qty) = cpu_lock_qty {
+            env.push(("CPU_LOCK_QTY", qty.to_string().into()));
+        }
+        env
+    }
+}
+
+/// One line saying how many cores a local run plans with and why.
+fn cpu_lock_note(qty: u32, source: &str) -> String {
+    let why = match source {
+        "env" => "from the CPU_LOCK_QTY environment variable".to_string(),
+        "worker.yaml" => format!(
+            "from {} jenkins_agent.cpu_cores; Jenkins locks the same on this node",
+            MacK3dConfig::default_worker_path().display()
+        ),
+        "config" => "from jenkins_agent.cpu_cores in the loaded config".to_string(),
+        _ => "this host's logical CPUs; no worker.yaml sets jenkins_agent.cpu_cores".to_string(),
+    };
+    format!("CPU_LOCK_QTY={qty} ({why})")
+}
+
+fn run_stage(run: &LocalRun<'_>, stage: &str, config: &MacK3dConfig) -> Result<()> {
     let (script, phase) = stage_script(stage)?;
-    let path = repo.join(script);
+    let path = run.repo.join(script);
     if !path.is_file() {
         return Err(Error::Config(format!("missing {}", path.display())));
     }
 
-    let mut cmd = Command::new("bash");
-    if let Some(phase) = phase {
-        cmd.env("MAC_K3D_PHASE", phase);
-    }
-    let status = cmd
+    let (qty, source) = crate::prepare::resources::eval_cpu_lock_qty(config)?;
+    println!("{}", cpu_lock_note(qty, source));
+    let export_qty = (source != "env").then_some(qty);
+
+    let status = Command::new("bash")
         .arg(&path)
-        .current_dir(repo)
-        .env("MAC_K3D_ROOT", repo)
-        .env("MAC_K3D_EVAL_WORKDIR", workdir)
-        .env("N_TASKS", n_tasks.to_string())
-        .env("TASK", task)
-        .env("ICODE_MODE", icode_mode)
-        .env("ICODE_RELEASE", icode_release)
-        .env("ICODE_GIT_URL", icode_git_url)
-        .env("ICODE_GIT_REF", icode_git_ref)
-        .env("ICODE_GIT_REF_KIND", icode_git_ref_kind)
-        .env("HARNESS", "icode")
-        .env("LLM", "deepseek")
-        .env("BENCHMARK", benchmark)
-        .env("DEEPSEEK_MODEL", model)
+        .current_dir(run.repo)
+        .envs(run.env(phase.as_deref(), export_qty))
         .status()
         .map_err(|e| Error::CommandFailed {
             cmd: format!("bash {}", path.display()),
@@ -1022,6 +1045,63 @@ mod tests {
         assert_eq!(normalize_benchmark("deepswe").unwrap(), "deepswe");
         assert_eq!(normalize_benchmark("swebenchpro").unwrap(), "swebenchpro");
         assert!(normalize_benchmark("other").is_err());
+    }
+
+    fn sample_local_run() -> LocalRun<'static> {
+        LocalRun {
+            repo: Path::new("/repo"),
+            workdir: Path::new("/work"),
+            n_tasks: 1,
+            task: "",
+            benchmark: "deepswe",
+            model: "deepseek-flash",
+            icode_mode: "git",
+            icode_release: "",
+            icode_git_url: "https://gitcode.com/michaelling/jiuwenicode",
+            icode_git_ref: "2",
+            icode_git_ref_kind: "pr",
+        }
+    }
+
+    fn env_value<'a>(env: &'a [(&'static str, OsString)], key: &str) -> Option<&'a str> {
+        env.iter()
+            .find(|(k, _)| *k == key)
+            .and_then(|(_, v)| v.to_str())
+    }
+
+    #[test]
+    fn local_run_env_exports_cpu_lock_qty_unless_caller_set_it() {
+        let run = sample_local_run();
+        let env = run.env(Some("evaluate"), Some(16));
+        assert_eq!(env_value(&env, "CPU_LOCK_QTY"), Some("16"));
+        assert_eq!(env_value(&env, "MAC_K3D_PHASE"), Some("evaluate"));
+        assert_eq!(env_value(&env, "MAC_K3D_ROOT"), Some("/repo"));
+        assert_eq!(env_value(&env, "MAC_K3D_EVAL_WORKDIR"), Some("/work"));
+        assert_eq!(env_value(&env, "BENCHMARK"), Some("deepswe"));
+        assert_eq!(env_value(&env, "DEEPSEEK_MODEL"), Some("deepseek-flash"));
+        assert_eq!(env_value(&env, "ICODE_GIT_REF_KIND"), Some("pr"));
+
+        let env = run.env(None, None);
+        assert_eq!(env_value(&env, "CPU_LOCK_QTY"), None);
+        assert_eq!(env_value(&env, "MAC_K3D_PHASE"), None);
+        assert_eq!(env_value(&env, "N_TASKS"), Some("1"));
+    }
+
+    #[test]
+    fn cpu_lock_note_names_its_source() {
+        let note = cpu_lock_note(16, "worker.yaml");
+        assert!(note.starts_with("CPU_LOCK_QTY=16 (from "), "{note}");
+        assert!(
+            note.ends_with(
+                "worker.yaml jenkins_agent.cpu_cores; Jenkins locks the same on this node)"
+            ),
+            "{note}"
+        );
+        assert_eq!(
+            cpu_lock_note(4, "env"),
+            "CPU_LOCK_QTY=4 (from the CPU_LOCK_QTY environment variable)"
+        );
+        assert!(cpu_lock_note(12, "nproc").contains("logical CPUs"));
     }
 
     #[test]

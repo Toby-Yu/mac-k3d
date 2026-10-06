@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
 
 const GB: u64 = 1024 * 1024 * 1024;
@@ -11,6 +12,52 @@ pub fn logical_cpu_cores() -> u32 {
         .map(|n| n.get() as u32)
         .unwrap_or(1)
         .max(1)
+}
+
+/// Cores a local eval (`eval --local`, `eval --stage`) plans with, and where the
+/// number came from: `env`, `worker.yaml`, `config` or `nproc`.
+///
+/// worker.yaml's `jenkins_agent.cpu_cores` is what `config -c worker.yaml`
+/// registers as `<agent>-core-1..N`, so it matches what a Jenkins build locks here.
+pub fn eval_cpu_lock_qty(config: &MacK3dConfig) -> Result<(u32, &'static str)> {
+    let env = std::env::var("CPU_LOCK_QTY").ok();
+    let worker_path = MacK3dConfig::default_worker_path();
+    let worker_cores = if worker_path.is_file() {
+        MacK3dConfig::load_file(&worker_path)
+            .ok()
+            .map(|w| w.jenkins_agent.cpu_cores)
+    } else {
+        None
+    };
+    resolve_cpu_lock_qty(
+        env.as_deref(),
+        worker_cores,
+        config.jenkins_agent.cpu_cores,
+        logical_cpu_cores(),
+    )
+}
+
+fn resolve_cpu_lock_qty(
+    env: Option<&str>,
+    worker_cores: Option<u32>,
+    config_cores: u32,
+    nproc: u32,
+) -> Result<(u32, &'static str)> {
+    if let Some(raw) = env.map(str::trim).filter(|s| !s.is_empty()) {
+        return match raw.parse::<u32>() {
+            Ok(n) if n >= 1 => Ok((n, "env")),
+            _ => Err(Error::Validation(format!(
+                "CPU_LOCK_QTY must be an integer >= 1 (got '{raw}')"
+            ))),
+        };
+    }
+    if let Some(n) = worker_cores.filter(|&n| n > 0) {
+        return Ok((n, "worker.yaml"));
+    }
+    if config_cores > 0 {
+        return Ok((config_cores, "config"));
+    }
+    Ok((nproc.max(1), "nproc"))
 }
 
 /// True when `kb` kilobytes is at least `min_gb` gigabytes.
@@ -116,24 +163,28 @@ pub fn register_agent_cpu_cores(
         println!(
             "\nNo Jenkins API token — skipping Lockable Resources create.\n\
              On {jenkins_url}, create {cores} resources named {agent_name}-core-1..{cores}\n\
-             with labels '{label} {agent_name}'.\n\
+             with labels '{label} {agent_name}', and delete any {agent_name}-core-N above {cores}.\n\
              Or re-run prepare/config with api_user/api_token set.\n"
         );
         return Ok(());
     };
 
     println!(
-        "Creating {cores} Lockable Resources on {jenkins_url} (label '{label}', agent '{agent_name}')…"
+        "Syncing {cores} Lockable Resources on {jenkins_url} (label '{label}', agent '{agent_name}')…"
     );
 
     let script = groovy_create_cpu_cores(agent_name, label, cores);
     match run_script_text(jenkins_url, user, token, &script) {
         Ok(output) => {
-            let created = output.lines().filter(|l| l.starts_with("created ")).count();
-            let existed = output.lines().filter(|l| l.starts_with("exists ")).count();
-            println!(
-                "Lockable Resources: {created} created, {existed} already present (label '{label}')."
-            );
+            println!("{}", cpu_cores_summary(&output, label));
+            let busy = output.lines().filter(|l| l.starts_with("busy ")).count();
+            if busy > 0 {
+                println!(
+                    "Warning: {busy} '{agent_name}-core-N' above {cores} are held by a running build, \
+                     so Jenkins still locks more than {cores} there.\n\
+                     Re-run `mac-k3d config -c worker.yaml` after the build finishes to prune them."
+                );
+            }
             if !output.trim().is_empty() {
                 for line in output.lines().take(12) {
                     println!("  {line}");
@@ -144,11 +195,24 @@ pub fn register_agent_cpu_cores(
         Err(err) => {
             println!(
                 "Warning: could not create Lockable Resources via API ({err}).\n\
-                 Create manually: Manage Jenkins → Lockable Resources → {cores} × '{agent_name}-core-N' labels '{label} {agent_name}'."
+                 Create manually: Manage Jenkins → Lockable Resources → {cores} × '{agent_name}-core-N' labels '{label} {agent_name}',\n\
+                 and delete any '{agent_name}-core-N' above {cores}."
             );
             Ok(())
         }
     }
+}
+
+fn cpu_cores_summary(output: &str, label: &str) -> String {
+    let count = |prefix: &str| output.lines().filter(|l| l.starts_with(prefix)).count();
+    let (created, existed) = (count("created "), count("exists "));
+    let (pruned, busy) = (count("pruned "), count("busy "));
+    let mut line = format!("Lockable Resources: {created} created, {existed} already present");
+    if pruned > 0 || busy > 0 {
+        line.push_str(&format!(", {pruned} pruned, {busy} busy"));
+    }
+    line.push_str(&format!(" (label '{label}')."));
+    line
 }
 
 /// Delete Lockable Resources `{agent}-core-*` created for this worker.
@@ -229,6 +293,19 @@ def cores = {cores}
     println("created " + name)
   }} else {{
     println("exists " + name)
+  }}
+}}
+def prefix = "${{agent}}-core-"
+def extra = m.resources.findAll {{ r ->
+  def n = r.name.startsWith(prefix) ? r.name.substring(prefix.length()) : ''
+  n ==~ /\d+/ && n.toInteger() > cores
+}}
+extra.each {{ r ->
+  if (r.isLocked() || r.isReserved()) {{
+    println("busy " + r.name)
+  }} else {{
+    m.resources.remove(r)
+    println("pruned " + r.name)
   }}
 }}
 m.save()
@@ -367,6 +444,66 @@ mod tests {
         assert!(g.contains("mac-host"));
         assert!(g.contains("CPU_CORES mac-host"));
         assert!(g.contains("cores = 4"));
+    }
+
+    #[test]
+    fn cpu_lock_qty_precedence_env_worker_config_nproc() {
+        let r = |env, worker, config| resolve_cpu_lock_qty(env, worker, config, 12).unwrap();
+        assert_eq!(r(Some("4"), Some(16), 8), (4, "env"));
+        assert_eq!(r(Some(" 4 "), None, 0), (4, "env"));
+        assert_eq!(r(None, Some(16), 8), (16, "worker.yaml"));
+        assert_eq!(r(Some(""), Some(16), 8), (16, "worker.yaml"));
+        assert_eq!(r(None, Some(0), 8), (8, "config"));
+        assert_eq!(r(None, None, 8), (8, "config"));
+        assert_eq!(r(None, Some(0), 0), (12, "nproc"));
+        assert_eq!(
+            resolve_cpu_lock_qty(None, None, 0, 0).unwrap(),
+            (1, "nproc")
+        );
+    }
+
+    #[test]
+    fn cpu_lock_qty_rejects_bad_env() {
+        for bad in ["0", "-2", "abc", "1.5"] {
+            let err = resolve_cpu_lock_qty(Some(bad), Some(16), 8, 12)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("CPU_LOCK_QTY must be an integer >= 1"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn groovy_create_prunes_cores_above_count() {
+        let g = groovy_create_cpu_cores("mac-host", "CPU_CORES", 16);
+        assert!(g.contains("def prefix = \"${agent}-core-\""));
+        assert!(g.contains("n ==~ /\\d+/ && n.toInteger() > cores"));
+        assert!(g.contains("r.isLocked() || r.isReserved()"));
+        assert!(g.contains("println(\"busy \" + r.name)"));
+        assert!(g.contains("m.resources.remove(r)"));
+        assert!(g.contains("println(\"pruned \" + r.name)"));
+        let prune = g.find("pruned ").unwrap();
+        let create = g.find("createResourceWithLabel").unwrap();
+        let save = g.rfind("m.save()").unwrap();
+        assert!(
+            create < prune && prune < save,
+            "prune runs after create, before save"
+        );
+    }
+
+    #[test]
+    fn cpu_cores_summary_counts_pruned_and_busy() {
+        let out = "exists a-core-1\nexists a-core-2\ncreated a-core-3\npruned a-core-4\nbusy a-core-5\ndone\n";
+        assert_eq!(
+            cpu_cores_summary(out, "CPU_CORES"),
+            "Lockable Resources: 1 created, 2 already present, 1 pruned, 1 busy (label 'CPU_CORES')."
+        );
+        assert_eq!(
+            cpu_cores_summary("exists a-core-1\ndone\n", "CPU_CORES"),
+            "Lockable Resources: 0 created, 1 already present (label 'CPU_CORES')."
+        );
     }
 
     #[test]
