@@ -41,6 +41,13 @@ if [ -z "$CONTROLLER" ] && [ "${#WORKERS[@]}" -eq 0 ] && [ "$LOCAL_WORKER" = 0 ]
 fi
 [ "$CONTROLLER_CMD" = "start" ] && [ -z "$CONTROLLER" ] && die "--start needs --controller"
 
+# Remote paths stay unexpanded here; each host's shell expands its own ~.
+CONTROLLER_YAML='~/.config/mac-k3d/config.yaml'
+WORKER_YAML='~/.config/mac-k3d/worker.yaml'
+if [ "$LOCAL_WORKER" = 1 ] && [ ! -f "$HOME/.config/mac-k3d/worker.yaml" ]; then
+  die "this PC has no ~/.config/mac-k3d/worker.yaml: run \`mac-k3d setup -c ~/.config/mac-k3d/worker.yaml\` or pass --no-local-worker. No host was changed."
+fi
+
 step "Checking the checkout"
 if [ -n "$(git status --porcelain -- src pipeline Cargo.toml Cargo.lock build.rs)" ]; then
   warn "uncommitted changes in src/ or pipeline/: every host will report a dirty build, and OFFICIAL=1 builds refuse it."
@@ -87,9 +94,12 @@ remote() {
   ssh "${SSH_OPTS[@]}" "$@" "$host" "bash -lc $(printf '%q' "export PATH=\"\$HOME/.local/bin:\$PATH\"; $cmd")"
 }
 
-# Copy the build to HOST as mac-k3d.new and check that it runs there.
+# Copy the build to HOST as mac-k3d.new and check that it runs there. YAML is
+# the file `config -c` will read: without it `config` has nothing to apply.
 stage_remote() {
-  local host="$1" arch
+  local host="$1" yaml="$2" arch
+  rsh "$host" "test -f $yaml" ||
+    die "$host has no $yaml: run \`mac-k3d setup -c $yaml\` on it first. No host was changed."
   arch="$(rsh "$host" 'uname -sm')"
   [ "$arch" = "$LOCAL_ARCH" ] || die "$host is $arch but this build is $LOCAL_ARCH; build on a matching machine. No host was changed."
   rsh "$host" 'mkdir -p ~/.local/bin'
@@ -119,8 +129,11 @@ done
 
 if [ "${#HOSTS[@]}" -gt 0 ]; then
   step "Staging the binary on every host before switching any"
-  for host in "${HOSTS[@]}"; do
-    stage_remote "$host"
+  if [ -n "$CONTROLLER" ]; then
+    stage_remote "$CONTROLLER" "$CONTROLLER_YAML"
+  fi
+  for host in ${WORKERS[@]+"${WORKERS[@]}"}; do
+    stage_remote "$host" "$WORKER_YAML"
   done
 fi
 
@@ -128,16 +141,16 @@ if [ -n "$CONTROLLER" ]; then
   step "Controller $CONTROLLER"
   install_remote "$CONTROLLER"
   if [ "$CONTROLLER_CMD" = "start" ]; then
-    remote "$CONTROLLER" 'mac-k3d start -c ~/.config/mac-k3d/config.yaml' -t
+    remote "$CONTROLLER" "mac-k3d start -c $CONTROLLER_YAML" -t
   else
-    remote "$CONTROLLER" 'mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets' -t
+    remote "$CONTROLLER" "mac-k3d config -c $CONTROLLER_YAML --skip-secrets" -t
   fi
 fi
 
 for host in ${WORKERS[@]+"${WORKERS[@]}"}; do
   step "Worker $host"
   install_remote "$host"
-  remote "$host" 'mac-k3d config -c ~/.config/mac-k3d/worker.yaml' -t
+  remote "$host" "mac-k3d config -c $WORKER_YAML" -t
 done
 
 if [ "$LOCAL_WORKER" = 1 ]; then

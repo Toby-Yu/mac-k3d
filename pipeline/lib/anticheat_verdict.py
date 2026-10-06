@@ -6,7 +6,7 @@ patch (anticheat_similarity), and transcript rule hits (anticheat_transcript).
 Thresholds and rules live in pipeline/config/anticheat-v1.json. Reviewer
 decisions in anticheat_overrides.json replace the automatic verdict.
 
-Live (P7), writes <trial>/agent/anticheat.json and <harness>/anticheat/{summary.json,report.md}:
+Live (anticheat/verdict), writes <trial>/agent/anticheat.json and <harness>/anticheat/{summary.json,report.md}:
     anticheat_verdict.py --harness-dir H --tasks-dir T --task-file F --benchmark B
 
 Rescore an old run without modifying it, writes <run>/artifact.anticheat.json and <run>/anticheat/report.md:

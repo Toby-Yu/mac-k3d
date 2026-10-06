@@ -165,17 +165,17 @@ mac-k3d is the **environment and scheduling manager**. It does not run container
 
 | Layer | Owner |
 |---|---|
-| Bare-machine prep: Docker, k3d, Harbor, Jenkins agent, base images | mac-k3d (`setup`, `start`, `config`) |
-| Per-build prep: iCode checkout, benchmark checkout, task selection, env file | mac-k3d (pipeline P0–P4) |
+| Bare-machine prep: Docker, k3d, the pinned Harbor, Jenkins agent, base images | mac-k3d (`setup`, `start`, `config`), re-checked per build by the `env` phase |
+| Per-build prep and checks: benchmark checkout, task selection, iCode checkout and sandbox, read-only mount, network allowlist, leak scan | mac-k3d (pipeline `tasks` phase) |
 | Container lifecycle, per-task cpus/memory, retries, rollout fan-out, verifier, reward | **Harbor** (one `harbor run`) |
 | Job placement across workers and resource admission | Jenkins + lockable-resources |
-| Capture receipts, anti-cheat, sanitizer, canary, report | mac-k3d (pipeline P5 canary, P7, P8) |
+| Isolation canary, capture receipts, anti-cheat verdicts, score, report, archive | mac-k3d (pipeline `evaluate/canary`, then the `anticheat`, `score`, `report` and `archive` phases) |
 
 The integrity layer stays here because Harbor has no equivalent: `harbor job summarize` is a removed shim and `harbor analyze` is rubric-only, so neither inspects a transcript for solution leakage or can reject a trial.
 
 ### One Harbor run per build
 
-P5 issues a single command and lets Harbor expand it:
+`evaluate/harbor_run` issues a single command and lets Harbor expand it. Every flag is explained in [pipeline.md](pipeline.md#how-harbor-is-called):
 
 ```text
 harbor run -p <dataset dir> -i <task id> ... -k <N_ROLLOUTS> -n <slots> -r <retries>
@@ -208,13 +208,13 @@ A dispatcher does **not** queue one build per rollout. It splits the sorted ques
 
 Each registered node has **one executor**. Jenkins' default load balancer hashes the job name to a preferred node, so with several executors per node every shard of one dispatcher would pile onto the same worker while it had a free executor. With one executor, a worker that is busy is skipped, and when it finishes it takes the next queued shard: bigger or faster workers simply run more shards.
 
-Each `<suite>_one_task` build is three stages — `Prepare`, `Evaluate`, `Report` — selected by `MAC_K3D_PHASE`. Only `Evaluate` takes the lock:
+Each `<suite>_one_task` build is seven stages, one per pipeline phase — Environment, Tasks, Evaluate, Anti-cheat, Score, Report, Archive — each running `run_all.sh` with its `MAC_K3D_PHASE`. Only `Evaluate` takes the lock:
 
 ```groovy
 lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES')
 ```
 
-With no quantity, lockable-resources locks **every** matching resource, so the build holds all of its worker's cores; their count becomes `CPU_LOCK_QTY`, which `task_resources.py` turns into Harbor's `-n`. The label is the **node name**, not a shared `CPU_CORES` label, because `mac-k3d setup` on a worker creates resources named `<agent>-core-1..N` labelled with both the shared label and the agent name, and the agent name is the Jenkins node name. Image pulls (`Prepare`) and report rendering (`Report`) run unlocked.
+With no quantity, lockable-resources locks **every** matching resource, so the build holds all of its worker's cores; their count becomes `CPU_LOCK_QTY`, which `task_resources.py` turns into Harbor's `-n`. The label is the **node name**, not a shared `CPU_CORES` label, because `mac-k3d setup` on a worker creates resources named `<agent>-core-1..N` labelled with both the shared label and the agent name, and the agent name is the Jenkins node name. Benchmark checkout, iCode build and image checks (Tasks), and everything after Harbor run unlocked.
 
 ### Adding a worker
 
@@ -224,7 +224,7 @@ Scale workers, not controllers. Lockable-resources state is per-controller, so a
 
 ### The pipeline under test ships in the binary
 
-`include_dir!` embeds `pipeline/` in `mac-k3d`, and `build.rs` bakes in the commit, a dirty flag (uncommitted changes under `src/` or `pipeline/`) and an FNV-64 hash of the embedded files. A build's `Prepare` stage runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`; `Evaluate` and `Report` reuse that extract, so a redeploy during a build cannot change the scripts under it.
+`include_dir!` embeds `pipeline/` in `mac-k3d`, and `build.rs` bakes in the commit, a dirty flag (uncommitted changes under `src/` or `pipeline/`) and an FNV-64 hash of the embedded files. A build's first stage (Environment) runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`; the other six stages reuse that extract, so a redeploy during a build cannot change the scripts under it.
 
 | Where | What records the pipeline |
 |---|---|

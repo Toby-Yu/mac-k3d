@@ -10,7 +10,8 @@ use crate::eval_catalog;
 
 #[derive(Debug, Default, Args)]
 pub struct EvalArgs {
-    /// Run a single stage script (p0–p8) or omit for full flow
+    /// Run one phase locally: env, tasks, evaluate, anticheat, score, report,
+    /// archive, all, or baseline (the manual LLM-only arm). Omit for the full flow
     #[arg(long)]
     pub stage: Option<String>,
 
@@ -294,7 +295,7 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
 
     if args.stage.is_none() && !args.yes && !atty::is(atty::Stream::Stdin) {
         return Err(Error::Config(
-            "not a TTY: pass --local, --stage p0..p8, or --yes (Jenkins) / --yes --local".into(),
+            "not a TTY: pass --local, --stage <phase>, or --yes (Jenkins) / --yes --local".into(),
         ));
     }
 
@@ -653,6 +654,36 @@ fn discover_repo_root() -> Result<PathBuf> {
     crate::prepare::eval_assets::ensure_share_pipeline()
 }
 
+/// The script `--stage` runs, and the MAC_K3D_PHASE it runs with. A phase (or
+/// `all`) goes through run_all.sh; `baseline` is the manual LLM-only arm.
+fn stage_script(stage: &str) -> Result<(&'static str, Option<String>)> {
+    use crate::prepare::eval_assets::{run_all_rel, PHASES};
+    let stage = stage.trim().to_ascii_lowercase();
+    if stage == "baseline" {
+        return Ok(("pipeline/tools/baseline.sh", None));
+    }
+    if stage == "all" || PHASES.contains(&stage.as_str()) {
+        return Ok((run_all_rel(), Some(stage)));
+    }
+    let phases = PHASES.join(", ");
+    let now = match stage.as_str() {
+        "p0" | "p1" => "--stage env",
+        "p2" | "p3" | "p4" => "--stage tasks",
+        "p5" => "--stage evaluate",
+        "p6" => "--stage baseline",
+        "p7" => "--stage anticheat, then --stage score",
+        "p8" => "--stage report, then --stage archive",
+        other => {
+            return Err(Error::Config(format!(
+                "unknown --stage {other}; use one of {phases}, all or baseline"
+            )))
+        }
+    };
+    Err(Error::Config(format!(
+        "--stage {stage} is gone; the pipeline runs in phases ({phases}). Use {now}"
+    )))
+}
+
 fn run_stage(
     repo: &Path,
     stage: &str,
@@ -667,29 +698,17 @@ fn run_stage(
     benchmark: &str,
     task: &str,
 ) -> Result<()> {
-    let script = match stage {
-        "p0" => "pipeline/stages/p0_prereqs.sh",
-        "p1" => "pipeline/stages/p1_pier.sh",
-        "p2" => "pipeline/stages/p2_deepswe.sh",
-        "p3" => "pipeline/stages/p3_icode.sh",
-        "p4" => "pipeline/stages/p4_agent.sh",
-        "p5" => "pipeline/stages/p5_harness.sh",
-        "p6" => "pipeline/stages/p6_baseline.sh",
-        "p7" => "pipeline/stages/p7_score.sh",
-        "p8" => "pipeline/stages/p8_output.sh",
-        "all" => "pipeline/stages/run_all.sh",
-        other => {
-            return Err(Error::Config(format!(
-                "unknown --stage {other}; use p0–p8 or omit for full"
-            )));
-        }
-    };
+    let (script, phase) = stage_script(stage)?;
     let path = repo.join(script);
     if !path.is_file() {
         return Err(Error::Config(format!("missing {}", path.display())));
     }
 
-    let status = Command::new("bash")
+    let mut cmd = Command::new("bash");
+    if let Some(phase) = phase {
+        cmd.env("MAC_K3D_PHASE", phase);
+    }
+    let status = cmd
         .arg(&path)
         .current_dir(repo)
         .env("MAC_K3D_ROOT", repo)
@@ -754,14 +773,13 @@ fn trigger_jenkins_one_task(
     }
     let user = config
         .jenkins_agent
-        .api_user
-        .clone()
-        .unwrap_or_else(|| "admin".into());
+        .api_user()
+        .unwrap_or("admin")
+        .to_string();
     let token = config
         .jenkins_agent
-        .api_token
-        .clone()
-        .filter(|s| !s.is_empty() && s != "REPLACE_ME")
+        .api_token()
+        .map(str::to_string)
         .ok_or_else(|| {
             Error::Config(
                 "Jenkins API token missing. Set jenkins_agent.api_user/api_token in config \
@@ -948,6 +966,43 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(got, tar.display().to_string());
+    }
+
+    #[test]
+    fn stage_takes_phase_names() {
+        for phase in crate::prepare::eval_assets::PHASES {
+            assert_eq!(
+                stage_script(phase).unwrap(),
+                ("pipeline/stages/run_all.sh", Some(phase.to_string()))
+            );
+        }
+        assert_eq!(stage_script("ALL").unwrap().1.as_deref(), Some("all"));
+        assert_eq!(
+            stage_script("baseline").unwrap(),
+            ("pipeline/tools/baseline.sh", None)
+        );
+    }
+
+    #[test]
+    fn old_stage_names_point_at_their_phase() {
+        let cases = [
+            ("p0", "--stage env"),
+            ("p1", "--stage env"),
+            ("p2", "--stage tasks"),
+            ("p4", "--stage tasks"),
+            ("p5", "--stage evaluate"),
+            ("p6", "--stage baseline"),
+            ("p7", "--stage anticheat, then --stage score"),
+            ("p8", "--stage report, then --stage archive"),
+        ];
+        for (old, now) in cases {
+            let err = stage_script(old).unwrap_err().to_string();
+            assert!(err.contains(&format!("--stage {old} is gone")), "{err}");
+            assert!(err.ends_with(&format!("Use {now}")), "{err}");
+        }
+        let err = stage_script("p9").unwrap_err().to_string();
+        assert!(err.contains("unknown --stage p9"), "{err}");
+        assert!(err.contains("env, tasks, evaluate, anticheat, score, report, archive"), "{err}");
     }
 
     #[test]

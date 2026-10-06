@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strip task deliverables from the iCode runtime P5 mounts at /opt/icode-host.
+"""Strip task deliverables from the iCode runtime Harbor mounts at /opt/icode-host.
 
 icode_input.sh calls this after icode_embed_sandbox_cpython. Only the packaged
 runtime under .venv changes; iCode's tracked files stay as shipped.
@@ -144,7 +144,7 @@ def _compile(python: Path, tree: Path, target: Path, exclude_site_packages: bool
     if exclude_site_packages:
         cmd += ["-x", _SITE_PACKAGES_RX]
     cmd.append(str(target))
-    # compileall prints errors on stdout; P3 captures stdout as the icode path.
+    # compileall prints errors on stdout; tasks/icode captures stdout as the icode path.
     subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, check=False)
 
 

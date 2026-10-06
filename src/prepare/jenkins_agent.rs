@@ -130,6 +130,16 @@ exec "{java}" -jar "{jar}" \
     Ok(changed)
 }
 
+/// Agent secret in an existing launch script, unless it is still the placeholder.
+fn existing_secret(script_path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(script_path).ok()?;
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("-secret \""))
+        .and_then(|rest| rest.split('"').next())
+        .filter(|s| !s.is_empty() && *s != "REPLACE_ME")
+        .map(str::to_string)
+}
+
 /// Register node via Jenkins REST API when token is available.
 ///
 /// Returns Ok(Some(secret)) when registration succeeded, Ok(None) when skipped
@@ -542,13 +552,17 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
             &name,
             &remote_fs,
             &config.jenkins_agent.labels,
-            config.jenkins_agent.api_user.as_deref(),
-            config.jenkins_agent.api_token.as_deref(),
+            config.jenkins_agent.api_user(),
+            config.jenkins_agent.api_token(),
         )?
     } else {
         None
     };
-    let secret_placeholder = secret.unwrap_or_else(|| "REPLACE_ME".into());
+    let script = remote_fs.join("launch-agent.sh");
+    // Without API credentials there is no new secret; keep the one already in use.
+    let secret_placeholder = secret
+        .or_else(|| existing_secret(&script))
+        .unwrap_or_else(|| "REPLACE_ME".into());
 
     let java_bin = config
         .dependencies
@@ -571,7 +585,6 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         })
         .unwrap_or_else(|| "java".into());
 
-    let script = remote_fs.join("launch-agent.sh");
     let script_changed =
         write_launch_script_with_java(&script, &url, &name, &jar, &secret_placeholder, &java_bin)?;
     if script_changed {
@@ -589,8 +602,8 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
             &name,
             &config.resources.cpu_cores_label,
             config.jenkins_agent.cpu_cores,
-            config.jenkins_agent.api_user.as_deref(),
-            config.jenkins_agent.api_token.as_deref(),
+            config.jenkins_agent.api_user(),
+            config.jenkins_agent.api_token(),
         )?;
         crate::prepare::agent_service::install_and_start(
             &script,
@@ -625,8 +638,8 @@ pub fn remove_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         .clone()
         .unwrap_or_else(default_agent_name);
 
-    let user = config.jenkins_agent.api_user.as_deref();
-    let token = config.jenkins_agent.api_token.as_deref();
+    let user = config.jenkins_agent.api_user();
+    let token = config.jenkins_agent.api_token();
 
     delete_node(url, &name, user, token)?;
     resources::remove_agent_cpu_cores(
@@ -765,6 +778,20 @@ mod tests {
         assert!(xml.contains("<numExecutors>1</numExecutors>"));
         assert!(xml.contains("<label>lolbench mac-host</label>"));
         assert!(xml.contains("<remoteFS>/tmp/agent</remoteFS>"));
+    }
+
+    #[test]
+    fn config_without_api_token_keeps_the_agent_secret() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = tmp.path().join("launch-agent.sh");
+        let jar = tmp.path().join("agent.jar");
+        assert_eq!(existing_secret(&script), None);
+        write_launch_script_with_java(&script, "http://c:8080", "n", &jar, "REPLACE_ME", "java")
+            .unwrap();
+        assert_eq!(existing_secret(&script), None);
+        write_launch_script_with_java(&script, "http://c:8080", "n", &jar, "s3cr3t", "java")
+            .unwrap();
+        assert_eq!(existing_secret(&script).as_deref(), Some("s3cr3t"));
     }
 
     #[test]

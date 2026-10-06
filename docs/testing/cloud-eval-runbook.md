@@ -8,7 +8,7 @@ Pass/fail table and stage detail stay in [testing-eval-pipeline.md](testing-eval
 
 **Users:** copy-paste commands in [user-guide.md](../user-guide.md). This file is the **lab** runbook (this cloud IP + this PC).
 
-**Sign-off:** DeepSWE **E0–E7** with `--n-tasks 1` (this runbook). LoLBench and SWE-bench Pro use the same Harbor P0–P5 in [testing-eval-pipeline.md](testing-eval-pipeline.md). After each phase, paste the checkpoint output before starting the next.
+**Sign-off:** DeepSWE **E0–E7** with `--n-tasks 1` (this runbook). LoLBench and SWE-bench Pro use the same pipeline phases in [testing-eval-pipeline.md](testing-eval-pipeline.md) (phase map: [pipeline.md](../pipeline.md)). After each phase, paste the checkpoint output before starting the next.
 
 ---
 
@@ -41,8 +41,8 @@ flowchart TD
   e0check["E0: 02_check_controller.sh plus browser 17070"]
   workerSetup["This PC: setup worker.yaml"]
   e1check["E1: node online in cloud Jenkins"]
-  cheap["E2-E3: P0-P4 plus report schema"]
-  paid["E4-E6: P5 harness then P7-P8 JSON and HTML"]
+  cheap["E2-E3: env and tasks phases plus report schema"]
+  paid["E4-E6: evaluate then anticheat, score, report, archive"]
   e7job["E7: Jenkins deepswe_one_task on this PC"]
   jsonOut["Named JSON archived and schema OK"]
 
@@ -53,20 +53,17 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  p0["P0 Docker and CLI"]
-  p1["P1 Harbor"]
-  p2["P2 clone DeepSWE GitHub"]
-  p3["P3 iCode release upload or git clone"]
-  p4["P4 Harbor agent icode"]
-  p5["P5 Harbor plus iCode plus DeepSeek"]
-  p7["P7 score f2p p2p"]
-  p8["P8 artifact.json summary.md report.html"]
+  env["env: Docker, compose, pinned Harbor, model API"]
+  tasks["tasks: DeepSWE checkout, selection, iCode, mount, allowlist, leak scan"]
+  evaluate["evaluate: slots, canary, harbor run (CPU lock)"]
+  anticheat["anticheat: receipts and verdicts"]
+  score["score: f2p p2p"]
+  report["report: artifact.json summary.md report.html"]
+  archive["archive: cost report and tar.gz"]
   jenkins["E7 deepswe_one_task archives that folder"]
 
-  p0 --> p1 --> p2 --> p3 --> p4
-  p4 --> p5
-  p5 --> p7
-  p7 --> p8 --> jenkins
+  env --> tasks --> evaluate --> anticheat
+  anticheat --> score --> report --> archive --> jenkins
 ```
 
 **iCode for E0–E7** is either a downloaded `*-full-*` drop (`ICODE_MODE=release`) or a GitHub/GitCode clone (`ICODE_MODE=git`). The worker does not keep a developer checkout. The controller wizard `EVAL_MODE=binary` default is unused by this checklist.
@@ -168,11 +165,10 @@ If this is root’s first run there is no live `config.yaml`. If you see **Confi
 | Role | **CI controller (Jenkins in k3d)** |
 | Docker | **Use this installation** |
 | k3d / kubectl / helm | **Install** if missing (OK as root) or **Use this installation** |
-| Harbor / LoLBench | **Skip** |
 | Cluster name | Default (`ci-controller`) |
 | k3d agent nodes | `0` |
 | Jenkins UI host port | **17070** |
-| Default EVAL_MODE | **binary** (unused by E0–E7) |
+| Default ICODE_MODE | **release** (E0–E7 set it per build) |
 | TASK / ICODE_* | Enter / leave empty |
 | Enter CI secrets now? | **yes** — paste **DeepSeek** (`deepseek-api-key`). Other keys optional. |
 | Write + apply | **yes** |
@@ -212,7 +208,7 @@ If a **local** lab controller still binds `:17070`, teardown it or leave it unus
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 cd ~/Documents/Toby/mac-k3d
-JENKINS_URL=http://43.107.42.252:17070 ./pipeline/stages/e1_reach_jenkins.sh
+JENKINS_URL=http://43.107.42.252:17070 ./pipeline/tools/e1_reach_jenkins.sh
 ```
 
 **Expected:** `HTTP 200` and `OK Jenkins reachable`. If this fails, fix the security group before the wizard.
@@ -231,11 +227,10 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 | Prompt | Choose |
 |--------|--------|
 | Role | **CI worker (Jenkins agent only)** |
-| Docker / Java | Use existing or **Install** |
-| k3d / kubectl | **Skip** |
-| Harbor / LoLBench | **No** |
+| Docker / Java / git | Use existing or **Install** |
+| Harbor | Not asked: setup installs the pinned 0.22.0 with `uv` (no root) |
 | Jenkins controller URL | type `http://43.107.42.252:17070` (or export `JENKINS_URL` first). Wizard default is localhost. |
-| API user / token | `admin` + the **token secret** |
+| API user / token | `admin` + the **token secret** (or Enter to skip; the YAML keeps both keys empty) |
 | Agent name | Distinct default (hostname) is fine |
 | Write + apply | **yes** |
 
@@ -276,26 +271,20 @@ export PATH="$HOME/.local/bin:$PATH"
 export DEEPSEEK_MODEL=deepseek-v4-pro
 cd ~/Documents/Toby/mac-k3d
 
-mac-k3d eval --stage p0
-mac-k3d eval --stage p1
-mac-k3d eval --stage p2
-mac-k3d eval --stage p3
-mac-k3d eval --stage p4
+mac-k3d eval --stage env
+mac-k3d eval --stage tasks --n-tasks 1
 
-./pipeline/stages/check_report.sh pipeline/lib/testdata/report-min.json
+./pipeline/tools/check_report.sh pipeline/lib/testdata/report-min.json
 # optional: python3 pipeline/lib/test_report.py
 ```
 
-| Stage | Expected |
+| Phase | Expected |
 |-------|----------|
-| P0 | Docker Server; CLI lists `eval` |
-| P1 | `harbor --help` works |
-| P2 | `$WORKDIR/deep-swe/tasks` (clone `https://github.com/datacurve-ai/deep-swe`) |
-| P3 | `icode --help` from the discovered iCode tree |
-| P4 | Harbor agent `icode` imports (`icode_harbor_agent:ICodeAgent`) |
+| `env` | Docker Server; CLI lists `eval`; `docker compose` and `buildx`; `OK harbor=… version=0.22.0` |
+| `tasks` | `$WORKDIR/deep-swe/tasks` (`https://github.com/datacurve-ai/deep-swe` at its pin, 113 task dirs); `OK icode helps` from the discovered iCode tree; `icode_harbor_agent:ICodeAgent` imports; `OK isolation: … agent hosts api.deepseek.com api.deepseek.ai`; `OK leak scan` |
 | E3 | `OK report schema` |
 
-**Checkpoint — paste:** last OK line from each stage and `OK report schema`.
+**Checkpoint — paste:** the last OK line from each phase and `OK report schema`.
 
 ---
 
@@ -308,19 +297,22 @@ export PATH="$HOME/.local/bin:$PATH"
 cd ~/Documents/Toby/mac-k3d
 # .env already has DEEPSEEK_API_KEY + DEEPSEEK_MODEL (chmod 600)
 
-mac-k3d eval --stage p5 --n-tasks 1
-mac-k3d eval --stage p7
-mac-k3d eval --stage p8 --n-tasks 1
-./pipeline/stages/check_report.sh
+mac-k3d eval --stage evaluate --n-tasks 1
+mac-k3d eval --stage anticheat
+mac-k3d eval --stage score
+mac-k3d eval --stage report --n-tasks 1
+mac-k3d eval --stage archive
+./pipeline/tools/check_report.sh
 ```
 
 **Expected:**
 
-- P5: `PROGRESS` lines; Harbor/Docker/LLM work (minutes, not 4s); `reward.json` under `harness/`. CLI usage errors and a missing `reward.json` **fail** the stage. P0 installs `docker compose` if missing.
-- P8: `eval-runs/output/<benchmark>/<run>/artifact.json`, `summary.md`, and `report.html`. The harness arm is `icode`.
+- `evaluate`: `OK slots`, then `PROGRESS n% evaluate` lines; Harbor/Docker/LLM work (minutes, not 4s); `reward.json` under `harness/`. CLI usage errors and a missing `reward.json` **fail** the phase. The `env` phase installs `docker compose` if missing.
+- `report`: `eval-runs/output/<benchmark>/<run>/artifact.json`, `summary.md`, and `report.html`. The harness arm is `icode`.
+- `archive`: `cost-token-report.md` in that folder and `OK backup …/output/<benchmark>/<run>.tar.gz`.
 - `check_report.sh` prints `OK report schema`
 
-**Checkpoint — paste:** P5 OK or error tail, JSON path, `OK report schema`.
+**Checkpoint — paste:** the `evaluate` OK or error tail, JSON path, `OK report schema`.
 
 ---
 
@@ -328,11 +320,11 @@ mac-k3d eval --stage p8 --n-tasks 1
 
 **Where:** this PC (or cloud) with the **controller** URL. **No** `--local`. Build must run on **this** node.
 
-Product path: Jenkins UI, job `deepswe_one_task` → **Build with Parameters** (`ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`). There is no pipeline field: the build runs the pipeline inside this worker's installed `mac-k3d` and prints `mac-k3d pipeline <sha>` in `Prepare`. `mac-k3d eval --icode-mode release --yes` cannot attach a file.
+Product path: Jenkins UI, job `deepswe_one_task` → **Build with Parameters** (`ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`). There is no pipeline field: the build runs the pipeline inside this worker's installed `mac-k3d` and prints `mac-k3d pipeline <sha>` in the Environment stage. `mac-k3d eval --icode-mode release --yes` cannot attach a file.
 
 Git (optional): same UI with `ICODE_MODE=git`, or `mac-k3d eval --n-tasks 1 --icode-mode git --icode-git-url … --icode-git-ref … --icode-git-ref-kind branch --model deepseek-v4-pro --yes` (no `--local`).
 
-**Expected:** build on this worker; archived JSON; same schema as E6. The console shows one `harbor run`, a `PROGRESS 40% … holding N cores on <this node>` line, and `eval_protocol.pipeline.commit` in the artifact equal to the SHA `mac-k3d --version` prints on this worker. Confirm with `check_report.sh` on the downloaded artifact if needed.
+**Expected:** build on this worker; seven stages (Environment, Tasks, Evaluate, Anti-cheat, Score, Report, Archive) with the lock only around Evaluate; archived JSON; same schema as E6. The console shows one `harbor run`, a `PROGRESS 45% evaluate: … holding N cores on <this node>` line, and `eval_protocol.pipeline.commit` in the artifact equal to the SHA `mac-k3d --version` prints on this worker. Confirm with `check_report.sh` on the downloaded artifact if needed.
 
 ### Phase 5b — multi-worker (needs a second worker)
 
@@ -366,8 +358,8 @@ LoLBench and SWE-bench Pro use the same Harbor stages as DeepSWE, with their own
 | 0 | root `docker info` + `mac-k3d --help` | | |
 | 1 | `02_check_controller.sh` + browser `:17070` | | |
 | 2 | `e1` + `03_check_worker.sh` + Nodes online | | |
-| 3 | P0–P4 + `check_report.sh` testdata | | |
-| 4 | P5–P8 n=1 + named JSON | | |
+| 3 | `env` + `tasks` + `check_report.sh` testdata | | |
+| 4 | `evaluate` … `archive` n=1 + named JSON | | |
 | 5 | `deepswe_one_task` on this node | | |
 | 5b | `deepswe_full_suite_task` `N_TASKS=10` `SHARD_SIZE=2` across two workers | | needs a second worker |
 
@@ -386,6 +378,6 @@ LoLBench and SWE-bench Pro use the same Harbor stages as DeepSWE, with their own
 | `DEEPSEEK_API_KEY missing` | E4–E6: copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller. |
 | `No such option: --agent-dir` | Old Pier flags. This tree runs `harbor run -a icode_harbor_agent:ICodeAgent`. |
 | Job still `deepseek-chat` | On cloud root: `mac-k3d config --skip-secrets` after pulling this tree. |
-| P3 iCode missing | Jenkins: upload `ICODE_RELEASE_FILE` (`ICODE_MODE=release`) or fill git URL/ref/kind. Local `--stage`: `*-full-*` in `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release`, or `ICODE_MODE=git`. |
-| harbor not found | Re-run P1 (`uv tool install harbor`) |
+| iCode missing (`tasks` phase) | Jenkins: upload `ICODE_RELEASE_FILE` (`ICODE_MODE=release`) or fill git URL/ref/kind. Local `--stage`: `*-full-*` in `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release`, or `ICODE_MODE=git`. |
+| harbor not found | Re-run `--stage env` (installs the pinned Harbor) |
 | Docker OOM / disk | DeepSWE images are large; free disk; keep N=1. |

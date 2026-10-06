@@ -60,6 +60,8 @@ pub struct DependenciesConfig {
     pub helm: DependencyEntry,
     pub harbor: DependencyEntry,
     pub java: DependencyEntry,
+    /// Workers clone benchmarks and iCode with it.
+    pub git: DependencyEntry,
 }
 
 impl Default for DependenciesConfig {
@@ -77,6 +79,10 @@ impl Default for DependenciesConfig {
                 ..DependencyEntry::default()
             },
             java: DependencyEntry {
+                source: DependencySource::Skip,
+                ..DependencyEntry::default()
+            },
+            git: DependencyEntry {
                 source: DependencySource::Skip,
                 ..DependencyEntry::default()
             },
@@ -134,8 +140,10 @@ pub struct DockerConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
+/// Deprecated: the pipeline's tasks phase clones LoLBench itself at a pinned
+/// commit. Old YAML still loads; nothing reads these fields any more.
 pub struct LolbenchConfig {
-    /// Path to LoLBench-Preview checkout (optional on standalone).
+    /// Path to a LoLBench-Preview checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
     pub source: LolbenchSource,
@@ -168,12 +176,48 @@ pub struct JenkinsAgentConfig {
     pub agent_jar: Option<PathBuf>,
     /// Logical CPU cores recorded at prepare time.
     pub cpu_cores: u32,
-    /// Jenkins user for REST API (plaintext for now; encrypt later).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Jenkins user for REST API (plaintext for now; encrypt later). A worker's
+    /// YAML always carries the key; `''` means "not filled in yet".
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "blank_as_none"
+    )]
     pub api_user: Option<String>,
-    /// Jenkins API token (plaintext for now; encrypt later).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Jenkins API token (plaintext for now; encrypt later). Same `''` rule.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "blank_as_none"
+    )]
     pub api_token: Option<String>,
+}
+
+impl JenkinsAgentConfig {
+    pub fn api_user(&self) -> Option<&str> {
+        filled(self.api_user.as_deref())
+    }
+
+    pub fn api_token(&self) -> Option<&str> {
+        filled(self.api_token.as_deref()).filter(|t| *t != "REPLACE_ME")
+    }
+
+    /// Both REST credentials, or `None` when either is missing or still blank.
+    pub fn api_credentials(&self) -> Option<(&str, &str)> {
+        Some((self.api_user()?, self.api_token()?))
+    }
+}
+
+fn filled(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn blank_as_none<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    Ok(value.filter(|s| !s.trim().is_empty()))
 }
 
 /// Non-secret defaults for the `lolbench_one_task` Pipeline job (controller).
@@ -425,6 +469,18 @@ impl MacK3dConfig {
         Self::load_file(&path)
     }
 
+    /// `load` for commands that act on a configured host. An explicit `-c` file
+    /// must exist: the defaults would point them at a k3d cluster that host never had.
+    pub fn load_existing(path: Option<&Path>) -> Result<Self> {
+        match path {
+            Some(p) if !p.exists() => Err(Error::Config(format!(
+                "no config at {c}; run `mac-k3d setup -c {c}` first",
+                c = p.display()
+            ))),
+            _ => Self::load(path),
+        }
+    }
+
     /// Load a specific YAML path. Errors if the file is missing or invalid.
     pub fn load_file(path: &Path) -> Result<Self> {
         if !path.exists() {
@@ -474,12 +530,23 @@ impl MacK3dConfig {
         let path = path
             .map(PathBuf::from)
             .unwrap_or_else(Self::default_config_path);
-        write_yaml(&path, self, None)
+        write_yaml(&path, &self.with_api_slots(), None)
     }
 
     /// Write a sanitized export with a header that warns the file has no secrets.
     pub fn save_sanitized_export(&self, path: &Path) -> Result<()> {
-        write_yaml(path, &self.for_export(), Some(EXPORT_HEADER))
+        write_yaml(path, &self.for_export().with_api_slots(), Some(EXPORT_HEADER))
+    }
+
+    /// A worker's YAML always shows `api_user` / `api_token`, blank when not
+    /// filled in, so the user can see where to paste them later.
+    fn with_api_slots(&self) -> Self {
+        let mut out = self.clone();
+        if matches!(out.role, NodeRole::Worker) {
+            out.jenkins_agent.api_user.get_or_insert_with(String::new);
+            out.jenkins_agent.api_token.get_or_insert_with(String::new);
+        }
+        out
     }
 
     pub fn apply_jenkins_mode(&mut self, mode: JenkinsMode) {
@@ -503,7 +570,7 @@ impl MacK3dConfig {
 }
 
 impl DependenciesConfig {
-    pub fn entries(&self) -> [(&str, &DependencyEntry); 6] {
+    pub fn entries(&self) -> [(&str, &DependencyEntry); 7] {
         [
             ("docker", &self.docker),
             ("k3d", &self.k3d),
@@ -511,7 +578,21 @@ impl DependenciesConfig {
             ("helm", &self.helm),
             ("harbor", &self.harbor),
             ("java", &self.java),
+            ("git", &self.git),
         ]
+    }
+
+    pub fn entry_mut(&mut self, name: &str) -> Option<&mut DependencyEntry> {
+        Some(match name {
+            "docker" => &mut self.docker,
+            "k3d" => &mut self.k3d,
+            "kubectl" => &mut self.kubectl,
+            "helm" => &mut self.helm,
+            "harbor" => &mut self.harbor,
+            "java" => &mut self.java,
+            "git" => &mut self.git,
+            _ => return None,
+        })
     }
 }
 
@@ -529,6 +610,7 @@ fn strip_dependency_host_paths(deps: &mut DependenciesConfig) {
         &mut deps.helm,
         &mut deps.harbor,
         &mut deps.java,
+        &mut deps.git,
     ] {
         entry.binary = None;
         entry.app = None;
@@ -656,11 +738,56 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("sanitized export"));
         assert!(!text.contains("test-jenkins-token"));
-        assert!(!text.contains("api_token"));
+        assert!(text.contains("api_token: ''"), "{text}");
         assert!(text.contains("default_task: ruff_1"));
         let loaded = MacK3dConfig::load_file(&path).unwrap();
         assert!(loaded.jenkins_agent.api_token.is_none());
+        assert_eq!(loaded.jenkins_agent.api_user(), Some("admin"));
+        assert!(loaded.jenkins_agent.api_credentials().is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worker_yaml_shows_blank_api_keys_when_skipped() {
+        let dir = std::env::temp_dir().join(format!("mac-k3d-slots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut worker = sample_worker();
+        worker.jenkins_agent.api_user = None;
+        worker.jenkins_agent.api_token = None;
+        let path = dir.join("worker.yaml");
+        worker.save(Some(&path)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("api_user: ''"), "{text}");
+        assert!(text.contains("api_token: ''"), "{text}");
+        let loaded = MacK3dConfig::load_file(&path).unwrap();
+        assert!(loaded.jenkins_agent.api_user.is_none());
+        assert!(loaded.jenkins_agent.api_credentials().is_none());
+
+        let filled = text
+            .replace("api_user: ''", "api_user: admin")
+            .replace("api_token: ''", "api_token: abc");
+        std::fs::write(&path, filled).unwrap();
+        let loaded = MacK3dConfig::load_file(&path).unwrap();
+        assert_eq!(loaded.jenkins_agent.api_credentials(), Some(("admin", "abc")));
+
+        let mut controller = MacK3dConfig::default();
+        controller.role = NodeRole::Controller;
+        let path = dir.join("config.yaml");
+        controller.save(Some(&path)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("api_user"), "{text}");
+        assert!(!text.contains("api_token"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn placeholder_token_is_not_a_credential() {
+        let mut agent = sample_worker().jenkins_agent;
+        agent.api_token = Some("REPLACE_ME".into());
+        assert!(agent.api_credentials().is_none());
+        agent.api_token = Some("  ".into());
+        assert!(agent.api_token().is_none());
     }
 
     #[test]

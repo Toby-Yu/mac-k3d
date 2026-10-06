@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Grade each LLM-only patch with Harbor's verifier. Parallelism matches CPU_LOCK_QTY.
 set -euo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
+source "$(cd "$(dirname "$0")/../stages" && pwd)/_common.sh"
 
 eval_parallel_degree || die "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1"
-have harbor || die "harbor not on PATH (run P1)"
+have harbor || die "harbor not on PATH (run the env phase)"
 [ -f "$PIPELINE_LIB/patch_harbor_agent.py" ] || die "missing patch_harbor_agent.py"
 ensure_selected_tasks
 TASKS_DIR="$(benchmark_tasks_dir)"
-echo "P6 grade: n_rollouts=$N_ROLLOUTS slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
+echo "baseline grade: n_rollouts=$N_ROLLOUTS slots=$EVAL_SLOTS cpus_each=$EVAL_CPUS_EACH"
 
 grade_one() {
   local tid="$1" dest="$2"
@@ -34,7 +34,7 @@ PY
   { read -r repo_decl; read -r base_decl; } <<<"$declared" || true
   if [ -n "$repo_decl" ]; then capture_ae+=(--ae "MAC_K3D_REPO=$repo_decl"); fi
   if [ -n "$base_decl" ]; then capture_ae+=(--ae "MAC_K3D_BASE_COMMIT=$base_decl"); fi
-  echo "P6 grade: $tid $(basename "$dest") cpus=$EVAL_CPUS_EACH"
+  echo "baseline grade: $tid $(basename "$dest") cpus=$EVAL_CPUS_EACH"
   set +e
   (
     cd "$run_dir"
@@ -87,4 +87,4 @@ while read -r tid; do
   done
 done <"$WORKDIR/selected_tasks.txt"
 wait || true
-echo "P6 grade complete"
+echo "baseline grade complete"

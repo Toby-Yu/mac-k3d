@@ -239,11 +239,12 @@ def _trial(harness: Path, tid: str, attempt: int, patch: str, transcript: Path, 
 
 
 class LivePipelineTests(unittest.TestCase):
-    """P7 writes verdicts into trials; P8 scores rejected rollouts as unresolved and archives transcripts."""
+    """anticheat writes verdicts into trials; report scores rejected rollouts as unresolved; archive keeps transcripts."""
 
-    def test_p7_verdicts_flow_into_artifact_and_backup(self):
+    def test_verdicts_flow_into_artifact_and_backup(self):
         from anticheat_verdict import run_live
-        from render_report import backup_run, build_artifact, summary_markdown
+        from archive_run import backup_run
+        from render_report import build_artifact, summary_markdown
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -293,7 +294,6 @@ class LivePipelineTests(unittest.TestCase):
                 report_dir=report_dir,
                 run_folder="jenkins-9-x",
                 harness_dir=harness,
-                baseline_dir=root / "baseline",
             )
             attempt = dest / "icode" / "alpha" / "attempt-01"
             archived = attempt / "agent" / "icode-project" / "sessions" / "cli-1" / "events.jsonl.gz"
@@ -328,10 +328,19 @@ class LivePipelineTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
-    def test_p7_runs_verdicts_before_scoring(self):
-        p7 = (ROOT / "pipeline" / "stages" / "p7_score.sh").read_text(encoding="utf-8")
-        self.assertIn('rm -rf "$HARNESS_DIR/anticheat"', p7)
-        self.assertLess(p7.index("anticheat_verdict.py"), p7.index("score_results.py"))
+    def test_anticheat_phase_runs_before_scoring(self):
+        stages = ROOT / "pipeline" / "stages"
+        run_all = (stages / "run_all.sh").read_text(encoding="utf-8")
+        phases = run_all[run_all.index("PHASES=(") :].split(")", 1)[0].split()
+        self.assertLess(phases.index("anticheat"), phases.index("score"))
+        anticheat = (stages / "anticheat.sh").read_text(encoding="utf-8")
+        self.assertLess(anticheat.index("anticheat/receipts"), anticheat.index("anticheat/verdict"))
+        verdict = (stages / "anticheat" / "verdict.sh").read_text(encoding="utf-8")
+        self.assertIn('rm -rf "$HARNESS_DIR/anticheat"', verdict)
+        self.assertIn("anticheat_verdict.py", verdict)
+        score = (stages / "score" / "score.sh").read_text(encoding="utf-8")
+        self.assertIn("score_results.py", score)
+        self.assertNotIn("anticheat_verdict.py", score)
 
     def test_config_ships_inside_pipeline(self):
         for rel in ("config/anticheat-v1.json", "config/harness/icode-pr2-eea9d66.yaml"):

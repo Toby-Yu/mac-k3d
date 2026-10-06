@@ -165,3 +165,30 @@ pub fn install_package(name: &str) -> Result<()> {
 pub fn harbor_bootstrap_hint() -> &'static str {
     os::harbor_bootstrap_hint()
 }
+
+/// One command an administrator has to run for this user, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootStep {
+    pub why: String,
+    pub command: String,
+}
+
+/// Root command that installs `name`, or `None` when this OS installs it without root.
+pub fn root_install_command(name: &str) -> Option<String> {
+    os::root_install_command(name)
+}
+
+/// True when this process may run root commands itself (root, or sudo works).
+pub fn can_elevate() -> bool {
+    os::can_elevate()
+}
+
+/// Host settings a worker needs that only root can change (docker access, linger).
+pub fn worker_host_root_steps() -> Vec<RootStep> {
+    os::worker_host_root_steps()
+}
+
+/// Run one root command: directly as root, else through sudo.
+pub fn run_as_root(command: &str) -> Result<()> {
+    os::run_as_root(command)
+}

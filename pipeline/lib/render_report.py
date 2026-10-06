@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Write one run's artifact.json, summary.md, and report.html, and back them up in the repo."""
+"""Write one run's artifact.json, summary.md and report.html (report phase).
+
+The archive phase (archive_run.py) backs the run folder up afterwards.
+"""
 
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 import os
 import re
-import shutil
-import tarfile
 from datetime import datetime
 from pathlib import Path
 
@@ -18,26 +18,6 @@ from eval_metrics import mean_ci, summarize_arm
 from score_results import load_json, parse_reward_value, rates_for_trial
 from icode_usage import find_icode_usage
 from task_resources import cpu_count
-
-_TRIAL_FILES = {
-    "result.json",
-    "reward.json",
-    "agent_report.json",
-    "usage.json",
-    "notes.txt",
-    "icode-usage.json",
-    "icode.json",
-    "icode.txt",
-    "timing.json",
-    "agent.patch",
-    "model.patch",
-    "capture.json",
-    "capture_flags.json",
-    "base_sha.txt",
-    "anticheat.json",
-    "trial.log",
-}
-_GZIP_TRIAL_FILES = {"events.jsonl"}
 
 
 def _resolved(data: dict) -> bool:
@@ -399,7 +379,7 @@ def build_artifact(
 
 
 def anticheat_block(harness_dir: Path, raw_arm: dict, arm: dict) -> dict:
-    """P7's verdict summary plus raw and official macro Pass@1. ``not_run`` when P7 wrote none."""
+    """The anticheat phase's verdict summary plus raw and official macro Pass@1. ``not_run`` when it wrote none."""
     found = load_json(harness_dir / "anticheat" / "summary.json")
     block = dict(found) if isinstance(found, dict) else {"status": "not_run"}
     block.setdefault("status", "ok")
@@ -774,107 +754,6 @@ def run_folder_name(utc: str, task_ids: list[str], build_number: str = "") -> st
     return f"{utc}-n{len(task_ids)}"
 
 
-def default_backup_root() -> Path:
-    for key in ("MAC_K3D_BACKUP_ROOT", "MAC_K3D_OUTPUT_ROOT"):
-        override = os.environ.get(key)
-        if override:
-            return Path(override)
-    root = os.environ.get("MAC_K3D_ROOT")
-    if root:
-        return Path(root) / "output"
-    return Path(__file__).resolve().parents[2] / "output"
-
-
-_KEY_SHAPED = re.compile(r"sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}")
-_SECRET_ENV = ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ICODE_API_KEY", "GITCODE_TOKEN", "GITHUB_TOKEN")
-
-
-def archive_transcript(src: Path, target: Path) -> None:
-    """Gzip a transcript, masking key-shaped values and this process's secret env values."""
-    secrets = [v for v in (os.environ.get(k) or "" for k in _SECRET_ENV) if len(v) >= 8]
-    with src.open("r", encoding="utf-8", errors="replace") as fh, gzip.open(target, "wt", encoding="utf-8") as out:
-        for line in fh:
-            for value in secrets:
-                line = line.replace(value, "***")
-            out.write(_KEY_SHAPED.sub("***", line))
-
-
-def _copy_trial_files(trial: Path, dest: Path) -> None:
-    if not trial.is_dir():
-        return
-    dest.mkdir(parents=True, exist_ok=True)
-    for path in trial.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.name == ".harbor-env" or ".harbor-env" in path.parts:
-            continue
-        target = dest / path.relative_to(trial)
-        if path.name in _GZIP_TRIAL_FILES:
-            target = target.with_name(target.name + ".gz")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            archive_transcript(path, target)
-            continue
-        if path.name not in _TRIAL_FILES and path.suffix != ".patch":
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
-
-
-def backup_run(
-    *,
-    backup_root: Path,
-    suite: str,
-    task_ids: list[str],
-    report_dir: Path,
-    run_folder: str,
-    harness_dir: Path,
-    baseline_dir: Path,
-) -> Path:
-    del baseline_dir
-    dest = backup_root / suite / run_folder
-    dest.mkdir(parents=True, exist_ok=True)
-    for name in (
-        "artifact.json",
-        "summary.md",
-        "report.html",
-        "container_mem.jsonl",
-        "skipped_questions.txt",
-    ):
-        src = report_dir / name
-        if src.is_file():
-            shutil.copy2(src, dest / name)
-    (dest / "tasks.txt").write_text("".join(f"{tid}\n" for tid in task_ids), encoding="utf-8")
-    verdicts = harness_dir / "anticheat"
-    if verdicts.is_dir():
-        shutil.copytree(verdicts, dest / "anticheat", dirs_exist_ok=True)
-    from score_results import harbor_task_trials
-
-    for tid in task_ids:
-        for index, trial in enumerate(harbor_task_trials(harness_dir, tid), start=1):
-            _copy_trial_files(trial, dest / "icode" / tid / f"attempt-{index:02d}")
-    return dest
-
-
-def compress_backup(dest: Path) -> Path:
-    """Pack a run folder into ``<folder>.tar.gz`` and remove the loose directory.
-
-    The archive's top entry is the folder name, so extracting recreates the
-    same layout. A failed pack deletes the temporary archive and leaves the
-    folder in place.
-    """
-    archive = dest.parent / f"{dest.name}.tar.gz"
-    tmp = dest.parent / f".{dest.name}.tar.gz.tmp"
-    try:
-        with tarfile.open(tmp, "w:gz") as tar:
-            tar.add(dest, arcname=dest.name)
-        tmp.replace(archive)
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
-    shutil.rmtree(dest)
-    return archive
-
-
 def demo_artifact() -> dict:
     def attempts(pattern: list[bool]) -> list[dict]:
         rows = []
@@ -934,7 +813,6 @@ def main() -> int:
     ap.add_argument("--workdir", default=os.environ.get("WORKDIR", ""))
     ap.add_argument("--utc", default="")
     ap.add_argument("--run-folder", default="")
-    ap.add_argument("--backup-root", default="")
     args = ap.parse_args()
     if args.demo:
         doc = demo_artifact()
@@ -982,19 +860,7 @@ def main() -> int:
         out = out / folder
     path = write_report(doc, out)
     copy_memory_sidecars(Path(args.harness_dir), out)
-    backup_root = Path(args.backup_root) if args.backup_root else default_backup_root()
-    dest = backup_run(
-        backup_root=backup_root,
-        suite=args.suite,
-        task_ids=ids,
-        report_dir=out,
-        run_folder=folder,
-        harness_dir=Path(args.harness_dir),
-        baseline_dir=Path(args.baseline_dir),
-    )
-    archive = compress_backup(dest)
     print(f"wrote {path}")
-    print(f"backup {archive}")
     return 0
 
 

@@ -6,7 +6,7 @@ These pages are **this team’s copy-paste checklists** (cloud IP, this PC, sign
 
 | File | Use |
 |------|-----|
-| [testing-eval-pipeline.md](testing-eval-pipeline.md) | E0–E8 / P0–P8 |
+| [testing-eval-pipeline.md](testing-eval-pipeline.md) | E0–E8 / pipeline phases |
 | [cloud-eval-runbook.md](cloud-eval-runbook.md) | This lab’s controller IP + worker |
 | [testing-binary-initializer.md](testing-binary-initializer.md) | Bootstrap Task 0–8 |
 | [clean-machine-binary-test.md](clean-machine-binary-test.md) | Wipe or new PC |

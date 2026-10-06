@@ -9,10 +9,8 @@ require_mac_k3d
 have docker || die "docker not on PATH"
 docker info >/dev/null 2>&1 || die "docker info failed (no Server / permission). Linux: log out/in. macOS: open Docker Desktop."
 pass "docker Server section present"
-# shellcheck source=../../pipeline/stages/ensure_compose.sh
-source "$(cd "$(dirname "$0")/../../pipeline/stages" && pwd)/ensure_compose.sh"
-ensure_docker_compose
-pass "docker compose present"
+bash "$(cd "$(dirname "$0")/../../pipeline/stages" && pwd)/env/compose.sh"
+pass "docker compose and buildx present"
 
 "$MAC_K3D_BIN" --help | grep -q eval || die "mac-k3d --help does not list eval"
 pass "mac-k3d lists eval"
@@ -35,11 +33,11 @@ else
 fi
 
 if [ "${RUN_EVAL_SMOKE:-0}" = "1" ]; then
-  echo "Running mac-k3d eval --stage p0 (RUN_EVAL_SMOKE=1)…"
-  "$MAC_K3D_BIN" eval --stage p0
-  pass "eval --stage p0"
+  echo "Running mac-k3d eval --stage env (RUN_EVAL_SMOKE=1)…"
+  "$MAC_K3D_BIN" eval --stage env
+  pass "eval --stage env"
 else
-  note "skipping eval --stage p0 (set RUN_EVAL_SMOKE=1 to run)"
+  note "skipping eval --stage env (set RUN_EVAL_SMOKE=1 to run)"
 fi
 
 pass "eval-ready — safe to start an evaluation task (ensure deepseek-api-key in Jenkins for LLM stages)"

@@ -7,7 +7,7 @@ Not a second user guide. Field meanings: [evaluation](../evaluation.md). Job par
 ```bash
 cargo test
 python3 -m unittest discover -s pipeline/lib -p 'test_*.py'
-bash -n pipeline/stages/run_all.sh pipeline/stages/p5_harness.sh pipeline/stages/_common.sh scripts/redeploy.sh
+for f in $(git ls-files 'pipeline/*.sh' 'scripts/*.sh'); do bash -n "$f"; done
 scripts/check_docs.sh
 ```
 
@@ -17,17 +17,19 @@ The cases that cover this branch:
 - `some_task_dispatches_to_one_task` / `full_suite_dispatches_shards_then_aggregates` — the dispatchers take no executor, no lock and no Docker until the merge; they queue `<suite>_one_task` shards (`SHARD_SIZE`, at least one per online worker) and merge them in their own `Aggregate` stage by child build number
 - `each_shape_shows_only_its_params` / `user_profile_hides_dev_params` / `developer_profile_shows_dev_params` / `harness_llm_benchmark_always_visible` / `groovy_and_xml_param_sets_match` — the per-shape parameter lists, the `ui_profile` switch, and Groovy and XML rendering from one table
 - `agent_registers_with_one_executor` — one eval build per worker
-- `bootstrap_extracts_pipeline_from_installed_binary` / `no_mac_k3d_git_params` — every phase uses `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline` (`--require-clean` when `OFFICIAL=1`), only `Prepare` clears it, and no job carries a `MAC_K3D_GIT_*` parameter, a `git fetch` or a `mac-k3d-src` clone
+- `bootstrap_extracts_pipeline_from_installed_binary` / `no_mac_k3d_git_params` — every phase uses `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline` (`--require-clean` when `OFFICIAL=1`), only the first stage (Environment) clears it, and no job carries a `MAC_K3D_GIT_*` parameter, a `git fetch` or a `mac-k3d-src` clone
 - `extract_writes_build_json` / `require_clean_refuses_dirty_build` / `version_string_has_commit` / `pipeline_extract_needs_no_config` — `BUILD.json` carries the baked commit, dirty flag and pipeline hash; a dirty or unknown build is refused for official runs; `--version` names the commit
 - `agent_restart_only_when_jar_or_script_changed` — `agent.jar` is swapped by rename only when its bytes differ, and the agent restarts only when the jar or launch script changed
 - `test_pipeline_facts_reads_build_json` / `test_pipeline_facts_falls_back_to_a_git_checkout` / `test_shards_from_different_pipeline_builds_are_marked_mixed` — `eval_protocol.pipeline` comes from `BUILD.json` (`source: binary`) or git (`source: checkout`); an aggregate of two different builds says `pipeline_status: mixed`
-- `test_p8_renders_when_the_task_declares_float_cpus` / `test_render_report_accepts_a_float_cpus_each` / `test_a_whole_float_cpu_count_is_an_int` — build #51's P8 crash: `cpus = 2.0` becomes `cpus_each: 2`
-- in `lolbench_one_task_uses_shared_pipeline` — `lock(label: env.NODE_NAME, variable: 'HELD_CORES')` with no quantity sits inside `Evaluate`, between `Prepare` and `Report`
-- `test_p5_uses_import_path_not_bare_agent_icode` / `test_shared_harbor_command_for_every_benchmark` — exactly one `harbor run` per build, carrying `-k $N_ROLLOUTS` and `-n $EVAL_SLOTS`
+- `test_report_renders_when_the_task_declares_float_cpus` / `test_render_report_accepts_a_float_cpus_each` / `test_a_whole_float_cpu_count_is_an_int` — build #51's report crash: `cpus = 2.0` becomes `cpus_each: 2`
+- `eval_job_runs_one_stage_per_phase_and_locks_only_evaluate` — seven stages in phase order, each running `run_all.sh` with its `MAC_K3D_PHASE`, and exactly one `lock(label: env.NODE_NAME, variable: 'HELD_CORES')` with no quantity, inside `Evaluate`
+- `test_harbor_run_uses_import_path_not_bare_agent_icode` / `test_shared_harbor_command_for_every_benchmark` — exactly one `harbor run` per build, carrying `-k $N_ROLLOUTS` and `-n $EVAL_SLOTS`
 - `pipeline/lib/test_task_resources.py` (17 cases) — declared cpus/memory/storage are read from `task.toml`, slots are planned from them, and a worker that cannot fit one task fails early
 - `pipeline/lib/test_aggregate.py` (12 cases) — two shards' trials merge into one artifact with `tasks x rollouts` records; verdict counts add; mixed pipeline versions are flagged, not averaged; an empty patch keeps its F2P but drops its P2P
-- `test_a_trial_that_started_off_the_declared_base_is_flagged` — P7 compares each receipt's base SHA against `task.toml` on the host, since the agent env no longer carries it
-- `test_parallel_degree_does_not_guess_when_p5_never_ran` — the report stages read the plan P5 wrote instead of re-probing the machine
+- `test_a_trial_that_started_off_the_declared_base_is_flagged` — the `anticheat` phase compares each receipt's base SHA against `task.toml` on the host, since the agent env no longer carries it
+- `test_parallel_degree_does_not_guess_when_evaluate_never_ran` — the report phases read the plan `evaluate/slots` wrote instead of re-probing the machine
+- `pipeline/lib/test_pipeline_layout.py` — every phase and step exists and is listed; only evaluate steps source `harbor_cmd.sh`; Harbor flags and `harbor run` appear only there; no literal agent host in a script; no `pN_*.sh` name anywhere; an unknown phase is refused; `CANARY=only` skips the later phases; `archive` needs a report and carries the cost analysis
+- `phases_match_run_all_and_are_embedded` / `stage_takes_phase_names` / `old_stage_names_point_at_their_phase` — the Rust phase list equals `run_all.sh`, and `eval --stage p5` names its replacement
 
 ## Live Jenkins: the commit, push, redeploy loop
 
@@ -47,11 +49,11 @@ Every test names a commit, so a bad change is revertible and a good result is re
 
 Console signals, in order:
 
-- `mac-k3d pipeline <sha> (mac-k3d 0.5.2, /home/<user>/.local/bin/mac-k3d)` in the Prepare stage — the SHA actually under test
-- `PROGRESS 40% P5 canary + the Harbor run (holding $CPU_LOCK_QTY cores on $NODE_NAME)` — the lock is per node
+- `mac-k3d pipeline <sha> (mac-k3d 0.5.2, /home/<user>/.local/bin/mac-k3d)` in the Environment stage — the SHA actually under test
+- `PROGRESS 45% evaluate: canary + harbor run (holding $CPU_LOCK_QTY cores on $NODE_NAME)` — the lock is per node
 - one `harbor run` line, with `-k` equal to `N_ROLLOUTS` and `-n` equal to the planned slots
 - `declared cpus=2 memory_mb=8192` (DeepSWE) or `cpus=4` (LoLBench) and **no** `--override-cpus`
-- after P8, `artifact.json` has `eval_protocol.pipeline` = `{source: binary, version, commit, dirty, pipeline_hash}`, `cpus_each: 2` on DeepSWE, and `resources.declared` vs `resources.applied`
+- after the Report stage, `artifact.json` has `eval_protocol.pipeline` = `{source: binary, version, commit, dirty, pipeline_hash}`, `cpus_each: 2` on DeepSWE, and `resources.declared` vs `resources.applied`
 
 ## Live Jenkins: the two-worker proof
 
@@ -70,4 +72,4 @@ The run that has to pass before anyone else uses this.
 
 ## Status
 
-Fixtures: **green** (124 Rust unit + 18 CLI, 230 Python). Live two-worker proof: **not yet run** — it needs the second worker (`toby@47.84.16.18`) online, so it is the one item on this branch I have not verified myself. `scripts/redeploy.sh` was exercised only against a fake `ssh`/`scp`.
+Fixtures: **green** (141 Rust unit + 19 CLI, 242 Python, 2026-10-06 after the phase refactor). Live two-worker proof: **not yet run** — it needs the second worker (`toby@47.84.16.18`) online, so it is the one item on this branch I have not verified myself. `scripts/redeploy.sh` was exercised only against a fake `ssh`/`scp`.

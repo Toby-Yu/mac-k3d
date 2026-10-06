@@ -46,15 +46,15 @@ which mac-k3d
 mac-k3d --help    # must list `setup`
 ```
 
-First-run (TTY): `mac-k3d` or `mac-k3d setup` starts the wizard, then offers to apply start/config.
+First-run (TTY): `mac-k3d` or `mac-k3d setup` starts the wizard. The wizard only asks questions; it saves your answers to the YAML file first, then installs what you chose and offers to apply start/config. Re-running `setup` on an existing file offers **Use existing config (finish pending installs, then validate)**, **Re-run wizard (overwrite config)** or **Cancel**.
 
-When Docker is not found, choose **Install**. The binary runs `apt` (Linux) or Homebrew cask (macOS). It may ask for `sudo`.
+When Docker is not found, choose **Install**. The binary runs `apt` (Linux) or Homebrew cask (macOS). It asks for `sudo` at most once, and only when something needs root. If you cannot use `sudo`, see [What root must run](#what-root-must-run).
 
 Honest leftovers the binary cannot hide:
 
 - **Linux:** one **logout / login** after the `docker` group is added, then re-run `mac-k3d setup`.
 - **macOS:** first **Docker Desktop** window (and Homebrew if it is missing).
-- **Worker:** paste a Jenkins **API token** from the UI, then `mac-k3d config -c worker.yaml` if the first pass had no token.
+- **Worker:** paste a Jenkins **API token** from the UI into the `api_token: ''` line `worker.yaml` already has, then `mac-k3d config -c worker.yaml` if the first pass had no token.
 
 Do **not** pick “Local development only” if you need Jenkins or an agent.
 
@@ -89,7 +89,6 @@ Open **http://localhost:17070** (or `http://<this-machine>:17070`). Username **a
 | Base directory | Recommended path with enough space |
 | Role | **CI controller (Jenkins in k3d)** |
 | Docker / k3d / kubectl / **helm** | **Install** if not found, or use existing |
-| Harbor / LoLBench | Skip (not required) |
 | Cluster name | Default is fine |
 | k3d agent nodes | `0` |
 | Jenkins UI host port | `17070` |
@@ -116,7 +115,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 # or: mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 ```
 
-If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **17070**). That is OK. Config still saves. Finish **A**, then continue below.
+Your answers are saved to `worker.yaml` before anything is installed. If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **17070**). That is OK. Finish **A**, then continue below.
 
 **Wizard — choose:**
 
@@ -124,14 +123,29 @@ If Jenkins is not up yet, `agent.jar` may fail (`curl` to port **17070**). That 
 |--------|--------|
 | Base directory | Recommended path with enough space |
 | Role | **CI worker (Jenkins agent only)** |
-| Docker / java | **Install** if not found, or use existing |
-| k3d / kubectl | **Skip** unless you want a local cluster |
-| Harbor / LoLBench | **No** (optional only for oracle/debug) |
+| Docker / java / git | **Install** if not found, or use existing |
+| Harbor | Not asked. Setup installs the version pinned in `pipeline/config/toolchain.env` (0.22.0) with `uv tool install` into `~/.local/bin`, no root, and replaces any other version |
+| k3d / kubectl / LoLBench | Not asked. A worker hosts no cluster, and the pipeline clones each benchmark itself |
 | Add `~/.local/bin` to PATH | **yes** if asked |
 | Jenkins controller URL | Wizard default `http://43.107.42.252:17070`. Type `http://<new-ip>:17070` or export `JENKINS_URL` |
-| API user / token | Fill in if Jenkins is already up; **empty** if not |
+| API user / token | Fill in if Jenkins is already up. Otherwise press **Enter**: `worker.yaml` still gets `api_user: ''` and `api_token: ''` so you know where to put them later |
 | Agent name / labels / remote root | Defaults are fine |
 | Write configuration? | **yes** |
+
+### What root must run
+
+Setup runs everything it can as you. When a step needs root and you cannot use `sudo` (common on a shared cloud VM), it does **not** fail half-way: your answers are already saved, and it stops with one block for an administrator, for example:
+
+```text
+Ask an administrator to run these as root on this machine:
+
+  apt-get install -y openjdk-17-jre-headless   # install java
+  apt-get install -y git                       # install git
+  usermod -aG docker <you>                     # let <you> use Docker without sudo (then log out and back in)
+  loginctl enable-linger <you>                 # keep the Jenkins agent running after you log out
+```
+
+The block lists only what is missing on this machine. Harbor and the Jenkins agent never need root. After the administrator has run it, log out and back in, then run `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` again and choose **Use existing config**; setup carries on from the installs.
 
 ### 2. Jenkins API token (after Jenkins is up)
 
@@ -147,7 +161,7 @@ The `--show-jenkins` **password** is only for the browser. It is **not** the API
 
 ### 3. Put the token in `worker.yaml`
 
-Edit `~/.config/mac-k3d/worker.yaml`. Under `jenkins_agent:`, change only:
+Edit `~/.config/mac-k3d/worker.yaml`. The two keys are already under `jenkins_agent:` (empty if you skipped them). Fill in only:
 
 ```yaml
   api_user: admin
@@ -172,7 +186,7 @@ Or re-run step 1 and paste **admin** + token when the wizard asks.
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
-Use the **worker** file, not `config.yaml`. Expect: download `agent.jar`, register the node with one executor per logical core, write `launch-agent.sh`, create `<agent>-core-1..N` locks, start the OS agent service. A line like `k3d cluster 'ci-worker' not present` is **OK** — workers are not a k3d cluster.
+Use the **worker** file, not `config.yaml`. Expect: `harbor 0.22.0: ok` (a warning if Harbor or git is missing), download `agent.jar`, register the node with **one executor**, write `launch-agent.sh`, create `<agent>-core-1..N` locks (one per logical core), start the OS agent service. With the keys still empty it prints which keys to fill in and the command to re-run. A line like `k3d cluster 'ci-worker' not present` is **OK** — workers are not a k3d cluster.
 
 That is the whole cost of adding the Nth worker. No pipeline or job edit is needed: eval builds lock `label: env.NODE_NAME`, so each worker only ever holds its own cores, and the full-suite dispatcher sizes its shards from the cores now registered. Scale workers freely, but keep exactly one controller — lockable-resources state is per-controller.
 
@@ -205,7 +219,7 @@ One **controller**. Each new Mac or Linux box is another **worker**. They do not
 On the new computer:
 
 1. Download the matching Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, or `mac-k3d-darwin-x86_64`). No Rust.
-2. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` — role **CI worker**; let it install Docker if asked; Harbor/LoLBench **No**; Jenkins URL defaults to `http://127.0.0.1:17070` or type/export `http://<controller-ip>:17070`.
+2. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` — role **CI worker**; let it install Docker, Java and git if asked (Harbor installs itself); Jenkins URL defaults to `http://127.0.0.1:17070` or type/export `http://<controller-ip>:17070`.
 3. Use a **distinct** agent name (the wizard default includes the hostname).
 4. Create or reuse a Jenkins API token; put `api_user` / `api_token` in that machine’s `worker.yaml`.
 5. `mac-k3d config -c ~/.config/mac-k3d/worker.yaml` — node **online** in Jenkins.
@@ -235,7 +249,7 @@ On a machine that can reach Jenkins (usually the controller):
 
 ```bash
 mac-k3d eval --n-tasks 1 --icode-mode release
-# or stage-by-stage: see docs/testing/testing-eval-pipeline.md
+# or one phase at a time (mac-k3d eval --stage env|tasks|evaluate|…): see docs/pipeline.md
 ```
 
 Worker must have Docker (already from setup). Place a `*-full-*` drop under `~/.local/share/mac-k3d/` or use `ICODE_MODE=git`. Local paid stages use a gitignored `.env`; Jenkins E7 uses credential `deepseek-api-key`.
@@ -272,6 +286,8 @@ Do **not** run `loginctl` or `usermod` on a Mac. Those are Linux-only.
 | `docker info` fails / no Server | Linux: docker group + new login. macOS: open **Docker Desktop** and wait until it is idle |
 | `loginctl: command not found` | macOS — ignore; use LaunchAgent after worker `config` |
 | `agent.jar` / curl port 17070 / need token | Finish controller `start`, paste API token, then worker `config` |
-| `REPLACE_ME` / unit not started | Token missing or still `api_token: null`; edit `worker.yaml` and re-run worker `config` |
+| `Left jenkins_agent.api_user / api_token empty` / unit not started | Token missing (`api_token: ''`); fill it in `worker.yaml` and re-run worker `config` |
+| `Ask an administrator to run these as root` | See [What root must run](#what-root-must-run) |
+| `no config at …; run mac-k3d setup -c … first` | The `-c` file does not exist (check the path and the user name); run `setup` with that path first |
 | `mac-k3d-jenkins-agent.service` could not be found | You ran `config` on **controller** YAML, or Jenkins was down / no token. Use `-c worker.yaml` after step 2 |
 | `failed to bind host port … 8080` | Re-run `mac-k3d start` on a build that auto-remaps; or set free `cluster.ports` hosts. Keep Jenkins on `17070` unless remapped |

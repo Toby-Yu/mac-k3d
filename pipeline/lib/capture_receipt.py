@@ -2,11 +2,11 @@
 """Host side of the capture path (icode_capture.sh runs inside the task container).
 
 declared-repo  Print the repo path and base commit a task declares, one per line,
-               for P5/P6 to pass as MAC_K3D_REPO and MAC_K3D_BASE_COMMIT.
+               for the evaluate phase and tools/grade_baseline to pass as MAC_K3D_REPO and MAC_K3D_BASE_COMMIT.
                LoLBench: /workspace/<metadata.project> and the image tag
                lolbench-base. DeepSWE and SWE-bench Pro: the `cd <path>` and the
                commit in the first [[verifier.collect]] command.
-annotate       P7. For every trial, compare the patch the grader read with the
+annotate       anticheat/receipts. For every trial, compare the patch the grader read with the
                capture receipt and write agent/capture_flags.json. Same check
                for every suite; only the grader's file name differs.
 """

@@ -47,9 +47,9 @@ mac-k3d prepare
 On a terminal, this launches an **interactive wizard** that:
 
 1. Picks a volume with the most free space and asks where to store large caches (Docker, k3d, Jenkins).
-2. Discovers already-installed tools (Docker Desktop, k3d, kubectl, helm) and asks whether to use them or install missing ones.
-3. Asks for this Mac's role (standalone, CI controller, or CI worker).
-4. Writes `~/.config/mac-k3d/config.yaml`.
+2. Asks for this Mac's role (standalone, CI controller, or CI worker).
+3. Asks only about the tools that role uses (controller: Docker, k3d, kubectl, helm; worker: Docker, Java, git, plus the pinned Harbor, which is not a question) and whether to use them or install missing ones.
+4. Writes `~/.config/mac-k3d/config.yaml`, then installs what you chose. Anything that needs root and cannot get `sudo` is printed as one block for an administrator.
 
 For scripting without prompts:
 
@@ -159,7 +159,7 @@ kubectl get pods -n jenkins
 
 ## Scenario C: Multi-Mac (controller + workers)
 
-Use this when Mac A runs Jenkins and Mac B/C run Jenkins agents with their own local k3d clusters.
+Use this when Mac A runs Jenkins and Mac B/C run Jenkins agents. Workers host no k3d cluster: eval builds run Harbor containers on the worker's Docker.
 
 See [deployment.md](deployment.md) for the logical topology and the physical LAN layout.
 
@@ -175,13 +175,13 @@ Do not daisy-chain the Minis or use macOS Internet Sharing. Give the controller 
 
 ### Overview
 
-| Mac | Role | Jenkins | Cluster name (example) |
-|-----|------|---------|------------------------|
-| Mac A | Controller | enabled | `ci-controller` |
-| Mac B | Worker | disabled | `ci-worker-b` |
-| Mac C | Worker | disabled | `ci-worker-c` |
+| Mac | Role | Config file | Runs |
+|-----|------|-------------|------|
+| Mac A | Controller | `config.yaml` | k3d cluster `ci-controller` with Jenkins |
+| Mac B | Worker | `worker.yaml` | Jenkins agent, Docker, Java, git, Harbor 0.22.0 |
+| Mac C | Worker | `worker.yaml` | same as Mac B |
 
-Each Mac is independent at the Kubernetes layer. Coordination happens through Jenkins.
+Coordination happens through Jenkins; the workers are not Kubernetes nodes.
 
 ---
 
@@ -250,124 +250,57 @@ Point the agent at `http://localhost:17070`.
 
 ### Step 2: Set up Mac B (worker)
 
-Repeat on each worker Mac.
+Repeat on each worker Mac. The worker wizard asks only what an agent needs:
 
 ```bash
-mac-k3d prepare --init-config
+mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
+# Role: CI worker
+# Docker / Java / git: Install if not found (Harbor is installed at the pin, not asked)
+# Jenkins controller URL: http://<mac-a-ip>:17070
+# API user / token: admin + an API token from Mac A, or Enter to skip
 ```
 
-Edit `~/.config/mac-k3d/config.yaml`:
+Skipped the token? `worker.yaml` already has the keys, empty:
 
 ```yaml
-cluster:
-  name: ci-worker-b
-  agents: 0
-
-jenkins:
-  enabled: false
-
-docker:
-  startup_timeout_secs: 120
+jenkins_agent:
+  api_user: ''
+  api_token: ''
 ```
 
-Start and configure:
+Fill them in, then:
 
 ```bash
-mac-k3d start
-mac-k3d config
-mac-k3d status
+mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
----
+Without `sudo`, setup saves the answers and prints the root commands for an administrator (Java/git/Docker install, the `docker` group, `loginctl enable-linger` on Linux); afterwards re-run `setup` and choose **Use existing config**. Full walkthrough: [new-machine.md](new-machine.md#b-worker--jenkins-agent).
 
-### Step 3: Register worker agents in Jenkins
-
-On Mac A (Jenkins UI):
-
-1. **Manage Jenkins → Nodes → New Node**
-2. Name: `mac-b` (match the label you will use in pipelines)
-3. Type: **Permanent Agent**
-4. Remote root directory: `/Users/<username>/jenkins-agent`
-5. Labels: `mac-b`
-6. Launch method: choose based on network:
-   - **Launch agent via SSH** — if Mac A can SSH to Mac B
-   - **Inbound agents** — worker connects out to controller (good for NAT/VPN)
-7. Executors: start conservative (e.g. `2`)
-
-Repeat for Mac C with name `mac-c` and label `mac-c`.
-
-#### Inbound agent (worker connects to controller)
-
-On Mac B, download the agent JAR from Jenkins:
-
-**Manage Jenkins → Nodes → mac-b → Launch**
-
-Run on Mac B:
-
-```bash
-java -jar agent.jar -url https://jenkins.example.com:17070/ -secret <SECRET> -name mac-b -webSocket
-```
-
-Use `-webSocket` when direct TCP from worker to controller is blocked by firewalls.
+Never run `mac-k3d start -c worker.yaml`; it is rejected on purpose.
 
 ---
 
-### Step 4: Configure lockable resources (back pressure)
+### Step 3: What `config` registers on Mac A
 
-On Mac A (Jenkins UI):
+`mac-k3d config -c worker.yaml` is the only command that registers an agent. Using the API token it:
 
-1. **Manage Jenkins → Lockable Resources Manager**
-2. Create resources for Mac B:
+1. Creates or updates the node on Mac A: one executor, the agent labels (default `macos docker lolbench` / `linux docker lolbench`), launch method **Inbound**.
+2. Creates the lockable resources `<agent>-core-1..N` (one per logical core), labelled with the shared `CPU_CORES` label and the agent name.
+3. Writes `launch-agent.sh` and starts the agent service (LaunchAgent `com.mac-k3d.jenkins-agent` on macOS, systemd user unit `mac-k3d-jenkins-agent.service` on Linux).
 
-| Name | Labels | # of resources |
-|------|--------|----------------|
-| macb-small-slot-1 | `macb-small` | (label count = 4) |
-| macb-small-slot-2 | `macb-small` | |
-| macb-small-slot-3 | `macb-small` | |
-| macb-small-slot-4 | `macb-small` | |
-| macb-medium-slot-1 | `macb-medium` | (label count = 2) |
-| macb-medium-slot-2 | `macb-medium` | |
-| macb-large-slot-1 | `macb-large` | (label count = 1) |
-
-Alternatively, create resources with label `macb-small` and set **Reserved by label** count to 4.
-
-See [deployment.md](deployment.md) for sizing guidance and Jenkinsfile examples.
+Do not create nodes or lock entries by hand. Each eval build locks every core of its own node, only for its Evaluate stage ([deployment.md](deployment.md#what-the-eval-jobs-actually-do)).
 
 ---
 
-### Step 5: Create a test pipeline
-
-On Mac A, create a Pipeline job with:
-
-```groovy
-pipeline {
-  agent { label 'mac-b' }
-  stages {
-    stage('Hello') {
-      steps {
-        lock(label: 'macb-small', quantity: 1) {
-          sh 'echo "Running on Mac B" && hostname && docker info --format "{{.Name}}"'
-        }
-      }
-    }
-  }
-}
-```
-
-Run the job and confirm it executes on Mac B.
-
----
-
-### Step 6: Verify multi-Mac setup
+### Step 4: Verify multi-Mac setup
 
 | Check | Command / action |
 |-------|------------------|
 | Controller cluster | `mac-k3d status` on Mac A |
-| Worker cluster | `mac-k3d status` on Mac B |
-| Jenkins reachable from worker | `curl -k https://jenkins.example.com:17070/login` from Mac B |
-| Agent online | Jenkins UI → Nodes → mac-b shows **online** |
-| Job runs on worker | Trigger test pipeline; build log shows Mac B hostname |
-| Back pressure works | Queue two `macb-large` jobs; second waits in queue |
+| Jenkins reachable from worker | `curl -sS -o /dev/null -w '%{http_code}\n' http://<mac-a-ip>:17070/login` from Mac B |
+| Agent online | Jenkins UI → Nodes → the agent name shows **online** with 1 executor |
+| Worker toolchain | `harbor --version` on Mac B prints the pin (0.22.0); `REQUIRE_WORKER=1 ./scripts/env_set_up/03_check_worker.sh` |
+| Job runs on worker | Run `deepswe_one_task`; the console says `Running on <agent>` and shows seven stages with the lock only around Evaluate |
 
 ---
 
@@ -375,18 +308,18 @@ Run the job and confirm it executes on Mac B.
 
 ### Start environment (after reboot)
 
-On each Mac:
+On the controller:
 
 ```bash
-mac-k3d start          # or: mac-k3d start --jenkins in-cluster on controller
+mac-k3d start --jenkins in-cluster
 mac-k3d config
 ```
 
-Restart Jenkins agents if they do not auto-reconnect.
+Workers need no command: the agent service starts at login (Linux: at boot, with linger). If one stays offline, run `mac-k3d config -c ~/.config/mac-k3d/worker.yaml` on it.
 
 ### Stop environment (end of day)
 
-On each Mac:
+On the controller:
 
 ```bash
 mac-k3d teardown
@@ -413,8 +346,8 @@ mac-k3d status
 | `docker info` fails | Docker Desktop not running | Open Docker Desktop; re-run `mac-k3d start` |
 | k3d cluster not found | First run or after `clean` | `mac-k3d start` recreates it |
 | Jenkins pod not ready | Helm install still rolling out | `kubectl get pods -n jenkins -w` |
-| Worker agent offline | Network or agent process stopped | Check VPN/firewall; restart agent JAR |
-| Jobs queue forever on Mac B | Lock slots exhausted or executors = 0 | Check Lockable Resources; increase slots or reduce load |
+| Worker agent offline | Network, blank API keys, or agent process stopped | Check VPN/firewall; fill `api_user` / `api_token` in `worker.yaml`; `mac-k3d config -c worker.yaml` |
+| Jobs queue forever on Mac B | Agent offline, or no `<agent>-core-N` resources | Check Nodes and Lockable Resources; re-run `mac-k3d config -c worker.yaml` |
 | Port already in use | Conflicting service on host port | Change `jenkins.host_port` or `cluster.ports` in config |
 
 Enable debug logging:
@@ -445,6 +378,6 @@ On Jenkins controller, delete worker nodes before decommissioning worker Macs.
 
 ## Next steps
 
-- Tune lockable resource slot counts — see [deployment.md](deployment.md)
+- How builds share workers — see [deployment.md](deployment.md)
 - Customize cluster ports and agent count — see [configuration.md](configuration.md)
 - Review CLI reference — see [commands.md](commands.md)

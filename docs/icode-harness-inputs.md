@@ -2,7 +2,7 @@
 
 Workers are CI agents. Developers push iCode to GitHub or GitCode; eval never uses a developer checkout on the worker.
 
-DeepSWE, LoLBench, and SWE-bench Pro (all Harbor) accept the same two **iCode inputs**. P3 calls exactly one function:
+DeepSWE, LoLBench, and SWE-bench Pro (all Harbor) accept the same two **iCode inputs**. The `tasks/icode` step ([pipeline.md](pipeline.md#steps)) calls exactly one function:
 
 | `ICODE_MODE` | Function | What you provide |
 |--------------|----------|------------------|
@@ -23,7 +23,7 @@ flowchart TD
   kinds -->|tag| tg[Detached tag]
   kinds -->|commit| cm[Detached SHA]
   kinds -->|pr| prn[Detached PR tip]
-  jenkinsUp --> p5[P5 bind /opt/icode-host]
+  jenkinsUp --> p5[tasks/icode_sandbox, then evaluate binds /opt/icode-host]
   localR --> p5
   br --> p5
   tg --> p5
@@ -57,7 +57,7 @@ Git URL, ref, and kind stay in Jenkins parameters / `jenkins_job` YAML — not t
 
 Download the official `icode-<os>-<arch>-full-vX.Y.Z` (`.tar.gz`, same name with no suffix, unpacked `*-full-*` folder, or a file named `icode`).
 
-**Jenkins:** Build with Parameters → `ICODE_MODE=release` → upload that file as `ICODE_RELEASE_FILE`. Jenkins names it after the parameter, so P3 treats it by **content**: gzip/tar magic unpacks an archive; otherwise it copies the file as `icode`. An empty upload fails the job (`upload ICODE_RELEASE_FILE on Jenkins Build with Parameters`).
+**Jenkins:** Build with Parameters → `ICODE_MODE=release` → upload that file as `ICODE_RELEASE_FILE`. Jenkins names it after the parameter, so `tasks/icode` treats it by **content**: gzip/tar magic unpacks an archive; otherwise it copies the file as `icode`. An empty upload fails the job (`upload ICODE_RELEASE_FILE on Jenkins Build with Parameters`).
 
 **Local:**
 
@@ -65,10 +65,10 @@ Download the official `icode-<os>-<arch>-full-vX.Y.Z` (`.tar.gz`, same name with
 mac-k3d set --icode-release /path/to/icode-linux-x86_64-full-v0.1.41
 # or copy into the discover dir:
 cp /path/to/icode-linux-x86_64-full-v0.1.41 "$HOME/.local/share/mac-k3d/"
-mac-k3d eval --local --stage p3 --icode-mode release --yes
+mac-k3d eval --local --stage tasks --icode-mode release --yes
 ```
 
-Named-path rules stay for local CLI (`icode` or `*-full-*`). P3: `resolving iCode (release)`. Harbor keeps the real binary (no git wrapper). There is **no** `icode_git` object on the report.
+Named-path rules stay for local CLI (`icode` or `*-full-*`). `tasks/icode` prints `resolving iCode (release)`. Harbor keeps the real binary (no git wrapper). There is **no** `icode_git` object on the report.
 
 `mac-k3d eval --yes` (no `--local`) **cannot** queue a release build: GET `buildWithParameters` cannot attach a file. Open the Jenkins UI instead.
 
@@ -86,16 +86,16 @@ Clone `https://github.com/…` or `https://gitcode.com/…` (no tokens in the UR
 Leftover `auto` (old queued builds) still maps: 7–40 hex → commit, else branch. Do not pick it on the Jenkins form.
 
 ```bash
-mac-k3d eval --local --stage p3 --icode-mode git \
+mac-k3d eval --local --stage tasks --icode-mode git \
   --icode-git-url https://github.com/ORG/icode.git \
   --icode-git-ref main --icode-git-ref-kind branch
 ```
 
-P3 writes `icode_git.json` (`url`, `kind`, `ref`, resolved `sha`, `subject`). P7/P8 copy it into the report as `icode_git`. Console: `OK iCode git kind=…`. Private repos: gitignored `.env` (`GITCODE_TOKEN` / `GITHUB_TOKEN`) or Jenkins credentials `gitcode-pat` / `github-pat`.
+`tasks/icode` writes `icode_git.json` (`url`, `kind`, `ref`, resolved `sha`, `subject`). The `score` and `report` phases copy it into the report as `icode_git`. Console: `OK iCode git kind=…`. Private repos: gitignored `.env` (`GITCODE_TOKEN` / `GITHUB_TOKEN`) or Jenkins credentials `gitcode-pat` / `github-pat`.
 
-Before any rollout, P5 strips task deliverables from the clone's `.venv`, makes its sandbox stdlib sourceless, mounts it read-only and leak-scans it. This is the same for every benchmark and model; see [Same protocol for every benchmark and model](evaluation.md#same-protocol-for-every-benchmark-and-model). The clone's tracked files are not changed. Each run records the result in `eval_protocol.isolation`; compare `runtime_sha256` across runs ([Recorded proof](evaluation.md#recorded-proof-eval_protocolisolation)).
+Before any rollout, the `tasks` phase strips task deliverables from the clone's `.venv` and makes its sandbox stdlib sourceless (`tasks/icode_sandbox`), mounts it read-only (`tasks/isolation`) and leak-scans it (`tasks/leakscan`). This is the same for every benchmark and model; see [Same protocol for every benchmark and model](evaluation.md#same-protocol-for-every-benchmark-and-model). The clone's tracked files are not changed. Each run records the result in `eval_protocol.isolation`; compare `runtime_sha256` across runs ([Recorded proof](evaluation.md#recorded-proof-eval_protocolisolation)).
 
-The clone lives under the eval workdir (`eval-runs/icode-src`), not a permanent developer tree on the worker. A later git eval wipes that tree first. If Harbor left root/nobody files in `.venv`, P3 deletes it with Docker (`removing leftover … via docker`) — do not `sudo rm` by hand. Git-mode Jenkins also deletes a leftover `ICODE_RELEASE_FILE` and does not treat it as an upload.
+The clone lives under the eval workdir (`eval-runs/icode-src`), not a permanent developer tree on the worker. A later git eval wipes that tree first. If Harbor left root/nobody files in `.venv`, `tasks/icode` deletes it with Docker (and `evaluate/harbor_run` hands the tree back to the build user after Harbor) (`removing leftover … via docker`) — do not `sudo rm` by hand. Git-mode Jenkins also deletes a leftover `ICODE_RELEASE_FILE` and does not treat it as an upload.
 
 ## Jenkins Build with Parameters
 
@@ -109,7 +109,7 @@ Same fields on **both** jobs. Unused fields stay on the form: leave those contro
 
 Vice versa: if you chose git, ignore the file picker; if you chose release, ignore URL / ref / kind.
 
-After changing job XML, run `mac-k3d config --skip-secrets` on the **controller** so the UI shows `ICODE_RELEASE_FILE` (no worker-path `ICODE_RELEASE` string). Extract pipeline on the worker (`mac-k3d eval --stage p0` or `config`).
+After changing job XML, run `mac-k3d config --skip-secrets` on the **controller** so the UI shows `ICODE_RELEASE_FILE` (no worker-path `ICODE_RELEASE` string). Extract pipeline on the worker (`mac-k3d config -c worker.yaml`, or any `mac-k3d eval --stage …`).
 
 CLI from the worker (queues Jenkins **git** only):
 

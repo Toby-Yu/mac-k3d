@@ -63,7 +63,6 @@ Wizard choices:
 |--------|--------|
 | Role | **CI controller (Jenkins in k3d)** |
 | Docker / k3d / kubectl / helm | Use existing or **Install** |
-| Harbor / LoLBench | Skip |
 | Jenkins UI host port | **17070** (default on v0.4.0-rc.4+) |
 | CI secrets | Yes if you have `deepseek-api-key`; else skip and add later |
 | Write + apply | **yes** |
@@ -104,9 +103,10 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 | Prompt | Choose |
 |--------|--------|
 | Role | **CI worker (Jenkins agent only)** |
-| Harbor / LoLBench | **No** |
+| Docker / Java / git | Use existing or **Install** |
+| Harbor | Not asked: setup installs the pinned 0.22.0 with `uv` (no root) |
 | Jenkins controller URL | Wizard default `http://43.107.42.252:17070` (Enter). Same-PC controller: type `http://localhost:17070` |
-| API user / token | Paste now, or leave empty and edit YAML later |
+| API user / token | Paste now, or press Enter: `worker.yaml` keeps `api_user: ''` / `api_token: ''` to fill in later |
 
 If the token was empty during setup:
 
@@ -141,8 +141,8 @@ Expected: `OK ALL CHECKS PASSED`.
 Then pipeline stages:
 
 ```bash
-mac-k3d eval --stage p0
-# continue: docs/testing/testing-eval-pipeline.md (P1–P8)
+mac-k3d eval --stage env
+# continue: docs/testing/testing-eval-pipeline.md (tasks phase onwards)
 ```
 
 Ensure Jenkins credential **`deepseek-api-key`** exists before LLM stages (see [secrets.md](../secrets.md)).

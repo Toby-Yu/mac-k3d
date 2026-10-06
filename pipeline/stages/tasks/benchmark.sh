@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# P2 — clone the selected benchmark (DeepSWE, LoLBench-Preview, or SWE-bench Pro)
+# tasks/benchmark: check out the selected benchmark at its pinned commit and
+# prepare its task folders. Harbor later reads these folders through
+# `-p <dir> -i <task>`; it never downloads a benchmark itself.
 set -euo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
-
-progress 25 "P2: clone benchmark=$BENCHMARK"
+# shellcheck source=../_common.sh
+source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 
 have git || die "git required"
 case "${BENCHMARK:-deepswe}" in
@@ -15,6 +16,8 @@ case "${BENCHMARK:-deepswe}" in
     python3 "$PIPELINE_LIB/provenance.py" assert-count "$LOLBENCH_DIR/harbor_tasks" "$LOLBENCH_TASK_COUNT"
     ;;
   swebenchpro)
+    [ -f "$PIPELINE_LIB/swebenchpro_tasks.py" ] \
+      || die "pipeline at $MAC_K3D_ROOT is too old for swebenchpro (missing pipeline/lib/swebenchpro_tasks.py). Redeploy this worker's mac-k3d binary (bash scripts/redeploy.sh) and rebuild."
     if [ ! -f "$SWEBENCHPRO_DIR/src/swe_bench_pro_eval.py" ] \
       && [ ! -f "$SWEBENCHPRO_DIR/swe_bench_pro_eval.py" ]; then
       mkdir -p "$SWEBENCHPRO_DIR"
@@ -41,6 +44,4 @@ esac
 
 TASKS_DIR="$(benchmark_tasks_dir)"
 TASK_COUNT="$(find "$TASKS_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-write_selected_tasks
-echo "OK $BENCHMARK tasks dir ($TASK_COUNT task dirs); selected $(tr '\n' ' ' <"$WORKDIR/selected_tasks.txt")"
-progress 30 "P2 complete"
+echo "OK $BENCHMARK tasks dir $TASKS_DIR ($TASK_COUNT task dirs)"

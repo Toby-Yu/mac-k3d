@@ -1,6 +1,6 @@
 # Interactive Prepare Wizard
 
-`mac-k3d prepare` runs an interactive questionnaire (when stdin is a TTY) to generate `config.yaml`. The wizard covers **storage**, **dependencies** (including Harbor), **LoLBench checkout**, **Jenkins role / agent registration**, and a final **disk check**.
+`mac-k3d prepare` (and `mac-k3d setup`, which runs it first) asks the questions for this machine when stdin is a TTY, **saves the YAML**, and only then applies it: storage directories, the installs you chose, the pinned Harbor, host settings, and a final disk and RAM check. The wizard itself only asks questions; nothing is installed until your answers are on disk, so a failed install never loses them.
 
 For non-interactive/scripted use, see [commands.md](commands.md#prepare).
 
@@ -19,29 +19,45 @@ mac-k3d prepare --init-config
 mac-k3d prepare --non-interactive
 ```
 
+When the file already exists, an interactive run offers:
+
+| Choice | What happens |
+|--------|--------------|
+| **Use existing config (finish pending installs, then validate)** | Keeps your answers and carries on from any install that was left for root |
+| **Re-run wizard (overwrite config)** | Asks every question again |
+| **Cancel** | Changes nothing |
+
 ---
 
-## Wizard flow
+## Flow
 
 ```mermaid
 flowchart TD
     A[Start prepare] --> B{TTY?}
     B -->|no| C[non-interactive checks]
     B -->|yes| D[Scan volumes]
-    D --> E[Prompt storage base dir]
-    E --> F[Discover + prompt deps incl Harbor]
-    F --> G[Role: standalone / controller / worker]
-    G --> H[LoLBench checkout]
-    H --> I{Role}
-    I -->|controller| J[Jenkins in-cluster + CPU_CORES resource type]
-    I -->|worker| K[Jenkins URL + agent download/register + CPU_CORES]
-    I -->|standalone| L[Cluster settings]
-    J --> L
-    K --> L
-    L --> M[Write config.yaml]
-    M --> N[Install pending deps / agent]
-    N --> O[Disk space check - fail if too small]
+    D --> E[Storage base dir]
+    E --> F[Role: standalone / controller / worker]
+    F -->|worker| W[docker, java, git; pinned Harbor; Jenkins agent block]
+    F -->|controller| K[docker, k3d, kubectl, helm; cluster; job defaults; CI secrets]
+    F -->|standalone| S[docker, k3d, kubectl; optional Harbor + git for eval --local; cluster]
+    W --> M[Summary, then save the YAML]
+    K --> M
+    S --> M
+    M --> N[Apply: installs, Harbor, host settings]
+    N -->|needs root, no sudo| R[One block for an administrator; resume with Use existing config]
+    N --> O[Disk and RAM check]
 ```
+
+| Module | Does |
+|--------|------|
+| `src/prepare/wizard/mod.rs` | Storage, role, summary, the existing-config choice |
+| `src/prepare/wizard/{worker,controller,standalone}.rs` | The questions for one role, and nothing else |
+| `src/prepare/wizard/prompts.rs` | Shared prompts: one dependency, storage, ports, the pinned Harbor, the summary |
+| `src/commands/prepare.rs` | Wizard, save, then apply and validate |
+| `src/prepare/apply.rs` | Storage directories, installs in order (Harbor last), worker host settings, disk/RAM check |
+| `src/prepare/root_steps.rs` | Collects what needs root into one printed block |
+| `src/prepare/toolchain.rs` | The Harbor pin compiled in from `pipeline/config/toolchain.env`; installs it with `uv` |
 
 ---
 
@@ -49,71 +65,20 @@ flowchart TD
 
 Heavy artifacts should live on a volume with enough free space. Small config/state files stay in the home directory.
 
-### What goes where
-
 | Artifact | Typical size | Config key | Default under `storage.base_dir` |
 |----------|--------------|------------|-----------------------------------|
 | Docker images & layers | 10–100+ GB | `storage.docker` | `docker/` |
 | k3d cluster data / image cache | 1–10 GB | `storage.k3d` | `k3d/` |
 | Jenkins Helm charts & plugins | 500 MB–2 GB | `storage.jenkins` | `jenkins/` |
-| LoLBench checkout | multi-GB | `lolbench.path` | `lolbench/` or user path |
-| Harbor / agent downloads | varies | `storage.downloads` | `downloads/` |
+| Agent downloads | varies | `storage.downloads` | `downloads/` |
 | mac-k3d config | KB | `~/.config/mac-k3d/` | *(not relocatable)* |
 | Runtime state | KB–MB | `~/.local/state/mac-k3d/` | *(not relocatable)* |
 
-### Volume selection
-
-1. Enumerate mounted volumes (`/` plus OS extras: macOS `/Volumes/*`, Linux `/mnt`, `/media`, `/data*`).
-2. Compute available space per volume.
-3. **Default**: volume with the most free space.
-4. Present top candidates; allow custom path.
-5. Create directories after confirmation.
+Volume selection: enumerate mounted volumes (`/` plus macOS `/Volumes/*`, Linux `/mnt`, `/media`, `/data*`), default to the one with the most free space, allow a custom path. Directories are created during apply.
 
 ---
 
-## Part 2: Dependencies
-
-Discover first; never uninstall without consent.
-
-### Dependencies managed
-
-| Name | Required | Discovery / install |
-|------|----------|---------------------|
-| Docker Desktop / Engine | Yes | macOS: `Docker.app` / brew cask; Linux: `which docker` / `apt install docker.io` |
-| k3d | Controller / standalone | `which k3d` / brew or curl install script |
-| kubectl | Controller / standalone | `which kubectl` / brew or apt/curl |
-| helm | Controller | `which helm` / brew or get-helm-3 |
-| harbor | Worker / LoLBench | `which harbor` / `uv tool install harbor` or `pipx install harbor` |
-| java | Worker (Jenkins agent) | macOS: `java_home`; Linux: `JAVA_HOME` / `which java` / Temurin or openjdk |
-| uv or pipx | If installing Harbor | `which uv` / `which pipx` |
-
-### Harbor install prompt
-
-```text
-harbor: not found
-
-  [1] Install via uv (uv tool install harbor)   # preferred if uv present
-  [2] Install via pipx (pipx install harbor)
-  [3] Specify path to existing binary
-  [4] Skip (LoLBench jobs will not work on this Mac)
-
-Choice [1]:
-```
-
-If Harbor is found on PATH (or at `~/.local/bin/harbor`), offer use-existing (recommended) vs reinstall.
-
-After `uv tool install harbor`, prepare ensures `~/.local/bin` is on **this process's** `PATH`. If it is missing from the user's shell config, prepare **prompts** before appending:
-
-```bash
-# Added by mac-k3d prepare (uv/harbor tools)
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-(to `~/.zshrc`, `~/.bash_profile`/`~/.bashrc`, or `fish_add_path` for fish). Decline keeps the session PATH update only.
-
----
-
-## Part 3: Role
+## Part 2: Role
 
 ```text
 What is this machine's role?   # macOS wizard may still say "Mac"
@@ -121,152 +86,121 @@ What is this machine's role?   # macOS wizard may still say "Mac"
   [1] Local development only (no Jenkins)
   [2] CI controller (Jenkins in k3d)
   [3] CI worker (Jenkins agent only)
-
-Choice [1]:
 ```
 
-Stored as `role: standalone | controller | worker` and `jenkins.enabled` (true only for controller). Config may also record `platform: macos | linux`.
+Stored as `role: standalone | controller | worker` and `jenkins.enabled` (true only for controller). Config also records `platform: macos | linux`.
 
 ---
 
-## Part 4: LoLBench checkout
+## Part 3: Tools per role
 
-Always prompted for controller and worker (optional for standalone).
+Each role is asked only about the tools it uses. A tool that is not asked is recorded as `skip` (or `existing` if found).
 
-1. Search common locations for an existing checkout:
-   - `$HOME/github/LoLBench-Preview`
-   - `$HOME/src/LoLBench-Preview`
-   - `{storage.base_dir}/lolbench`
-   - paths containing `LoLBench` under `$HOME` / `/Volumes` (shallow)
-2. If found:
+| Role | Asked | Not asked |
+|------|-------|-----------|
+| worker | docker, java, git | Harbor is installed at the pin; no k3d, kubectl, helm or LoLBench (a worker hosts no cluster, and the pipeline clones each benchmark itself) |
+| controller | docker, k3d, kubectl, helm | Harbor, java, git (a controller never runs an evaluation) |
+| standalone | docker, k3d, kubectl; then "Run evals on this machine with `mac-k3d eval --local`?" → Harbor at the pin and git | helm, java |
 
-```text
-LoLBench checkout found:
+For each asked tool: use what was found (recommended), install it, point at a binary, or skip where that is allowed. Docker and the Linux packages install with `apt` (Linux) or Homebrew (macOS).
 
-  [1] Use /Volumes/1TB.large/github/LoLBench-Preview  (recommended)
-  [2] Enter a different path
-  [3] Clone / download fresh into storage base
+### Harbor
 
-Choice [1]:
+Harbor is not a question. The pipeline's `env` phase asserts one version, `HARBOR_VERSION` in `pipeline/config/toolchain.env` (0.22.0), so setup prints what it found and installs that version with `uv tool install --force harbor==<pin>` into `~/.local/bin`, as you, no root. `uv` is installed first if missing. Any other version is replaced. Worker `config` warns when the installed Harbor or git does not match.
+
+After installing into `~/.local/bin`, prepare puts it on **this process's** `PATH`. If it is missing from the shell config, prepare asks before appending:
+
+```bash
+# Added by mac-k3d prepare (uv/harbor tools)
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-3. If not found, or user chooses fresh install, print and optionally run:
-
-```text
-Clone (recommended):
-
-  git clone https://github.com/<org>/LoLBench-Preview.git \
-    /Volumes/1TB.large/mac-k3d/lolbench
-
-Or download latest release and unpack:
-
-  curl -sL https://github.com/<org>/LoLBench-Preview/releases/latest/download/source.tar.gz \
-    | tar -xz -C /Volumes/1TB.large/mac-k3d/lolbench --strip-components=1
-
-  [1] Run git clone now
-  [2] Run release download now
-  [3] I will do it myself (record intended path only)
-```
-
-Record `lolbench.path` and `lolbench.source` (`existing` | `clone` | `release`).
-
-> Exact clone URL / release asset names are configurable; prepare prints the commands even when the user installs manually.
+(to `~/.zshrc`, `~/.bash_profile`/`~/.bashrc`, or `fish_add_path` for fish). Declining keeps the session PATH update only.
 
 ---
 
-## Part 5: Jenkins controller vs worker resources
-
-### Shared concept: `CPU_CORES`
-
-Jenkins **Lockable Resources** label `CPU_CORES` represents schedulable CPU capacity. LoLBench jobs lock a quantity of cores (e.g. 4) rather than a vague “large” slot. See [lolbench-jenkins.md](lolbench-jenkins.md).
-
-Detect host cores via `sysctl -n hw.logicalcpu` (fallback `hw.ncpu`).
-
-### Controller (`role: controller`)
-
-After Jenkins is up (`mac-k3d start` / `config`), prepare records intent and those commands:
-
-1. Ensure extra Jenkins plugins via Helm `additionalPlugins` on **controller `mac-k3d start`** (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`). Do not add them in the UI.
-2. The `CPU_CORES` label exists on the controller plugin; workers create capacity (`<agent>-core-1..N`) when they run `config`.
-3. Create/update the nine eval jobs, rendered for `jenkins_job.ui_profile` (inline Jenkinsfile; see [lolbench-jenkins.md](lolbench-jenkins.md)).
-4. **CI secrets + job defaults** (see [secrets.md](secrets.md)):
-   - Prepare prompts for `jenkins_job.default_eval_mode` / `default_task` / `default_icode_release` / `default_icode_git_url` / `default_icode_git_ref` / `default_icode_args` (YAML).
-   - Prepare optionally collects API keys / PATs into `~/.config/mac-k3d/credentials.pending.yaml` (mode 0600) — **not** into `config.yaml`.
-   - `config` creates Jenkins Secret text credentials and binds present IDs into the job (`icode` → DeepSeek + GitCode, etc.).
-
-Controller Mac itself usually does **not** run LoLBench agents; it hosts the queue.
-
-### Worker (`role: worker`) — agent install and registration
+## Part 4: Worker — the Jenkins agent block
 
 ```text
 Jenkins controller URL [http://43.107.42.252:17070]:
-Jenkins API user [admin]:
-Jenkins API token (input hidden):
-Agent name [mac-$(hostname -s)]:
-Labels [macos docker lolbench]:
+Jenkins API user (Enter to skip and fill in worker.yaml later):
+Jenkins API token (stored plaintext in config for now):
+Agent name [mac-<hostname>]:
+Agent labels (space-separated) [linux docker lolbench]:
+Agent remote root directory [~/jenkins-agent]:
 ```
 
-Then prepare:
+`MAC_K3D_JENKINS_URL` or `JENKINS_URL` changes the URL default. Pressing **Enter** at the API user skips both keys: `worker.yaml` still gets them, empty, so the user can see where they go and fill them in with an editor later:
 
-1. Requires **Java** (prompt install if missing).
-2. Downloads `agent.jar` from `{url}/jnlpJars/agent.jar` into `{storage.downloads}/jenkins-agent/` (or `lolbench` storage).
-3. **Registers the node on the controller** via Jenkins REST API (`POST /computer/createItem` with agent XML; needs API token with Computer/Configure):
+```yaml
+jenkins_agent:
+  api_user: ''
+  api_token: ''
+```
 
-   - Create node if missing (or rewrite its config if present): name, remote FS, labels (`macos docker lolbench`), **1 executor**, launch method **Inbound**.
-   - Read connection secret from `slave-agent.jnlp`.
-4. Writes a local launch script and installs a persistent agent daemon:
-   - **macOS:** LaunchAgent `com.mac-k3d.jenkins-agent` with `KeepAlive`
-   - **Linux:** systemd user unit `mac-k3d-jenkins-agent.service` (use `loginctl enable-linger $USER`)
-5. **Creates Lockable Resources** on the controller: `{agent}-core-1` … `{agent}-core-N` with labels `CPU_CORES {agent}` (N = logical CPU count), via Jenkins Script Console API when `api_user` / `api_token` are set.
+The agent is registered by `mac-k3d config -c worker.yaml` (which `setup` runs after apply), not by the wizard:
 
-Default agent labels are OS-aware: `macos docker lolbench` or `linux docker lolbench`.
+1. Downloads `agent.jar` from `{url}/jnlpJars/agent.jar` beside the current one and swaps it in only when the bytes differ.
+2. **Registers the node** via the Jenkins REST API with the API token: name, remote FS, labels, **1 executor**, launch method **Inbound**; reads the connection secret.
+3. Writes `launch-agent.sh` and installs the agent service (macOS LaunchAgent `com.mac-k3d.jenkins-agent`; Linux systemd user unit `mac-k3d-jenkins-agent.service`), restarting it only when the jar, script or unit changed.
+4. **Creates Lockable Resources** `{agent}-core-1` … `{agent}-core-N` labelled `CPU_CORES {agent}` (N = logical CPU count). Eval builds lock `label: env.NODE_NAME`, so a build only ever holds its own worker's cores ([architecture.md](architecture.md#one-build-per-worker-every-core)).
 
-`api_user` / `api_token` are saved in config (plaintext for now; encrypt later). `mac-k3d config` on a worker re-runs agent registration **and** Lockable Resources create using those fields. The token needs permission to run `/scriptText` (admin is fine).
-
----
-
-## Part 6: Cluster settings
-
-Same as before (name, agents, ports, Jenkins host port for controller).
+With the keys still empty, `config` prints which keys to fill in and the command to re-run. The token needs permission to run `/scriptText` (admin is fine). It is stored in plaintext for now; `mac-k3d export` blanks it.
 
 ---
 
-## Part 7: Summary, apply, disk check
+## Part 5: Controller — cluster, job defaults, secrets
 
-After writing config and running installs:
+1. Cluster name, k3d agent nodes (default `0`), Jenkins UI host port (default `17070`). Busy host ports are remapped before the summary.
+2. Job defaults: `ICODE_MODE` (`release` or `git`), `TASK`, `ICODE_RELEASE`, `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_ARGS`, saved under `jenkins_job`.
+3. CI secrets (DeepSeek key, GitCode/GitHub PAT) go to `~/.config/mac-k3d/credentials.pending.yaml` (mode 0600), **not** into `config.yaml`. `config` turns them into Jenkins Secret text credentials ([secrets.md](secrets.md)).
+
+`mac-k3d start` installs Jenkins with the extra plugins (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`); `config` writes the nine eval jobs ([lolbench-jenkins.md](lolbench-jenkins.md)). Do not add plugins in the UI.
+
+---
+
+## Part 6: Apply, root steps, disk check
+
+Apply installs in the order docker, git, java, k3d, kubectl, helm, harbor. A tool that appeared since the wizard ran (root installed it) is recorded instead of installed. On a Linux worker it also checks that Docker runs, that you are in the `docker` group, and that `loginctl enable-linger` is on, so the agent survives logout.
+
+`sudo` is asked at most once, and only when something needs it. When you cannot use `sudo`, apply does not stop half-way: it saves what it did install and prints one block for an administrator, listing only what is missing, for example:
+
+```text
+Ask an administrator to run these as root on this machine:
+
+  apt-get install -y openjdk-17-jre-headless   # install java
+  usermod -aG docker <you>                     # let <you> use Docker without sudo (then log out and back in)
+  loginctl enable-linger <you>                 # keep the Jenkins agent running after you log out
+
+Your answers are saved in ~/.config/mac-k3d/worker.yaml. Afterwards log out and back in (so a new
+docker group applies), then run:
+  mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
+and choose "Use existing config"; setup carries on from the installs.
+```
+
+Harbor never appears there: it installs per user with `uv`.
 
 ### Disk space check (hard fail)
 
-Measure free space on `storage.base_dir`’s volume (and Docker data volume if different).
+Free space on `storage.base_dir`'s volume, and at least 8 GB RAM:
 
-| Role | Minimum free (default) | Rationale |
-|------|------------------------|-----------|
-| standalone | 40 GB | Docker + one k3d cluster |
-| controller | 60 GB | + Jenkins images |
-| worker (LoLBench) | **100 GB** | Harbor task images are multi-GB; budget headroom |
+| Role | Minimum free (default) |
+|------|------------------------|
+| standalone | 40 GB |
+| controller | 60 GB |
+| worker | 40 GB (plan on about 100 GB: Harbor task images are multi-GB) |
 
-If free &lt; minimum:
-
-```text
-error: only 32 GB free on /Volumes/Data; need at least 100 GB for worker/LoLBench
-```
-
-Exit non-zero. Override with `prepare --disk-min-gb N` for labs (discouraged).
+Override with `prepare --disk-min-gb N` for labs (discouraged). Each build's `env` phase checks free RAM and disk again (`MAC_K3D_MIN_RAM_GB`, `MAC_K3D_MIN_DISK_GB`).
 
 ---
 
 ## Non-interactive behavior
 
-`prepare --non-interactive`:
-
-1. Load existing config.
-2. Verify dependencies, Harbor, LoLBench path, agent files if worker.
-3. Disk check against role minimum.
-4. Exit 0 or 1 — **no** agent registration prompts (registration requires interactive secrets or pre-set env `MAC_K3D_JENKINS_TOKEN`).
+`prepare --non-interactive` loads the existing config, checks that every tool the role needs is present (a tool still marked `install` fails with "run `mac-k3d setup` and choose \"Use existing config\""), runs the disk check, and exits 0 or 1. It registers nothing.
 
 ---
 
-## Config keys (new)
+## Config keys
 
 ```yaml
 role: worker   # standalone | controller | worker
@@ -274,50 +208,34 @@ role: worker   # standalone | controller | worker
 dependencies:
   harbor:
     source: existing
-    binary: /Users/you/.local/bin/harbor
+    binary: /home/you/.local/bin/harbor
   java:
     source: existing
     binary: /usr/bin/java
-
-lolbench:
-  path: /Volumes/1TB.large/github/LoLBench-Preview
-  source: existing   # existing | clone | release
+  git:
+    source: existing
+    binary: /usr/bin/git
 
 jenkins_agent:        # worker only
-  controller_url: https://jenkins.example.com:17070
-  name: mac-mini-1
-  labels: ["macos", "docker", "lolbench"]
-  remote_fs: /Users/you/jenkins-agent
-  agent_jar: /Volumes/1TB.large/mac-k3d/downloads/jenkins-agent/agent.jar
-  cpu_cores: 10       # hw.logicalcpu at prepare time
+  controller_url: http://43.107.42.252:17070
+  api_user: ''        # always present; empty until you fill it in
+  api_token: ''
+  name: mac-worker-1
+  labels: ["linux", "docker", "lolbench"]
+  remote_fs: /home/you/jenkins-agent
+  agent_jar: /data/mac-k3d/downloads/jenkins-agent/agent.jar
+  cpu_cores: 16       # logical CPUs at prepare time
 
 resources:
   cpu_cores_label: CPU_CORES
-  # controller: ensure label exists; worker: register quantity=cpu_cores
 ```
-
----
-
-## Implementation notes
-
-| Module | Responsibility |
-|--------|----------------|
-| `src/prepare/volumes.rs` | Mounts, free space, disk minimum check |
-| `src/prepare/discovery.rs` | docker/k3d/kubectl/helm/harbor/java/uv/pipx + LoLBench path search |
-| `src/prepare/wizard.rs` | Prompts including role, LoLBench, worker Jenkins URL |
-| `src/prepare/install.rs` | OS package install via `platform` (brew / apt+curl), Harbor via uv/pipx |
-| `src/prepare/lolbench.rs` | clone / release unpack helpers |
-| `src/prepare/jenkins_agent.rs` | download agent.jar, REST create node, write launch script |
-| `src/prepare/jenkins_job.rs` | create Pipeline job `lolbench_one_task` on controller |
-| `src/prepare/resources.rs` | CPU_CORES detection + Jenkins lockable-resource API (controller) |
-| `src/prepare/agent_service.rs` | Thin wrapper → LaunchAgent (macOS) or systemd --user (Linux) |
-| `src/platform/{macos,linux}.rs` | OS adapters for mounts, packages, Docker, agent daemon |
 
 ---
 
 ## Related docs
 
 - [configuration.md](configuration.md) — schema
-- [lolbench-jenkins.md](lolbench-jenkins.md) — `lolbench_one_task` job + `CPU_CORES` locks
+- [new-machine.md](new-machine.md) — the step-by-step for a new controller or worker
+- [lolbench-jenkins.md](lolbench-jenkins.md) — the eval jobs and `CPU_CORES` locks
 - [setup.md](setup.md) — operations
 - [commands.md](commands.md) — CLI flags

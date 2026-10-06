@@ -3,7 +3,14 @@ use mac_k3d::{Cli, MacK3dConfig};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> mac_k3d::Result<()> {
+async fn main() {
+    if let Err(err) = run().await {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> mac_k3d::Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
@@ -37,15 +44,17 @@ async fn main() -> mac_k3d::Result<()> {
             // Runs inside Jenkins builds, where no mac-k3d config is needed.
             mac_k3d::commands::run_pipeline(args)?;
         }
+        mac_k3d::cli::Command::Setup(args) => {
+            let config = MacK3dConfig::load(cli.config.as_deref())?;
+            mac_k3d::commands::run_setup(args, &config, cli.config.as_deref()).await?;
+        }
+        mac_k3d::cli::Command::Prepare(args) => {
+            let config = MacK3dConfig::load(cli.config.as_deref())?;
+            mac_k3d::commands::run_prepare(args, &config, cli.config.as_deref()).await?;
+        }
         other => {
-            let mut config = MacK3dConfig::load(cli.config.as_deref())?;
+            let mut config = MacK3dConfig::load_existing(cli.config.as_deref())?;
             match other {
-                mac_k3d::cli::Command::Setup(args) => {
-                    mac_k3d::commands::run_setup(args, &config, cli.config.as_deref()).await?;
-                }
-                mac_k3d::cli::Command::Prepare(args) => {
-                    mac_k3d::commands::run_prepare(args, &config, cli.config.as_deref()).await?;
-                }
                 mac_k3d::cli::Command::Start(args) => {
                     if let Some(mode) = args.jenkins {
                         config.apply_jenkins_mode(mode);
@@ -53,7 +62,7 @@ async fn main() -> mac_k3d::Result<()> {
                     mac_k3d::commands::run_start(args, &config, cli.config.as_deref()).await?;
                 }
                 mac_k3d::cli::Command::Config(args) => {
-                    mac_k3d::commands::run_config(args, &config).await?;
+                    mac_k3d::commands::run_config(args, &config, cli.config.as_deref()).await?;
                 }
                 mac_k3d::cli::Command::Eval(args) => {
                     mac_k3d::commands::run_eval(args, &config).await?;
@@ -70,8 +79,10 @@ async fn main() -> mac_k3d::Result<()> {
                 mac_k3d::cli::Command::Export(_)
                 | mac_k3d::cli::Command::Import(_)
                 | mac_k3d::cli::Command::Set(_)
-                | mac_k3d::cli::Command::Pipeline(_) => {
-                    unreachable!("export/import/set/pipeline handled above");
+                | mac_k3d::cli::Command::Pipeline(_)
+                | mac_k3d::cli::Command::Setup(_)
+                | mac_k3d::cli::Command::Prepare(_) => {
+                    unreachable!("handled above");
                 }
             }
         }

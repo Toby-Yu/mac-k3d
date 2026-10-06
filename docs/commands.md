@@ -32,25 +32,26 @@ Global `-c / --config` is honored.
 
 ### Behavior
 
-1. Run `prepare` (wizard if no config / TTY; existing-config menu if a file already exists).
+1. Run `prepare`: the wizard (questions only) if there is no config, or the existing-config menu (**Use existing config** / **Re-run wizard** / **Cancel**). The YAML is saved before anything is installed; then the installs and the pinned Harbor are applied. If a step needs root and `sudo` is not available, it stops with one block for an administrator and how to resume ([prepare-wizard.md](prepare-wizard.md#part-6-apply-root-steps-disk-check)).
 2. Prompt **Continue and apply now?**
-3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, eval job `deepswe_one_task`).
+3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, the nine eval jobs).
 4. **Worker:** `config` only (Jenkins agent). Does **not** run `start`.
 5. Print role, config path, Jenkins URL, agent unit/LaunchAgent name.
 
 If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
 
-Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **nine** jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**, and delete the retired `eval_aggregate` job if an older version created it. They share the P0–P8 pipeline; pick the job or `--benchmark`. Which shape to use: [evaluation.md](evaluation.md#which-job-to-run).
+Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **nine** jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**, and delete the retired `eval_aggregate` job if an older version created it. They share one pipeline of seven phases ([pipeline.md](pipeline.md)); pick the job or `--benchmark`. Which shape to use: [evaluation.md](evaluation.md#which-job-to-run).
 
 ---
 
 ## `eval`
 
-Run the iCode **agent harness** vs the same DeepSeek LLM **without** iCode on DeepSWE (Process 2). See [user-guide.md](user-guide.md), [icode-harness-inputs.md](icode-harness-inputs.md), and [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md).
+Run the iCode **agent harness** with a DeepSeek catalog model through Harbor on DeepSWE, LoLBench or SWE-bench Pro (Process 2). Phases, steps and Harbor flags: [pipeline.md](pipeline.md). See [user-guide.md](user-guide.md), [icode-harness-inputs.md](icode-harness-inputs.md), and [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md).
 
 ```bash
-mac-k3d eval --stage p0
-mac-k3d eval --stage p5 --n-tasks 1
+mac-k3d eval --stage env
+mac-k3d eval --stage tasks --n-tasks 1
+mac-k3d eval --stage evaluate --n-tasks 1
 mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode release --model deepseek-v4-pro
 mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode git \
   --icode-git-url https://github.com/org/icode.git --icode-git-ref v0.1.41 \
@@ -67,7 +68,7 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 
 | Flag | Description |
 |------|-------------|
-| `--stage p0..p8` | Run one stage script under `pipeline/stages/` |
+| `--stage PHASE` | Run one phase: `env`, `tasks`, `evaluate`, `anticheat`, `score`, `report`, `archive`, or `all`; `baseline` runs the manual LLM-only arm (`pipeline/tools/baseline.sh`). An old `p0`…`p8` exits with the phase that replaced it, for example `--stage p5 is gone; … Use --stage evaluate` |
 | `--local` | Full local `run_all.sh` (no Jenkins) |
 | `--n-tasks N` | Number of tasks when `--task` is empty (default 1) |
 | `--benchmark deepswe\|lolbench\|swebenchpro` | Suite (default `deepswe`; Jenkins job follows this) |
@@ -106,7 +107,7 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 | Parameter | Default | Meaning |
 |---|---|---|
 | `AGENT_LABEL` | `lolbench` | label a worker must carry |
-| `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF`, `ICODE_EXPECT_SHA` | pinned | P1 / P2 / P3 pins |
+| `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF`, `ICODE_EXPECT_SHA` | pinned | `env` (Harbor, default from `pipeline/config/toolchain.env`) and `tasks` (benchmark and iCode) pins |
 | `OFFICIAL`, `CANARY`, `CANARY_ALLOW_HOST` | `0`, `official`, empty | provenance gate and isolation canary |
 | `SHARD_SIZE` | `default_shard_size` (10) | `some_task` / `full_suite_task`: questions per shard |
 | `N_TASKS` | suite size | `full_suite_task` only: lower it for a rehearsal |
@@ -119,7 +120,7 @@ There is no `CPU_LOCK_QTY`, `SHARDS` or `RESUME` parameter. A build locks every 
 
 ## `pipeline`
 
-Extract the `pipeline/` this binary was built with. Every Jenkins eval build runs it in `Prepare`; no config file is read.
+Extract the `pipeline/` this binary was built with. Every Jenkins eval build runs it in its first stage (Environment); no config file is read.
 
 ```bash
 mac-k3d pipeline --extract-to "$WORKSPACE/mac-k3d-pipeline"
@@ -175,26 +176,26 @@ To exercise **worker prepare** while Jenkins already runs on this Mac:
 mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 # Role: CI worker
 # Jenkins URL: wizard default http://43.107.42.252:17070; same-PC: type http://localhost:17070
-# k3d agents: 0  (optional local cluster; not required for LoLBench)
+# API user: Enter to skip; worker.yaml keeps api_user: '' and api_token: ''
 ```
 
-4. Confirm agent files under the worker remote root / downloads, and that the node appears (or launch script is ready) on the controller.
+4. `mac-k3d config -c ~/.config/mac-k3d/worker.yaml`, then confirm the node appears on the controller.
 5. Do **not** `clean --purge-config` the default controller config while testing the worker file.
-e
-`mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is optional (second local k3d); workers only need the host agent + Docker. Job parameters: [lolbench-jenkins.md](lolbench-jenkins.md).
+
+`mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is rejected: workers only need the host agent, Docker, Java, git and the pinned Harbor. Job parameters: [lolbench-jenkins.md](lolbench-jenkins.md).
 
 ### Behavior
 
-If `config.yaml` already exists and stdin is a TTY, `prepare` (without `-i`) prompts: **re-run wizard (overwrite)**, **validate only**, or **cancel**. Choosing re-run wizard runs the full questionnaire and overwrites the file. Use `prepare -i` to skip that menu and always overwrite.
+If the config file already exists and stdin is a TTY, `prepare` (without `-i`) prompts: **Use existing config (finish pending installs, then validate)**, **Re-run wizard (overwrite config)**, or **Cancel**. Use `prepare -i` to skip that menu and always overwrite.
 
-1. Assert macOS.
+1. Assert macOS or Linux.
 2. **Storage**: scan volumes, default to the one with most free space, prompt for base directory under that volume.
 3. **Role**: standalone / controller / worker; set `jenkins.enabled` for controller.
-4. **Dependencies**: discover Docker Desktop, k3d, kubectl, helm, Harbor (`uv`/`pipx`), Java; prompt to use existing, specify path, or install.
-5. **LoLBench**: prefer a found checkout; otherwise print `git clone` / release unpack commands and optionally clone.
-6. **Resources**: controller → ensure the `CPU_CORES` Lockable Resources label; worker → Jenkins URL, download `agent.jar`, optional API registration, capacity = logical CPU cores. A worker's resources are named `<agent>-core-1..N` and carry **both** the shared label and the agent name, so a build can lock `label: env.NODE_NAME` and get only its own node's cores. `numExecutors` is 1: one eval build per worker, holding every core.
+4. **Tools for that role only**: worker → Docker, Java, git; controller → Docker, k3d, kubectl, helm; standalone → Docker, k3d, kubectl, and Harbor + git when it will run `eval --local`. Harbor is not a question: it is installed at `HARBOR_VERSION` from `pipeline/config/toolchain.env` with `uv` (no root).
+5. **Worker agent block**: Jenkins URL, API user and token (Enter skips both; the YAML keeps `api_user: ''` / `api_token: ''`), agent name, labels, remote root. **Controller**: cluster, job defaults, CI secrets to the pending file.
+6. **Save** the YAML, then **apply**: storage directories, installs (root steps that cannot run here are printed as one block), worker host settings.
 7. **Disk check**: fail if free space on storage volume is below role minimum (standalone 40 GB, controller 60 GB, worker 40 GB). RAM preflight is 8 GB.
-8. Write `~/.config/mac-k3d/config.yaml` and run validation.
+8. Validate. Agent registration and the `<agent>-core-1..N` lockable resources are done by `config`, not here.
 
 ### Exit codes
 
@@ -266,7 +267,10 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
 4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline jobs `deepswe_one_task` / `lolbench_one_task` with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md) and [icode-harness-inputs.md](icode-harness-inputs.md).
-5. **Worker:** extract `~/.local/share/mac-k3d/pipeline` (does not overwrite `icode`); using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start the agent daemon** (systemd user unit `mac-k3d-jenkins-agent.service` on Linux, LaunchAgent `com.mac-k3d.jenkins-agent` on macOS) unless `--skip-agent`.
+5. **Worker:** warn when the installed Harbor is not `HARBOR_VERSION` or git is missing; using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node (one executor), rewrite `launch-agent.sh`, create the `<agent>-core-1..N` resources (labelled with the shared `CPU_CORES` label and the agent name), and **start the agent daemon** (systemd user unit `mac-k3d-jenkins-agent.service` on Linux, LaunchAgent `com.mac-k3d.jenkins-agent` on macOS) unless `--skip-agent`. With blank keys it prints which keys to fill in and the command to re-run. `config` is the only command that registers an agent.
+6. Every role: extract `~/.local/share/mac-k3d/pipeline` for `eval --local` and manual runs (does not overwrite `icode`). Builds extract their own copy.
+
+A `-c` path that does not exist fails at once with `no config at <path>; run mac-k3d setup -c <path> first` (`start`, `config`, `eval`, `teardown`, `clean`, `status`). `setup` and `prepare` create the file instead.
 
 `agent.jar` is downloaded beside the running one and swapped in by rename only when its bytes differ. A running agent is restarted only when `agent.jar`, `launch-agent.sh` or the unit/plist changed; otherwise `config` prints `Jenkins agent unchanged, left running` and a build on that worker keeps its connection. The daemon survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
 
@@ -274,7 +278,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 
 ## `export`
 
-Write a **sanitized** copy of this machine’s config YAML (controller `config.yaml` or worker `worker.yaml`). Host paths and `jenkins_agent.api_token` are stripped. `credentials.pending.yaml` is never read or copied.
+Write a **sanitized** copy of this machine’s config YAML (controller `config.yaml` or worker `worker.yaml`). Host paths are stripped and `jenkins_agent.api_token` is blanked (a worker file keeps `api_token: ''` so the slot stays visible). `credentials.pending.yaml` is never read or copied.
 
 ```bash
 mac-k3d export -o /tmp/controller.yaml
@@ -311,7 +315,7 @@ mac-k3d import /tmp/worker.yaml --force
 |------|-------------|
 | `--force` | Overwrite the destination if it already exists |
 
-Positional argument is the incoming file. Global `-c` is the **dest**; if omitted, `role: worker` → `~/.config/mac-k3d/worker.yaml`, otherwise `config.yaml`. Import re-sanitizes (so a hand-copied live `worker.yaml` still loses `api_token`), sets `platform` to this OS, and prints `setup` / `config` next steps.
+Positional argument is the incoming file. Global `-c` is the **dest**; if omitted, `role: worker` → `~/.config/mac-k3d/worker.yaml`, otherwise `config.yaml`. Import re-sanitizes (so a hand-copied live `worker.yaml` still gets `api_token: ''`), sets `platform` to this OS, and prints `setup` / `config` next steps.
 
 `--skip-secrets` after a controller import refreshes job XML only; it does not mean the imported file contained credentials. See [export-import.md](export-import.md).
 
@@ -352,7 +356,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.
 
-`--check-models` is optional and does **not** rewrite Chat Completions. It `GET`s `https://api.deepseek.com/models` (a trailing `/v1` on `ICODE_API_BASE` is stripped; OpenAI list JSON, `data[].id`) using `DEEPSEEK_API_KEY` from the environment or `.env`. Fail if the YAML / `--model` id is missing from that list. The catalog id is not `openai/deepseek-flash`; that prefix is only the artifact label. Cloud `set` on YAML often has **no** key — run this on a **worker / local** machine with `.env`, not as a hard requirement of controller `set`. P0 does the same check when the key is present (before paid P5). A full eval does not run P6.
+`--check-models` is optional and does **not** rewrite Chat Completions. It `GET`s `https://api.deepseek.com/models` (a trailing `/v1` on `ICODE_API_BASE` is stripped; OpenAI list JSON, `data[].id`) using `DEEPSEEK_API_KEY` from the environment or `.env`. Fail if the YAML / `--model` id is missing from that list. The catalog id is not `openai/deepseek-flash`; that prefix is only the artifact label. Cloud `set` on YAML often has **no** key — run this on a **worker / local** machine with `.env`, not as a hard requirement of controller `set`. The `env` phase does the same check when the key is present (before the paid `evaluate` phase). A full eval does not run the LLM-only baseline.
 
 ```bash
 # this PC / worker (has .env)

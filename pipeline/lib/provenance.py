@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pinned-benchmark checks and the eval_protocol provenance block.
 
-P5 writes these objects into eval_protocol_inputs.json. render_report copies
-them onto the artifact. This module does not print secret values.
+The tasks and evaluate phases write these objects into eval_protocol_inputs.json.
+render_report copies them onto the artifact. This module does not print secret values.
 """
 
 from __future__ import annotations
@@ -428,17 +428,31 @@ def canary_record(summary: Path) -> dict:
 
 
 def record_resources(inputs: Path, plan: Path) -> dict:
-    """What the selected tasks declared and what the build applied (PF.3)."""
+    """What the selected tasks declared and what the build applied (PF.3).
+
+    The inputs file is written in the tasks phase, before the CPU lock is held,
+    so the lock size and slots come from the plan made under the lock.
+    """
     doc = _load_json(inputs)
     got = _load_json(plan)
     declared = got.get("declared") if isinstance(got.get("declared"), dict) else {}
+    applied = got.get("applied") if isinstance(got.get("applied"), dict) else {}
     doc["resources"] = {
         "declared": declared.get("peak") or {},
         "declared_tasks": declared.get("declared_tasks"),
-        "applied": got.get("applied") or {},
+        "applied": applied,
         "host": got.get("host") or {},
         "reasons": got.get("reasons") or [],
     }
+    lock = applied.get("cpu_lock_qty")
+    if isinstance(lock, int) and not isinstance(lock, bool) and lock > 0:
+        doc["cpu_lock_qty"] = lock
+    slots = applied.get("slots")
+    if isinstance(slots, int) and not isinstance(slots, bool) and slots > 0:
+        doc["concurrency"] = slots
+    cpus = cpu_count(applied.get("cpus_each"))
+    if cpus:
+        doc["cpus_each"] = cpus
     _write_json(inputs, doc)
     return doc
 
@@ -517,6 +531,7 @@ def isolation_view(isolation: object) -> dict | None:
     statuses = leak.get("statuses") if isinstance(leak.get("statuses"), dict) else {}
     hits = leak.get("hit_tasks") if isinstance(leak.get("hit_tasks"), list) else []
     canary = isolation.get("canary") if isinstance(isolation.get("canary"), dict) else {}
+    allow = isolation.get("network_allowlist") if isinstance(isolation.get("network_allowlist"), dict) else {}
     count = mount.get("count")
     return {
         "mode": str(isolation.get("mode") or ""),
@@ -536,6 +551,8 @@ def isolation_view(isolation: object) -> dict | None:
         "canary_tasks": [str(t) for t in canary.get("tasks") or []],
         "canary_failed": [str(t) for t in canary.get("failed_tasks") or []],
         "canary_warn": [str(t) for t in canary.get("warn_tasks") or []],
+        "allowlist_version": str(allow.get("version") or ""),
+        "allowlist_hosts": [str(h) for h in allow.get("agent_hosts") or []],
     }
 
 
@@ -550,6 +567,10 @@ def isolation_lines(view: dict | None) -> list[str]:
         f"Agent mount: {_cell(view['mount_target'])} read-only {_cell(view['mount_read_only'])} "
         f"({_cell(view['mount_count'])} mount)",
     ]
+    if view.get("allowlist_version"):
+        lines.append(
+            f"Agent network: {view['allowlist_version']} · allowed {', '.join(view['allowlist_hosts']) or '-'}"
+        )
     if view["leak_scanner"]:
         hits = ", ".join(view["leak_hits"]) if view["leak_hits"] else "none"
         lines.append(f"Leak scan: {view['leak_scanner']} · hit tasks {hits} · {_cell(view['leak_statuses'])}")

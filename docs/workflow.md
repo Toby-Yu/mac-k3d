@@ -11,7 +11,7 @@ The product is a CI path for AI harness evaluation: many short jobs, each in its
 | Piece | What it does now | Why it matches the goal |
 |-------|------------------|-------------------------|
 | **Jenkins** | Three jobs per benchmark (`_one_task`, `_some_task`, `_full_suite_task`), nine in total. `_one_task` evaluates; the other two split their questions into `_one_task` shard builds and merge the results in the same build. One executor per worker; a build locks every core of **its own node** (`lock(label: env.NODE_NAME)`) and only for the rollouts. The workspace dies with the build. | Parallelism across agents, and a short lifetime: nothing from the last trial is the next trial's machine. |
-| **Harbor** | P5 is one `harbor run` + `icode_harbor_agent:ICodeAgent` for all three benchmarks. Harbor expands rollouts, applies each task's declared limits, retries and grades. `--allow-agent-host` is only `api.deepseek.com` and `api.deepseek.ai`. | One runner, used as a runner. mac-k3d no longer schedules containers. The allowlist is the isolation that ships today: the agent can call the model and cannot browse the answer online. |
+| **Harbor** | The `evaluate` phase is one `harbor run` + `icode_harbor_agent:ICodeAgent` for all three benchmarks, at the version pinned in `pipeline/config/toolchain.env`. Harbor expands rollouts, applies each task's declared limits, retries and grades. `--allow-agent-host` comes from `pipeline/config/network-allowlist-v1.json` (`api.deepseek.com`, `api.deepseek.ai`). | One runner, used as a runner. mac-k3d no longer schedules containers. The allowlist is the isolation that ships today: the agent can call the model and cannot browse the answer online. |
 | **k3d** | The controller uses k3d to host Jenkins. Eval sandboxes still run as Harbor containers on the worker's Docker. | A later job will `k3d cluster create` per build, apply a default-deny NetworkPolicy (DeepSeek API only), pull images through a Harbor registry proxy cache, run Harbor, then delete the cluster. That cluster, the NetworkPolicy, and the registry cache are **not** implemented yet. |
 
 Pier is not used. It left a long-lived Docker Compose sandbox on the host, with no Kubernetes NetworkPolicy and no registry cache, and it was a second runner beside Harbor.
@@ -95,24 +95,26 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 
 ## Process 2 — evaluation pipeline
 
-**Pass/fail per stage:** [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) (E0–E8 tracking; P0–P8 stage detail)
+**Phases, steps and Harbor flags:** [pipeline.md](pipeline.md). **Pass/fail per phase:** [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) (E0–E8 tracking).
 
 | Stage | What | Why |
 |-------|------|-----|
 | Choose harness / LLM / model / benchmark | v1: **icode** / **deepseek** / **deepseek-v4-pro** (or **deepseek-flash**) / **deepswe**, **lolbench**, or **swebenchpro** | Catalog ids; unknown `--model` is rejected |
 | Choose N and iCode binary vs source | Limit cost; users drop a binary at `~/.local/share/mac-k3d/icode` | The worker that runs Harbor must see iCode |
-| Install Harbor | `uv tool install harbor` | One runner for all three benchmarks |
-| Clone the suite | DeepSWE, LoLBench-Preview, or SWE-bench_Pro-os | Not vendored in this repo. SWE-bench Pro P2 writes a Harbor `task.toml` whose image is `jefzda/sweap-images:…` |
+| Install Harbor | `uv tool install harbor==<HARBOR_VERSION>` from `pipeline/config/toolchain.env`, at setup and again by the `env` phase when the version differs | One runner for all three benchmarks, at one version |
+| Clone the suite | DeepSWE, LoLBench-Preview, or SWE-bench_Pro-os | Not vendored in this repo. For SWE-bench Pro, `tasks/benchmark` writes a Harbor `task.toml` whose image is `jefzda/sweap-images:…` |
 | Harbor agent `icode` | `icode_harbor_agent:ICodeAgent` bind-mounts the worker drop at `/opt/icode-host` | Same iCode binary in every suite. LoLBench also calls `lolbench-submit` |
-| Harness run | one `harbor run -a icode_harbor_agent:ICodeAgent -p <dataset> -i <ids> -k <rollouts> -n <slots> --allow-agent-host api.deepseek.com` | iCode under test. Harbor owns the fan-out, the per-task limits and the retries. Allowlist is the isolation that ships today. A full eval does not run the no-harness P6 stage |
+| Harness run | one `harbor run -a icode_harbor_agent:ICodeAgent -p <dataset> -i <ids> -k <rollouts> -n <slots> --allow-agent-host api.deepseek.com --allow-agent-host api.deepseek.ai`, after the isolation canary | iCode under test. Harbor owns the fan-out, the per-task limits and the retries. Allowlist is the isolation that ships today. A full eval does not run the no-harness baseline |
+| Anti-cheat | capture receipts and the transcript / similarity verdict per trial | Flags a trial that read the answer or submitted something other than its patch |
 | Grade | Harbor `reward.json` → f2p / p2p / `resolved` / pass@1, tokens, time, model | Held-out tests plus API usage |
 | JSON | `eval-runs/output/{suite}/jenkins-<build>-<UTC>/artifact.json` plus `summary.md` and `report.html` | One folder per run |
+| Archive | `cost-token-report.md` in that folder, then `output/{suite}/<run>.tar.gz` | The kept copy, with the cost analysis |
 
 Trigger:
 
 ```bash
 mac-k3d eval                  # interactive → Jenkins <benchmark>_one_task (or --local)
-mac-k3d eval --stage p5 --n-tasks 1   # isolated stage test
+mac-k3d eval --stage tasks --n-tasks 1   # one phase on its own (env, tasks, evaluate, …)
 ```
 
 Nine Jenkins jobs — `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**. Every evaluation runs as a `one_task` build from the same `run_all.sh`; each job pins `HARNESS`, `LLM` and `BENCHMARK` and shows them first. Logs print `PROGRESS n% …`. Agent label `lolbench`; a build locks every core of its own node for the `Evaluate` stage only. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor slots is in [optimization.md](optimization.md).
@@ -139,7 +141,7 @@ bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worke
 
 It asks each host's SSH password once and copies the binary to every remote host as `mac-k3d.new` first. If the copy fails `--version` on any host (another OS, or an older glibc than the build machine's), it stops before switching any host. It ends by comparing `mac-k3d --version` everywhere. The command is the same whatever changed (pipeline script, job XML, agent registration), so there is no table of which binary has to move.
 
-`--version` prints `mac-k3d 0.5.2 (<commit>)`, plus `, dirty` when `src/` or `pipeline/` had uncommitted changes at build time. The `Prepare` stage runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`, prints `mac-k3d pipeline <commit> (mac-k3d <version>, <binary>)`, and `artifact.json` records `eval_protocol.pipeline` as `{source: binary, version, commit, dirty, pipeline_hash}`. `Evaluate` and `Report` reuse that extract, so a redeploy during a build does not change the scripts under it. That gives the loop:
+`--version` prints `mac-k3d 0.5.2 (<commit>)`, plus `, dirty` when `src/` or `pipeline/` had uncommitted changes at build time. The first stage (Environment) runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`, prints `mac-k3d pipeline <commit> (mac-k3d <version>, <binary>)`, and `artifact.json` records `eval_protocol.pipeline` as `{source: binary, version, commit, dirty, pipeline_hash}`. The other six stages reuse that extract, so a redeploy during a build does not change the scripts under it. That gives the loop:
 
 - **Did my fix work?** Redeploy, rebuild, compare `pipeline.commit` with the previous build's.
 - **Did that commit break it?** Check out the known-good commit, redeploy, rebuild.
@@ -166,12 +168,12 @@ Workdir is **`eval-runs/`** (`MAC_K3D_EVAL_WORKDIR`). Jenkins sets it to `$WORKS
 
 | What | Path |
 |------|------|
-| Official report (P8) | `eval-runs/output/deepswe/jenkins-<build>-<UTC>/artifact.json` |
+| Official report (`report` phase) | `eval-runs/output/deepswe/jenkins-<build>-<UTC>/artifact.json` |
 | Summary and HTML | `summary.md` and `report.html` in that same run folder |
-| Backup | `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` under the pipeline root: `$WORKSPACE/mac-k3d-pipeline/output/` on Jenkins (kept across builds; `Prepare` clears only `pipeline/`), the checkout's `output/` for a local run. `MAC_K3D_OUTPUT_ROOT` overrides it |
+| Backup | `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` under the pipeline root: `$WORKSPACE/mac-k3d-pipeline/output/` on Jenkins (kept across builds; the Environment stage clears only `pipeline/`), the checkout's `output/` for a local run. `MAC_K3D_OUTPUT_ROOT` overrides it |
 | On the worker (Jenkins workspace) | `$HOME/jenkins-agent/workspace/deepswe_one_task/eval-runs/output/` |
 | Jenkins artifact | that run folder only (`eval-runs/last_output.txt`) |
-| P7 scratch | `eval-runs/results/score-temp.json` |
+| Score scratch (`score` phase) | `eval-runs/results/score-temp.json` |
 | Last report path | `eval-runs/last_output.txt` |
 | Harness logs/patches | `eval-runs/harness/` |
 | DeepSWE clone | `eval-runs/deep-swe/` |

@@ -2,7 +2,7 @@
 
 ## Local eval keys (this machine only)
 
-**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. For **`ICODE_MODE=git`**, the same file may hold `GITCODE_TOKEN` or `GITHUB_TOKEN` (written by the TTY PAT prompt, mode 600). `DEEPSEEK_MODEL` must be a catalog id: `deepseek-v4-pro` (default) or `deepseek-flash` — copy `data[].id` from `GET /models`, never a product name. `mac-k3d set --check-models` and P0 (when the key is set) enforce that before paid P5. A full eval does not run P6. This is the correct way to store keys for `mac-k3d eval --stage p5` and private git clones on this PC.
+**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. For **`ICODE_MODE=git`**, the same file may hold `GITCODE_TOKEN` or `GITHUB_TOKEN` (written by the TTY PAT prompt, mode 600). `DEEPSEEK_MODEL` must be a catalog id: `deepseek-v4-pro` (default) or `deepseek-flash` — copy `data[].id` from `GET /models`, never a product name. `mac-k3d set --check-models` and the `env` phase (when the key is set) enforce that before the paid `evaluate` phase. A full eval does not run the LLM-only baseline. This is the correct way to store keys for `mac-k3d eval --stage evaluate` and private git clones on this PC.
 
 ```bash
 cp .env.example .env
@@ -12,7 +12,7 @@ chmod 600 .env
 ```
 
 - Git never tracks `.env` (see `.gitignore`). Confirm with `git check-ignore -v .env`.
-- P5 runtime files `eval-runs*/.pier-env` and `.harbor-env` are gitignored (they copy the key for Pier/Harbor).
+- The evaluate phase's `eval-runs*/.harbor-env` (mode 600) is gitignored; it copies the key for Harbor and never holds a clone token. `.pier-env` from older trees stays ignored.
 - `./scripts/check_no_secrets.sh` and `./scripts/check_docs.sh` must pass before commit. The docs check also forbids linking v0.3 historical pages from the repo README or `docs/user-guide.md`, and requires a **Releases** inventory in `docs/README.md`. Install the hook once per clone:
 
 ```bash

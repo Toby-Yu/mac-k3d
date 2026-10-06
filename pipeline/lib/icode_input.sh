@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Host-side iCode inputs for P3 (sourced by p3_icode.sh).
+# Host-side iCode inputs for the tasks phase (sourced by stages/tasks/icode.sh,
+# tasks/icode_sandbox.sh and evaluate/harbor_run.sh).
 # get_release_icode: official *-full-* drop / URL (not a git clone of Release assets).
 # get_bin_icode: allow-listed https git URL + tag/commit/branch, uv sync, Docker wrapper.
 # Does not print tokens.
@@ -183,12 +184,12 @@ icode_assert_recorded_sha() {
   elif [ -n "${HOST_ROOT:-}" ] && [ -d "${HOST_ROOT}/.git" ]; then
     head="$(git -C "$HOST_ROOT" rev-parse HEAD 2>/dev/null | tr '[:upper:]' '[:lower:]')"
   else
-    die "ICODE_EXPECT_SHA is set but P3 did not record an iCode SHA"
+    die "ICODE_EXPECT_SHA is set but tasks/icode did not record an iCode SHA"
   fi
   [ "$head" = "$expect" ] || die "ICODE_EXPECT_SHA=$expect but recorded SHA is $head"
 }
 
-# The generated launcher is the only file P3 may add. .venv is gitignored upstream.
+# The generated launcher is the only file tasks/icode may add. .venv is gitignored upstream.
 icode_assert_clean_checkout() {
   local dest="$1" line
   [ -n "$dest" ] && [ -d "$dest/.git" ] || return 0
@@ -340,7 +341,7 @@ icode_write_wrapper() {
   local dest="$1"
   cat >"$dest" <<'WRAP'
 #!/bin/sh
-# Bind-mounted git venv: host uv CPython is not in the sandbox. P3 copies it to
+# Bind-mounted git venv: host uv CPython is not in the sandbox. tasks/icode copies it to
 # .venv/sandbox-cpython. Always use the mount path so Harbor/Pier `cp` of this
 # file to /usr/local/bin/icode still works.
 ROOT="${ICODE_SOURCE_HOST:-/opt/icode-host}"
@@ -420,7 +421,7 @@ icode_sanitize_host_tree() {
     icode_force_rm "$dest/.venv/sandbox-cpython"
     icode_embed_sandbox_cpython "$dest"
     [ -d "$dest/.venv/sandbox-cpython" ] \
-      || die "cannot re-embed the sandbox CPython under $dest (host uv python missing?); rerun P3"
+      || die "cannot re-embed the sandbox CPython under $dest (host uv python missing?); rerun the tasks phase"
     icode_write_sandbox_pth "$dest"
     rc=0
     python3 "$lib/icode_sanitize.py" "${args[@]}" --refresh >&2 || rc=$?
@@ -439,7 +440,7 @@ icode_probe_sandbox() {
       break
     fi
   done
-  [ -n "$py" ] || die "sandbox python missing under $dest/.venv/sandbox-cpython (P3 embed failed)"
+  [ -n "$py" ] || die "sandbox python missing under $dest/.venv/sandbox-cpython (tasks/icode embed failed)"
   site="$(ls -d "$dest/.venv/lib"/python3.*/site-packages 2>/dev/null | head -1 || true)"
   tmp="$(mktemp -d)"
   if ! (cd "$tmp" && env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${dest}${site:+:$site}" \

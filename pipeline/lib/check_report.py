@@ -89,7 +89,7 @@ def official_isolation_errors(isolation: object) -> list[str]:
         errors.append(f"{loc}.leak_scan.hit_tasks must be empty")
     canary = isolation.get("canary") if isinstance(isolation.get("canary"), dict) else {}
     if not _nonempty_str(canary.get("version")) or not _nonempty_str(canary.get("summary_sha256")):
-        errors.append(f"missing {loc}.canary (P5 isolation canary)")
+        errors.append(f"missing {loc}.canary (evaluate/canary isolation canary)")
     elif canary.get("status") != "pass":
         errors.append(f"{loc}.canary.status must be pass")
     return errors
@@ -143,7 +143,7 @@ def official_provenance_errors(doc: dict) -> list[str]:
     errors.extend(official_isolation_errors(protocol.get("isolation")))
     anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else {}
     if anticheat.get("status") != "ok" or not _nonempty_str(anticheat.get("version")):
-        errors.append("anticheat must have run (P7 anticheat_verdict.py)")
+        errors.append("anticheat must have run (anticheat/verdict)")
     git = doc.get("icode_git")
     if not isinstance(git, dict) or not _nonempty_str(git.get("sha")):
         errors.append("missing icode_git")

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# P6 — baseline DeepSeek API (no iCode)
+# tools/baseline: the LLM-only baseline arm (DeepSeek API, no iCode), graded by
+# tools/grade_baseline.sh. Manual; not a Jenkins phase. Run after the tasks phase.
 set -euo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
+source "$(cd "$(dirname "$0")/../stages" && pwd)/_common.sh"
 
-progress 75 "P6: DeepSeek baseline arm (benchmark=$BENCHMARK n=$N_TASKS)"
+progress 75 "baseline: DeepSeek baseline arm (benchmark=$BENCHMARK n=$N_TASKS)"
 
 TASKS_DIR="$(benchmark_tasks_dir)"
-[ -d "$TASKS_DIR" ] || die "run P2 first (missing $TASKS_DIR)"
+[ -d "$TASKS_DIR" ] || die "run the tasks phase first (missing $TASKS_DIR)"
 [ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
 
 ensure_selected_tasks
@@ -19,6 +20,6 @@ python3 "$PIPELINE_LIB/baseline_deepseek.py" \
   --model "${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
   | tee "$BASELINE_DIR/baseline.log"
 
-bash "$(dirname "$0")/p6_grade_baseline.sh"
+bash "$(cd "$(dirname "$0")" && pwd)/grade_baseline.sh"
 
-progress 85 "P6 complete"
+progress 85 "baseline complete"

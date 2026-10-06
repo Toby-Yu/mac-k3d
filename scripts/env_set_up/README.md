@@ -15,7 +15,7 @@ Default Jenkins UI: **`http://localhost:17070`**.
 # Already have mac-k3d on PATH / ~/.local/bin — skip GitHub download:
 SKIP_DOWNLOAD=1 ./scripts/env_set_up/run_all.sh
 
-# Also run mac-k3d eval --stage p0:
+# Also run mac-k3d eval --stage env (the pipeline's bare-metal phase):
 SKIP_DOWNLOAD=1 RUN_EVAL_SMOKE=1 ./scripts/env_set_up/run_all.sh
 ```
 
@@ -40,7 +40,7 @@ Any `FAIL` / `ERROR` → exit non-zero.
 | `MAC_K3D_BIN` | (auto) | Override path to the CLI |
 | `SKIP_DOWNLOAD` | `0` | `1` = do not download; use existing binary |
 | `REQUIRE_WORKER` | `1` in `run_all.sh` | `1` = fail if worker/agent missing; `0` = skip OK |
-| `RUN_EVAL_SMOKE` | `0` | `1` = run `mac-k3d eval --stage p0` inside `04` |
+| `RUN_EVAL_SMOKE` | `0` | `1` = run `mac-k3d eval --stage env` inside `04` |
 
 ---
 
@@ -98,19 +98,22 @@ OK 03_check_worker complete
 
 ### `04_check_eval_ready.sh`
 
-**Purpose:** Confirm Docker has a Server section, CLI lists `eval`, Jenkins UI is up, and (when present) the local agent looks active. Optionally runs `mac-k3d eval --stage p0` when `RUN_EVAL_SMOKE=1`.
+**Purpose:** Confirm Docker has a Server section, `docker compose` and `buildx` are at the pinned versions (the pipeline's `env/compose` step), CLI lists `eval`, Jenkins UI is up, and (when present) the local agent looks active. Optionally runs `mac-k3d eval --stage env` when `RUN_EVAL_SMOKE=1`.
 
 **Expected output (success):**
 
 ```text
 OK docker Server section present
+OK docker compose …
+OK docker buildx …
+OK docker compose and buildx present
 OK mac-k3d lists eval
 OK Jenkins UI reachable for eval
 OK eval-ready — safe to start an evaluation task …
 OK 04_check_eval_ready complete
 ```
 
-Does **not** prove DeepSeek credentials or full P5–P8. For those see [testing-eval-pipeline.md](../../docs/testing/testing-eval-pipeline.md).
+Does **not** prove DeepSeek credentials or the evaluate phase onwards. For those see [testing-eval-pipeline.md](../../docs/testing/testing-eval-pipeline.md).
 
 ### `05_check_export_import.sh`
 
@@ -122,7 +125,7 @@ Needs a binary that has `export` (this branch’s `target/release/mac-k3d`, not 
 MAC_K3D_BIN="$PWD/target/release/mac-k3d" ./scripts/env_set_up/05_check_export_import.sh
 ```
 
-**Expected output (success):** `OK 05_check_export_import complete` and no `api_token:` key in the scratch YAML.
+**Expected output (success):** `OK 05_check_export_import complete`; the scratch YAML has no `api_token` value (a worker file keeps the empty `api_token: ''` slot).
 
 Not part of `run_all.sh` (that suite is Release-binary health). DeepSWE TASK change + Jenkins: [docs/export-import.md](../../docs/export-import.md). `./scripts/list_deepswe_tasks.sh` prints sorted DeepSWE ids.
 
@@ -139,7 +142,7 @@ Not part of `run_all.sh` (that suite is Release-binary health). DeepSWE TASK cha
 | Directory | Focus |
 |-----------|--------|
 | `scripts/env_set_up/` | Machine bootstrap: binary, controller, worker, eval-**ready** |
-| `pipeline/stages/` | Eval pipeline stages P0–P8 (Pier, DeepSWE, iCode, scoring) |
-| `pipeline/lib/` | Python adapter, baseline, scoring |
+| `pipeline/stages/` | Eval pipeline: seven phases (`env`, `tasks`, `evaluate`, `anticheat`, `score`, `report`, `archive`) and their steps — [docs/pipeline.md](../../docs/pipeline.md) |
+| `pipeline/lib/` | Harbor agents, isolation and anti-cheat checks, scoring, report, archive |
 
-After env checks pass, continue with `mac-k3d eval --stage p0` or `pipeline/stages/run_all.sh`. Operator start: [docs/user-guide.md](../../docs/user-guide.md).
+After env checks pass, continue with `mac-k3d eval --stage env` or `pipeline/stages/run_all.sh`. Operator start: [docs/user-guide.md](../../docs/user-guide.md).

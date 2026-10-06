@@ -8,7 +8,7 @@ harness tree and then runs the ordinary report path over it, so an aggregated
 run and a single-worker run are scored by the same code.
 
 Only tasks are merged. Anti-cheat verdicts stay exactly as the shard decided
-them (P7 is local and needs the gold patch), so this re-adds up the counts
+them (the anticheat phase is local and needs the gold patch), so this re-adds up the counts
 rather than re-judging anything.
 """
 

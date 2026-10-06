@@ -612,7 +612,7 @@ class CaptureReceiptHostTests(unittest.TestCase):
             self.assertEqual(flags["grader_patch"]["path"], "artifacts/logs/artifacts/solution.patch")
 
     def test_backup_copies_capture_receipts(self):
-        from render_report import backup_run
+        from archive_run import backup_run
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -629,7 +629,6 @@ class CaptureReceiptHostTests(unittest.TestCase):
                 report_dir=report,
                 run_folder="run-1",
                 harness_dir=root / "harness",
-                baseline_dir=root / "baseline",
             )
             attempt = dest / "icode" / "alpha" / "attempt-01" / "agent"
             for name in ("capture.json", "base_sha.txt", "capture_flags.json", "capture.patch"):
@@ -659,15 +658,17 @@ class CaptureWiringTests(unittest.TestCase):
         self.assertLess(body.index("  keep_existing\n"), body.index("  deliver\n"))
 
     def test_stages_pass_declared_repo_and_check_receipts(self):
-        p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
-        p7 = (ROOT / "pipeline" / "stages" / "p7_score.sh").read_text(encoding="utf-8")
+        stages = ROOT / "pipeline" / "stages"
+        p5 = (stages / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
+        receipts = (stages / "anticheat" / "receipts.sh").read_text(encoding="utf-8")
         self.assertIn("capture_receipt.py\" declared-repo", p5)
-        # One Harbor job covers many tasks, so P5 declares every selected task's
-        # repo once and the trial picks the one its own image has.
+        # One Harbor job covers many tasks, so the evaluate phase declares every
+        # selected task's repo once and the trial picks the one its own image has.
         self.assertIn("MAC_K3D_REPO_CANDIDATES=", p5)
         self.assertNotIn('--ae "MAC_K3D_REPO=', p5)
-        self.assertIn("capture_receipt.py\" annotate", p7)
-        self.assertLess(p7.index("annotate"), p7.index("score_results.py"))
+        self.assertIn("capture_receipt.py\" annotate", receipts)
+        run_all = (stages / "run_all.sh").read_text(encoding="utf-8")
+        self.assertIn("PHASES=(env tasks evaluate anticheat score report archive)", run_all)
 
     def test_capture_picks_the_candidate_repo_its_image_has(self):
         capture = (ROOT / "pipeline" / "lib" / "icode_capture.sh").read_text(encoding="utf-8")

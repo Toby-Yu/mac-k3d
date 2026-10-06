@@ -123,6 +123,111 @@ pub fn harbor_bootstrap_hint() -> &'static str {
     "neither uv nor pipx found; install will try curl → uv first"
 }
 
+pub fn root_install_command(name: &str) -> Option<String> {
+    let cmd = match name {
+        "java" => "apt-get install -y openjdk-17-jre-headless",
+        "git" => "apt-get install -y git",
+        "docker" => "apt-get install -y docker.io docker-compose-v2 && systemctl enable --now docker",
+        "kubectl" => "apt-get install -y kubectl",
+        "k3d" => "curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash",
+        "helm" => "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash",
+        _ => return None,
+    };
+    Some(cmd.to_string())
+}
+
+/// Root, passwordless sudo, or a sudo password typed now. A user outside
+/// sudoers fails `sudo -v` at once, so this never hangs on a non-sudoer.
+pub fn can_elevate() -> bool {
+    if is_root() {
+        return true;
+    }
+    if which("sudo").is_none() {
+        return false;
+    }
+    let quiet = Command::new("sudo")
+        .args(["-n", "true"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if quiet {
+        return true;
+    }
+    if !atty::is(atty::Stream::Stdin) {
+        return false;
+    }
+    println!("Some installs need sudo. Enter your password, or press Ctrl-C if you have none.");
+    Command::new("sudo")
+        .arg("-v")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+pub fn worker_host_root_steps() -> Vec<super::RootStep> {
+    let user = current_user();
+    if user == "unknown" || user == "root" {
+        return Vec::new();
+    }
+    let mut steps = Vec::new();
+    let docker_ok = Command::new("docker")
+        .arg("info")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if which("docker").is_some() && !docker_ok {
+        let active = Command::new("systemctl")
+            .args(["is-active", "--quiet", "docker"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !active {
+            steps.push(super::RootStep {
+                why: "start Docker now and at boot".into(),
+                command: "systemctl enable --now docker".into(),
+            });
+        }
+        if !user_in_group(&user, "docker") {
+            steps.push(super::RootStep {
+                why: format!("let {user} use Docker without sudo (then log out and back in)"),
+                command: format!("usermod -aG docker {user}"),
+            });
+        }
+    }
+    let linger = Command::new("loginctl")
+        .args(["show-user", &user, "--property=Linger"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if linger != "Linger=yes" {
+        steps.push(super::RootStep {
+            why: "keep the Jenkins agent running after you log out".into(),
+            command: format!("loginctl enable-linger {user}"),
+        });
+    }
+    steps
+}
+
+pub fn run_as_root(command: &str) -> Result<()> {
+    if is_root() {
+        run_cmd("bash", &["-c", command])
+    } else {
+        run_cmd("sudo", &["bash", "-c", command])
+    }
+}
+
+fn user_in_group(user: &str, group: &str) -> bool {
+    Command::new("id")
+        .args(["-nG", user])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .any(|g| g == group)
+        })
+        .unwrap_or(false)
+}
+
 fn which(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     std::env::split_paths(&path_var).find_map(|dir| {

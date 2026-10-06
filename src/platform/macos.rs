@@ -170,6 +170,24 @@ pub fn harbor_bootstrap_hint() -> &'static str {
     "neither uv nor pipx found; install will try Homebrew → uv first"
 }
 
+/// Homebrew installs run as the user.
+pub fn root_install_command(_name: &str) -> Option<String> {
+    None
+}
+
+pub fn can_elevate() -> bool {
+    true
+}
+
+/// Docker Desktop and the LaunchAgent need no root changes.
+pub fn worker_host_root_steps() -> Vec<super::RootStep> {
+    Vec::new()
+}
+
+pub fn run_as_root(command: &str) -> Result<()> {
+    run_cmd("sudo", &["bash", "-c", command])
+}
+
 fn which(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     std::env::split_paths(&path_var).find_map(|dir| {

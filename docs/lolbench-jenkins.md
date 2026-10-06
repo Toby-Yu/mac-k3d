@@ -4,10 +4,10 @@
 
 Per benchmark, `<benchmark>_one_task` (one `TASK`, 1 rollout by default) runs the evaluation; `<benchmark>_some_task` (a `TASKS` list or the first `N_TASKS`, 4 rollouts) and `<benchmark>_full_suite_task` (the whole suite, 4 rollouts) are dispatchers that run their shards as `_one_task` builds and merge them. Each job shows only the parameters its shape needs; see [commands.md](commands.md#jenkins-job-parameters). Which to pick: [evaluation.md](evaluation.md#which-job-to-run).
 
-- **DeepSWE** — P5 = one `harbor run` + `icode_harbor_agent:ICodeAgent` + worker `*-full-*` drop.
-- **LoLBench** — same P5 and the same `DEEPSEEK_MODEL` catalog. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop. LoLBench's in-repo gitcode clone is not used. First run: `uv tool install harbor` if missing; on x86_64, P5 builds or retags the task image (Hub tags are arm64-only). After iCode exits, `pipeline/lib/icode_capture.sh` runs `lolbench-submit` before committing (the script diffs against the index, so a commit first leaves an empty patch). If its output differs from `git diff --binary <base>` (for example when the agent committed), the standard patch replaces it. Every trial gets `agent/capture.json`, and P7 checks that `solution.patch` matches it.
-- **SWE-bench Pro** — same P5 as DeepSWE. Each task is a Harbor `task.toml` whose image is `jefzda/sweap-images:…`. The verifier scores official `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are large; use one `TASK` (`instance_id`) on a first run.
-Operator start: [user-guide.md](user-guide.md). The Jenkinsfile extracts the worker binary's pipeline (`mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`) and calls `pipeline/stages/run_all.sh` from that extract, once per phase (`prepare`, `evaluate`, `report`); Harbor stays in P5, not in job XML.
+- **DeepSWE** — the `evaluate` phase is one `harbor run` + `icode_harbor_agent:ICodeAgent` + worker `*-full-*` drop.
+- **LoLBench** — same `evaluate` phase and the same `DEEPSEEK_MODEL` catalog. `TASK` default `ruff_1`. Harbor bind-mounts the worker `icode-*-full-*` drop. LoLBench's in-repo gitcode clone is not used. First run: the `env` phase installs the pinned Harbor if it is missing; on x86_64, `tasks/images` builds or retags the task image (Hub tags are arm64-only). After iCode exits, `pipeline/lib/icode_capture.sh` runs `lolbench-submit` before committing (the script diffs against the index, so a commit first leaves an empty patch). If its output differs from `git diff --binary <base>` (for example when the agent committed), the standard patch replaces it. Every trial gets `agent/capture.json`, and the `anticheat` phase checks that `solution.patch` matches it.
+- **SWE-bench Pro** — same `evaluate` phase as DeepSWE. Each task is a Harbor `task.toml` whose image is `jefzda/sweap-images:…`. The verifier scores official `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are large; use one `TASK` (`instance_id`) on a first run.
+Operator start: [user-guide.md](user-guide.md). The Jenkinsfile extracts the worker binary's pipeline (`mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`) and calls `pipeline/stages/run_all.sh` from that extract, once per phase (`env`, `tasks`, `evaluate`, `anticheat`, `score`, `report`, `archive`); the Harbor command is built in `pipeline/stages/evaluate/harbor_cmd.sh`, not in job XML ([pipeline.md](pipeline.md)).
 
 **The "wrapper job" this page calls a non-goal now exists.** `<benchmark>_some_task` and `<benchmark>_full_suite_task` are that wrapper: they run on `agent none`, split the sorted question list into shards of `SHARD_SIZE`, queue each as a `_one_task` build with its own `TASKS` or `TASK_OFFSET` (one executor per worker, so each worker takes the next shard when it frees up), then merge the shards in their own `Aggregate` stage. They do not queue one build per rollout — Harbor expands rollouts inside a single build. Design: [architecture.md](architecture.md#evaluation-architecture).
 
@@ -438,11 +438,10 @@ Parameter defaults for harness/task/model come from `jenkins_job.*`. Credentials
 
 On each `lolbench` agent:
 
-1. `mac-k3d prepare` / `start` if you still want a local k3d (optional for this job).
-2. Docker Desktop with a large disk (images 2–17 GB each).
-3. `uv tool install harbor` (or `pipx install harbor`).
-4. Jenkins agent connected, labels `macos docker lolbench`.
-5. Lockable Resources totaling `CPU_CORES` = logical CPU count (created/documented by `mac-k3d prepare` on the worker).
+1. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml`: Docker, Java, git, and Harbor at the pin in `pipeline/config/toolchain.env` (no k3d; `start -c worker.yaml` is rejected).
+2. Docker with a large disk (images 2–17 GB each).
+3. Jenkins agent connected (`mac-k3d config -c worker.yaml`), labels `macos docker lolbench` or `linux docker lolbench`, one executor.
+4. Lockable Resources `<agent>-core-1..N` (N = logical CPU count), created by that `config`.
 
 k3d does not need the LoLBench images imported.
 

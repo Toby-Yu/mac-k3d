@@ -76,13 +76,7 @@ fn print_import_next_steps(config: &MacK3dConfig, dest: &Path) {
     );
     match config.role {
         NodeRole::Worker => {
-            let token_ok = config
-                .jenkins_agent
-                .api_token
-                .as_ref()
-                .map(|s| !s.trim().is_empty() && s != "REPLACE_ME")
-                .unwrap_or(false);
-            if !token_ok {
+            if config.jenkins_agent.api_credentials().is_none() {
                 println!(
                     "Put jenkins_agent.api_user / api_token in {c} then:\n  mac-k3d config -c {c}"
                 );
@@ -221,8 +215,8 @@ mod tests {
         assert!(!text.contains("test-jenkins-token"), "{text}");
         assert!(!text.contains("leftover"), "{text}");
         assert!(
-            !text.contains("api_token"),
-            "dest YAML must not keep api_token after --force:\n{text}"
+            text.contains("api_token: ''"),
+            "dest YAML must show a blank api_token after --force:\n{text}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -247,7 +241,7 @@ mod tests {
             !portable_text.contains("test-jenkins-token"),
             "{portable_text}"
         );
-        assert!(!portable_text.contains("api_token"), "{portable_text}");
+        assert!(portable_text.contains("api_token: ''"), "{portable_text}");
         assert!(portable_text.contains("http://43.107.42.252:17070"));
         assert!(portable_text.contains("linux-eval-1"));
 
@@ -267,7 +261,7 @@ mod tests {
             Some(crate::platform::host_os().as_str())
         );
         let scratch_text = std::fs::read_to_string(&scratch).unwrap();
-        assert!(!scratch_text.contains("api_token"), "{scratch_text}");
+        assert!(scratch_text.contains("api_token: ''"), "{scratch_text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

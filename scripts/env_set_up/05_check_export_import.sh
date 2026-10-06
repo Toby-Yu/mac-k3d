@@ -20,20 +20,29 @@ else
 fi
 pass "source $src"
 
+# A worker YAML keeps an empty api_token slot; any value in it is a leak.
+# Prints nothing, so a matched token never reaches the terminal.
+token_filled() {
+  awk '/^[[:space:]]*api_token:/ {
+    v = $0; sub(/^[[:space:]]*api_token:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v)
+    if (v != "" && v != "\047\047" && v != "\"\"") found = 1
+  } END { exit !found }' "$1"
+}
+
 out="$(mktemp /tmp/mac-k3d-export-XXXX.yaml)"
 dest="$(mktemp /tmp/mac-k3d-import-XXXX.yaml)"
 rm -f "$dest"
 
 "$MAC_K3D_BIN" export -c "$src" -o "$out"
-grep -E '^[[:space:]]*api_token:' "$out" && die "exported YAML still has api_token key: $out"
+token_filled "$out" && die "exported YAML still has an api_token value: $out"
 grep -qi 'sk-[A-Za-z0-9]\{16,\}' "$out" && die "exported YAML looks like it contains an API key"
-pass "export wrote $out (no api_token key)"
+pass "export wrote $out (api_token empty or absent)"
 
 "$MAC_K3D_BIN" import "$out" -c "$dest"
 [ -f "$dest" ] || die "import did not write $dest"
 grep -q '^role:' "$dest" || die "imported YAML missing role: $dest"
-grep -E '^[[:space:]]*api_token:' "$dest" && die "imported YAML has api_token key: $dest"
-pass "import wrote $dest (role kept, no api_token key)"
+token_filled "$dest" && die "imported YAML has an api_token value: $dest"
+pass "import wrote $dest (role kept, api_token empty or absent)"
 
 pass "05_check_export_import complete"
 echo "NOTE scratch files: $out $dest (not live ~/.config/mac-k3d)"

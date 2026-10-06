@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # EVAL_SLOTS = how many trials Harbor runs at once; EVAL_CPUS_EACH = what each
-# task declares. P5 decides both and writes them to eval_resources.json, so the
+# task declares. evaluate/slots decides both and writes them to eval_resources.json, so the
 # later stages read that file instead of re-deriving anything: a report must
 # describe the run that happened, not a fresh guess about the current machine.
 eval_parallel_degree() {
@@ -31,7 +31,7 @@ print(f"EVAL_CPUS_EACH={int(cpus) if cpus.is_integer() else cpus}")
 PY
     )" || out=""
   fi
-  # No plan means P5 has not run in this workdir yet (a report-only replay of a
+  # No plan means evaluate/slots has not run in this workdir yet (a report-only replay of a
   # tree that never evaluated). 1x1 is the honest answer, not a probe.
   if [ -n "$out" ]; then
     eval "$out"

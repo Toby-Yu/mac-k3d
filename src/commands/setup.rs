@@ -58,13 +58,13 @@ pub async fn run(
     match config.role {
         NodeRole::Worker => {
             println!("\nWorker: registering Jenkins agent (not starting k3d/Jenkins)…\n");
-            super::run_config(ConfigArgs::default(), &config).await?;
+            super::run_config(ConfigArgs::default(), &config, Some(&config_path)).await?;
         }
         NodeRole::Controller | NodeRole::Standalone => {
             println!("\nStarting Docker / k3d / Jenkins (if enabled)…\n");
             super::run_start(StartArgs::default(), &config, Some(&config_path)).await?;
             println!("\nApplying kubeconfig / Jenkins job / credentials…\n");
-            super::run_config(ConfigArgs::default(), &config).await?;
+            super::run_config(ConfigArgs::default(), &config, Some(&config_path)).await?;
         }
     }
 
@@ -121,28 +121,4 @@ fn print_done_summary(config: &MacK3dConfig, config_path: &Path) {
            Agent:       {agent}\n",
         config_path.display()
     );
-
-    if matches!(config.role, NodeRole::Worker) {
-        if let Ok(share) = crate::prepare::eval_assets::ensure_share_pipeline() {
-            println!(
-                "Eval pipeline: {}/pipeline\n{}\n",
-                share.display(),
-                crate::prepare::eval_assets::icode_drop_hint(&share)
-            );
-        }
-        let token_ok = config
-            .jenkins_agent
-            .api_token
-            .as_ref()
-            .map(|s| !s.trim().is_empty() && s != "REPLACE_ME")
-            .unwrap_or(false);
-        if !token_ok {
-            println!(
-                "Worker agent may not be online yet. Put jenkins_agent.api_user / api_token in\n\
-                 {} then re-run: mac-k3d config -c {}\n",
-                config_path.display(),
-                config_path.display()
-            );
-        }
-    }
 }

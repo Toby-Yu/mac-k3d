@@ -18,7 +18,7 @@ eval-work/
 /output/
 iCode/
 
-# P5 writes these in the eval workdir; they contain DEEPSEEK_API_KEY.
+# The evaluate phase writes these in the eval workdir; they contain DEEPSEEK_API_KEY.
 **/.pier-env
 **/.harbor-env
 

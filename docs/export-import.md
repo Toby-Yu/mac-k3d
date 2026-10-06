@@ -50,7 +50,7 @@ The working agent’s Jenkins token lives **in** `~/.config/mac-k3d/worker.yaml`
 
 `import` **always** sanitizes. With `--force` it **overwrites the whole dest file** and sets `api_token` empty. Then:
 
-- `mac-k3d config -c worker.yaml` fails with **Jenkins API token missing**
+- `mac-k3d config -c worker.yaml` prints **Left jenkins_agent.api_user / api_token empty** and cannot register the node
 - You must mint a **new** token in the UI and paste it back
 
 `--force` is **OK** on:
@@ -84,10 +84,10 @@ Export/import still requires: OS, mac-k3d CLI, Docker (worker) or Docker+k3d+Jen
 | `jenkins_agent.name` | Node name — **change it** on the second PC or it collides |
 | `jenkins_agent.api_user` | usually `admin` |
 | `dependencies.*.source` | `install` / `skip` / `existing` (not host binary paths) |
-| `lolbench.source` | skip vs install Harbor/LoLBench |
+| `lolbench.source` | legacy; not asked any more (the pipeline clones LoLBench itself) |
 | `resources.cpu_cores_label` | `CPU_CORES` |
 
-**Not saved:** `api_token`, disk paths, `cpu_cores`, `remote_fs`, DeepSeek key, pipeline extract, Docker images. Workers do not store which DeepSWE **task** to run; they join the same Jenkins and pick up the same jobs.
+**Not saved:** the `api_token` value (a worker file keeps `api_token: ''`), disk paths, `cpu_cores`, `remote_fs`, DeepSeek key, pipeline extract, Docker images. Workers do not store which DeepSWE **task** to run; they join the same Jenkins and pick up the same jobs.
 
 ### Controller YAML — time saved
 
@@ -125,7 +125,7 @@ mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o /tmp/worker-lab.yaml
 grep -E 'role:|controller_url:|api_token' /tmp/worker-lab.yaml
 ```
 
-Expect `role: worker`, `controller_url: http://43.107.42.252:17070`, **no** `api_token` line. Copy `/tmp/worker-lab.yaml` to the new PC.
+Expect `role: worker`, `controller_url: http://43.107.42.252:17070`, and `api_token: ''` (the slot stays so you know where to paste a new token; the value is always blank). Copy `/tmp/worker-lab.yaml` to the new PC.
 
 ### On the new PC (every command below is here)
 
@@ -301,7 +301,7 @@ flowchart TD
 
 ## List DeepSWE task ids (this PC)
 
-After a prior P2, tasks live under Jenkins `~/jenkins-agent/workspace/deepswe_one_task/eval-runs/deep-swe/tasks`, or checkout `eval-runs/deep-swe/tasks` after a local P2. `list_deepswe_tasks.sh` looks at `$MAC_K3D_EVAL_WORKDIR` then `eval-runs/`:
+After a prior `tasks` phase, tasks live under Jenkins `~/jenkins-agent/workspace/deepswe_one_task/eval-runs/deep-swe/tasks`, or checkout `eval-runs/deep-swe/tasks` after a local run. `list_deepswe_tasks.sh` looks at `$MAC_K3D_EVAL_WORKDIR` then `eval-runs/`:
 
 ```bash
 cd ~/Documents/Toby/mac-k3d
@@ -311,7 +311,7 @@ export PATH="$HOME/Documents/Toby/mac-k3d/target/release:$PATH"
 # this lab (2026-09): FIRST=abs-module-cache-flags  SECOND=abs-stepped-slices
 ```
 
-If the script exits 2, run `mac-k3d eval --stage p2 --local --benchmark deepswe --n-tasks 2` once (no LLM) so the task dirs exist. Then use `--task YOUR_SECOND_ID` in situation 2a `set` if you are changing the Jenkins TASK default.
+If the script exits 2, run the benchmark step once (no LLM, no iCode) so the task dirs exist: `BENCHMARK=deepswe bash pipeline/stages/tasks/benchmark.sh`. Then use `--task YOUR_SECOND_ID` in situation 2a `set` if you are changing the Jenkins TASK default.
 
 ---
 
@@ -321,10 +321,10 @@ LLM family stays `deepseek`. Jenkins still offers only the static catalog in `sr
 
 1. Copy an **id** from `GET https://api.deepseek.com/models` (`data[].id`) or from DeepSeek “Models & Pricing”. Example: product “V4.1 Flash” is `deepseek-flash`.
 2. Append that exact string to `MODELS`.
-3. Rebuild. On a machine with `.env`, `mac-k3d set --check-models` (and worker P0) must see it in `GET /models`.
+3. Rebuild. On a machine with `.env`, `mac-k3d set --check-models` (and the worker's `env` phase) must see it in `GET /models`.
 4. Situation 2a: `set --model <id>` then controller `config --skip-secrets`.
 
-Never use marketing names. P6 prints the API error body if a bad id reaches Chat Completions.
+Never use marketing names. The baseline (`mac-k3d eval --stage baseline`) prints the API error body if a bad id reaches Chat Completions.
 
 ```bash
 # this PC / worker (has .env) — do not export the key in the shell
@@ -363,7 +363,7 @@ mac-k3d import /tmp/worker-lab.yaml -c /tmp/imported-worker.yaml
 # dest leftover: add --force
 ```
 
-Expect: no `api_token` in the copy; `controller_url` kept. Live Jenkins is unchanged.
+Expect: `api_token: ''` (blank) in the copy; `controller_url` kept. Live Jenkins is unchanged.
 
 ---
 

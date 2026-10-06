@@ -4,7 +4,7 @@
 Gold lines follow the report's H3 audit rule: unique stripped lines of at least
 25 characters, not starting with '#', added in non-test files of
 solution/solution.patch. A file is a hit when it holds at least 30% of a task's
-gold lines and at least 20 of them. P5 runs this before the first rollout.
+gold lines and at least 20 of them. tasks/leakscan runs this before the first rollout.
 
 Exit codes: 0 no hits, 2 hits, 1 error. Only paths and counts are printed.
 """

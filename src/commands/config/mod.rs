@@ -1,12 +1,17 @@
-use std::time::Duration;
+//! `mac-k3d config`: apply a saved YAML to the services it describes. Workers
+//! register their Jenkins agent; controllers configure the cluster and Jenkins.
+//! This is the only command that registers an agent.
+
+mod controller;
+mod worker;
+
+use std::path::{Path, PathBuf};
 
 use clap::Args;
 
 use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
 use crate::platform::ensure_supported_os;
-use crate::prepare::{jenkins_agent, jenkins_credentials, jenkins_job};
-use crate::runtime::{jenkins, k3d, kubectl, Tools};
 
 #[derive(Debug, Default, Args)]
 pub struct ConfigArgs {
@@ -35,141 +40,23 @@ pub struct ConfigArgs {
     pub update_secrets: bool,
 }
 
-pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
+pub async fn run(args: ConfigArgs, config: &MacK3dConfig, config_path: Option<&Path>) -> Result<()> {
     ensure_supported_os()?;
+    let config_path: PathBuf = MacK3dConfig::resolve_config_path(config_path);
 
-    let tools = Tools::from_config(config)?;
-
-    // Workers may skip a local k3d cluster; only merge when the named cluster exists.
-    let has_cluster = k3d::inspect(&tools.k3d, &config.cluster.name)
-        .await
-        .map(|i| !matches!(i.state, k3d::ClusterState::Missing))
-        .unwrap_or(false);
-
-    if has_cluster {
-        if !args.no_merge_kubeconfig {
-            k3d::merge_kubeconfig(&tools.k3d, &config.cluster.name).await?;
-            kubectl::use_context(&tools.kubectl, &config.cluster.name).await?;
-        }
-        println!("Waiting for Kubernetes API…");
-        kubectl::wait_api(&tools.kubectl, Duration::from_secs(120)).await?;
-        println!("Kubernetes API is ready.");
-    } else if matches!(config.role, NodeRole::Worker) {
-        println!(
-            "k3d cluster '{}' not present — skipping kubeconfig (OK for Jenkins-agent-only workers).",
-            config.cluster.name
-        );
-    } else if !args.no_merge_kubeconfig {
-        k3d::merge_kubeconfig(&tools.k3d, &config.cluster.name).await?;
-        kubectl::use_context(&tools.kubectl, &config.cluster.name).await?;
-        println!("Waiting for Kubernetes API…");
-        kubectl::wait_api(&tools.kubectl, Duration::from_secs(120)).await?;
-        println!("Kubernetes API is ready.");
+    match config.role {
+        NodeRole::Worker => worker::run(&args, config, &config_path)?,
+        NodeRole::Controller | NodeRole::Standalone => controller::run(&args, config).await?,
     }
-
-    let mut admin_password: Option<String> = None;
-    if config.jenkins.enabled || args.show_jenkins {
-        println!("Jenkins UI: {}", jenkins::ui_url(config));
-        match jenkins::admin_password(&tools.kubectl, config).await {
-            Ok(password) if !password.is_empty() => {
-                println!("Jenkins admin user: admin");
-                println!("Jenkins admin password: {password}");
-                admin_password = Some(password);
-            }
-            Ok(_) | Err(_) => {
-                println!(
-                    "Could not read Jenkins admin password yet. Try:\n  kubectl get secret {} -n {} -o jsonpath='{{.data.jenkins-admin-password}}' | base64 -d",
-                    config.jenkins.release_name, config.jenkins.namespace
-                );
-            }
-        }
-    }
-
-    let mut credential_ids = Vec::new();
-    // --skip-secrets must list existing IDs before rewrite; empty Vec would strip withCredentials.
-    let mut rewrite_jobs = config.jenkins.enabled && !args.skip_job;
-    if config.jenkins.enabled {
-        if let Some(password) = admin_password.as_deref() {
-            if args.skip_secrets {
-                match jenkins_credentials::existing_ids_on_controller(
-                    &jenkins::ui_url(config),
-                    "admin",
-                    password,
-                ) {
-                    Ok(ids) => {
-                        if ids.is_empty() {
-                            println!(
-                                "No CI credentials listed in Jenkins yet; job XML will omit withCredentials binds."
-                            );
-                        } else {
-                            println!(
-                                "Keeping existing Jenkins credential binds ({} id(s)).",
-                                ids.len()
-                            );
-                        }
-                        credential_ids = ids;
-                    }
-                    Err(err) => {
-                        println!(
-                            "Warning: could not list Jenkins credentials ({err}). Skipping job rewrite so existing binds stay."
-                        );
-                        rewrite_jobs = false;
-                    }
-                }
-            } else {
-                println!("Ensuring Jenkins Credentials…");
-                match jenkins_credentials::ensure_credentials_on_controller(
-                    &jenkins::ui_url(config),
-                    "admin",
-                    password,
-                    args.update_secrets,
-                ) {
-                    Ok(ids) => {
-                        credential_ids = ids;
-                        if credential_ids.is_empty() {
-                            println!(
-                                "No CI credentials in Jenkins yet (oracle still works).\n\
-                                 Re-run with `--update-secrets` or set pending secrets — see docs/secrets.md."
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        println!("Warning: could not ensure Jenkins Credentials ({err}).");
-                    }
-                }
-            }
-        } else if args.skip_secrets {
-            println!(
-                "Warning: could not read Jenkins admin password; skipping job rewrite so existing binds stay."
-            );
-            rewrite_jobs = false;
-        }
-    }
-
-    if rewrite_jobs {
-        println!(
-            "Ensuring Jenkins eval jobs (one / some / full suite for {}; ui_profile={})…",
-            jenkins_job::EVAL_BENCHMARKS.join(", "),
-            config.jenkins_job.ui_profile
-        );
-        if let Err(err) =
-            jenkins_job::ensure_eval_jobs_from_cluster(&tools.kubectl, config, credential_ids).await
-        {
-            println!("Warning: could not ensure the eval jobs ({err}).");
-        }
-    }
-
-    if matches!(config.role, NodeRole::Worker) {
-        if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
-            println!("Warning: could not extract pipeline ({err}).");
-        }
-    }
-
-    if matches!(config.role, NodeRole::Worker) && !args.skip_agent {
-        println!("Ensuring Jenkins agent registration…");
-        jenkins_agent::ensure_worker_agent(config)?;
-    }
+    extract_share_pipeline();
 
     println!("Config complete.");
     Ok(())
+}
+
+/// The pipeline copy `eval --local` and manual runs use. Builds extract their own.
+fn extract_share_pipeline() {
+    if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
+        println!("Warning: could not extract pipeline ({err}).");
+    }
 }

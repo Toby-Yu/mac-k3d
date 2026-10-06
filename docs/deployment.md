@@ -24,9 +24,9 @@ Each Mac is a self-contained environment:
 
 ### Worker role (Jenkins disabled)
 
-- Worker Macs do not host Jenkins.
-- They run local toolchains and can execute CI jobs as Jenkins agents.
-- They may still run local k3d clusters for test/development workloads.
+- Worker Macs host neither Jenkins nor a k3d cluster (`mac-k3d start -c worker.yaml` is rejected).
+- They run Docker, Java, git, the pinned Harbor and the Jenkins agent; eval builds run Harbor containers on the worker's Docker.
+- `mac-k3d setup -c worker.yaml` installs that toolchain; `mac-k3d config -c worker.yaml` registers the agent.
 
 ## Multi-Mac topology
 
@@ -35,7 +35,7 @@ Each Mac is a self-contained environment:
 +------------------------+      +------------------------+
 | Mac A (controller)     |      | Mac B (worker)         |
 | - Docker Desktop       |      | - Docker Desktop       |
-| - k3d cluster A        |      | - k3d cluster B        |
+| - k3d cluster A        |      | - Harbor + iCode runs  |
 | - Jenkins in cluster A |<-----| - Jenkins agent        |
 +------------------------+      +------------------------+
              ^
@@ -45,7 +45,7 @@ Each Mac is a self-contained environment:
                     +------------------------+
                     | Mac C (worker)         |
                     | - Docker Desktop       |
-                    | - k3d cluster C        |
+                    | - Harbor + iCode runs  |
                     | - Jenkins agent        |
                     +------------------------+
 ```
@@ -112,13 +112,13 @@ Use all three. Executors provide coarse safety; locks provide workload-aware sch
 
 ### What the eval jobs actually do
 
-`mac-k3d setup -c worker.yaml` implements this for evaluation: it sets `numExecutors` to **1** and creates lockable resources `<agent>-core-1..N`, each labelled with **both** the shared `CPU_CORES` label and the agent name. Each eval build then takes every core of its own node:
+`mac-k3d config -c worker.yaml` (which `setup` runs) implements this for evaluation: it sets `numExecutors` to **1** and creates lockable resources `<agent>-core-1..N`, each labelled with **both** the shared `CPU_CORES` label and the agent name. Each eval build then takes every core of its own node:
 
 ```groovy
 lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES')
 ```
 
-Locking the node name rather than the shared label is what makes multi-worker safe: with a shared label, a build running on Mac B could hold tokens that represent Mac C's cores, and both machines would oversubscribe. With no quantity the build holds all of its node's cores, and their count sets Harbor's `-n`. One executor matters too: Jenkins' default load balancer prefers the same node for every build of one job, so with several executors per node the shards of one suite would pile onto one worker. The lock wraps only the `Evaluate` stage.
+Locking the node name rather than the shared label is what makes multi-worker safe: with a shared label, a build running on Mac B could hold tokens that represent Mac C's cores, and both machines would oversubscribe. With no quantity the build holds all of its node's cores, and their count sets Harbor's `-n`. One executor matters too: Jenkins' default load balancer prefers the same node for every build of one job, so with several executors per node the shards of one suite would pile onto one worker. The lock wraps only the `Evaluate` stage, one of the seven pipeline stages ([pipeline.md](pipeline.md)).
 
 **Keep exactly one controller.** Lockable-resources state lives on the controller, so a second controller would hand out tokens for cores the first one already lent out. Scale workers, not controllers. Adding a worker needs no pipeline change: the dispatcher counts online workers when it plans shards, the queue hands each shard to the first free worker, and `env.NODE_NAME` resolves per build. See [architecture.md](architecture.md#evaluation-architecture).
 
@@ -201,14 +201,11 @@ Future versions may generate Jenkins lock definitions from `mac-k3d` config and 
 
 See [setup.md](setup.md) for detailed step-by-step instructions. Summary:
 
-1. Initialize every Mac with `mac-k3d prepare --init-config`.
-2. Start controller Mac with `mac-k3d start --jenkins in-cluster`.
-3. Start worker Macs with `mac-k3d start`.
-4. Configure all Macs with `mac-k3d config`.
-5. Register workers in Jenkins.
+1. Controller Mac: `mac-k3d setup -c ~/.config/mac-k3d/config.yaml` (wizard, `start`, `config`).
+2. Each worker Mac: `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` (wizard, installs, `config`). Fill `api_user` / `api_token` in `worker.yaml` if you skipped them, then `mac-k3d config -c ~/.config/mac-k3d/worker.yaml`.
+3. After each commit: `bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worker>` puts the same binary everywhere ([workflow.md](workflow.md#development-loop-commit-push-redeploy)).
 
 ## Out of scope for v1
 
-- Automatic Jenkins agent enrollment
 - Automatic public endpoint/TLS provisioning
 - Building a single multi-host Kubernetes control plane using k3d

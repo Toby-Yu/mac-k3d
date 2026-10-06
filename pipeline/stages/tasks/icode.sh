@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# P3 — resolve iCode (release drop or git clone+build)
+# tasks/icode: resolve the iCode under test (release drop, or git clone + build).
+# Reads the checkout; never changes iCode's source.
 set -euo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
-# shellcheck source=../lib/icode_input.sh
+# shellcheck source=../_common.sh
+source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
+# shellcheck source=../../lib/icode_input.sh
 source "$PIPELINE_LIB/icode_input.sh"
 
 ICODE_MODE="$(icode_normalize_mode)"
 export ICODE_MODE
 icode_apply_official_pin
-progress 35 "P3: resolving iCode ($ICODE_MODE)"
+echo "icode: resolving iCode ($ICODE_MODE)"
 
 # Do not reuse git identity from an earlier git-mode run in this WORKDIR.
 rm -f "$WORKDIR/icode_git.json"
@@ -26,7 +28,7 @@ case "$ICODE_MODE" in
     ;;
 esac
 
-[ -n "$ICODE_BIN" ] || die "P3 did not resolve ICODE_BIN"
+[ -n "$ICODE_BIN" ] || die "tasks/icode did not resolve ICODE_BIN"
 export ICODE_BIN
 echo "$ICODE_BIN" >"$WORKDIR/icode_bin_path.txt"
 
@@ -53,4 +55,3 @@ if [ "$ICODE_MODE" = "git" ] && [ -n "${HOST_ROOT:-}" ]; then
   icode_assert_clean_checkout "$HOST_ROOT"
 fi
 icode_assert_recorded_sha
-progress 40 "P3 complete"

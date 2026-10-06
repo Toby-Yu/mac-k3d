@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# P8 — write this run's artifact.json, summary.md, and report.html, and back them up.
+# report/render: this run's artifact.json, summary.md and report.html under
+# $WORKDIR/output/<benchmark>/<run folder>. Records the folder in
+# report_dir.txt for the archive phase.
 set -euo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
-
-progress 98 "P8: evaluation report"
+# shellcheck source=../_common.sh
+source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"
 eval_parallel_degree || die "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1"
@@ -11,24 +12,6 @@ RUN_ID="local-${UTC}"
 if [ -n "${BUILD_NUMBER:-}" ]; then
   RUN_ID="jenkins-${BUILD_NUMBER}"
 fi
-
-repo_output_root() {
-  if [ -n "${MAC_K3D_BACKUP_ROOT:-}" ]; then
-    printf '%s\n' "$MAC_K3D_BACKUP_ROOT"
-    return
-  fi
-  if [ -n "${MAC_K3D_OUTPUT_ROOT:-}" ]; then
-    printf '%s\n' "$MAC_K3D_OUTPUT_ROOT"
-    return
-  fi
-  if [ -n "${MAC_K3D_ROOT:-}" ]; then
-    printf '%s/output\n' "$MAC_K3D_ROOT"
-    return
-  fi
-  local script_root
-  script_root="$(cd "$(dirname "$0")/../.." && pwd)"
-  printf '%s/output\n' "$script_root"
-}
 
 FOLDER="$(
   PYTHONPATH="$PIPELINE_LIB${PYTHONPATH:+:$PYTHONPATH}" python3 - "$UTC" "$WORKDIR/selected_tasks.txt" <<'PY'
@@ -48,8 +31,6 @@ PY
 )"
 
 ART_DIR="$WORKDIR/output/${BENCHMARK}/${FOLDER}"
-BACKUP_ROOT="$(repo_output_root)"
-export MAC_K3D_OUTPUT_ROOT="$BACKUP_ROOT"
 
 API_BASE="${ICODE_API_BASE:-https://api.deepseek.com/v1}"
 if [ -f "$WORKDIR/eval_protocol_inputs.json" ]; then
@@ -80,14 +61,12 @@ python3 "$PIPELINE_LIB/render_report.py" \
   --workdir "$WORKDIR" \
   --utc "$UTC" \
   --run-folder "$FOLDER" \
-  --backup-root "$BACKUP_ROOT" \
   --out-dir "$ART_DIR"
 
+printf '%s\n' "$ART_DIR" >"$WORKDIR/report_dir.txt"
 rel="$ART_DIR"
 if [ -n "${WORKSPACE:-}" ] && [[ "$ART_DIR" == "$WORKSPACE/"* ]]; then
   rel="${ART_DIR#"$WORKSPACE"/}"
 fi
 printf '%s/**\n' "$rel" >"$WORKDIR/last_output.txt"
 echo "OK wrote $ART_DIR/artifact.json"
-echo "OK backup $BACKUP_ROOT/${BENCHMARK}/${FOLDER}.tar.gz"
-progress 100 "P8 complete — evaluation output ready"

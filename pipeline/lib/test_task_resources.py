@@ -242,15 +242,22 @@ class CliTests(unittest.TestCase):
 
 
 class StageWiringTests(unittest.TestCase):
-    def test_p5_plans_before_it_runs_and_keeps_the_declared_values(self):
-        p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
-        self.assertIn('task_resources.py" plan', p5)
-        self.assertLess(p5.index('task_resources.py" plan'), p5.index("run_harbor() {"))
-        self.assertIn("record-resources", p5)
+    def test_slots_plan_before_harbor_runs_and_keep_the_declared_values(self):
+        stages = ROOT / "pipeline" / "stages"
+        evaluate = (stages / "evaluate.sh").read_text(encoding="utf-8")
+        steps = evaluate[evaluate.index("STEPS=(") :]
+        self.assertLess(steps.index("evaluate/slots"), steps.index("evaluate/harbor_run"))
+        slots = (stages / "evaluate" / "slots.sh").read_text(encoding="utf-8")
+        self.assertIn('task_resources.py" plan', slots)
+        self.assertIn("record-resources", slots)
+        # The measured peak of an earlier build must not shrink this build's slots.
+        self.assertLess(slots.index('"$HARNESS_DIR/container_mem_peak_gb"'), slots.index('task_resources.py" plan'))
+        cmd = (stages / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
+        self.assertIn("eval_resources.json", cmd)
         # Harbor applies task.toml unless an operator deliberately opts out.
-        self.assertNotIn('cmd+=(--override-cpus "$EVAL_CPUS_EACH")', p5)
-        self.assertIn("EVAL_OVERRIDE_CPUS", p5)
-        self.assertIn("EVAL_OVERRIDE_MEMORY_MB", p5)
+        self.assertNotIn('cmd+=(--override-cpus "$EVAL_CPUS_EACH")', cmd)
+        self.assertIn("EVAL_OVERRIDE_CPUS", cmd)
+        self.assertIn("EVAL_OVERRIDE_MEMORY_MB", cmd)
 
     def test_provenance_records_declared_against_applied(self):
         from provenance import record_resources
@@ -275,6 +282,10 @@ class StageWiringTests(unittest.TestCase):
             self.assertEqual(doc["resources"]["declared"]["cpus"], 2)
             self.assertEqual(doc["resources"]["applied"]["cpus_each"], 2)
             self.assertEqual(doc["resources"]["host"]["mem_total_gb"], 64.0)
+            # Planned under the lock, so it replaces what the tasks phase saw.
+            self.assertEqual(doc["concurrency"], 4)
+            self.assertEqual(doc["cpus_each"], 2)
+            self.assertNotIn("cpu_lock_qty", doc)
 
 
 if __name__ == "__main__":

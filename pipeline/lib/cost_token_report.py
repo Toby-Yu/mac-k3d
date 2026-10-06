@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Write cost-token-report.md for a completed eval run (on demand, not P8)."""
+"""Write cost-token-report.md for a completed eval run.
+
+The archive phase (stages/archive/analysis.sh) writes it into every run folder
+before the backup. Run it by hand for an older run folder or tarball.
+"""
 
 from __future__ import annotations
 

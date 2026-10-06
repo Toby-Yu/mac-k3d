@@ -16,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 LIB = Path(__file__).resolve().parent
+STAGES = ROOT / "pipeline" / "stages"
 sys.path.insert(0, str(LIB))
 
 from check_report import validate  # noqa: E402
@@ -1005,15 +1006,15 @@ class ScoreResultsTests(unittest.TestCase):
             self.assertEqual(reward["p2p_total"], 51)
             self.assertAlmostEqual(reward["f2p_pass_rate"], 8 / 11)
 
-    def test_p2_lolbench_applies_fix_rewards(self):
-        p2 = (ROOT / "pipeline" / "stages" / "p2_deepswe.sh").read_text(encoding="utf-8")
+    def test_benchmark_step_lolbench_applies_fix_rewards(self):
+        p2 = (STAGES / "tasks" / "benchmark.sh").read_text(encoding="utf-8")
         self.assertIn("lolbench_fix_rewards.py", p2)
         lolbench_block = p2.split("lolbench)", 1)[1].split("swebenchpro)", 1)[0]
         self.assertIn("lolbench_fix_rewards.py", lolbench_block)
         self.assertIn("$LOLBENCH_DIR/harbor_tasks", lolbench_block)
 
     def test_trial_files_includes_agent_report(self):
-        from render_report import _TRIAL_FILES
+        from archive_run import _TRIAL_FILES
 
         self.assertIn("agent_report.json", _TRIAL_FILES)
         self.assertIn("reward.json", _TRIAL_FILES)
@@ -1044,7 +1045,7 @@ class ScoreResultsTests(unittest.TestCase):
             self.assertEqual(got["p2p"], 1.0)
 
 
-class LocalEnvAndPierAdapterTests(unittest.TestCase):
+class LocalEnvAndAgentTests(unittest.TestCase):
     def test_env_example_has_no_secret(self):
         text = (ROOT / ".env.example").read_text(encoding="utf-8")
         self.assertIn("DEEPSEEK_API_KEY=", text)
@@ -1133,8 +1134,11 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
             self.assertNotIn("gc-from-file", gitp.stderr)
             self.assertNotIn("gh-alias", gitp.stderr)
 
-    def test_p5_uses_import_path_not_bare_agent_icode(self):
-        text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+    def test_harbor_run_uses_import_path_not_bare_agent_icode(self):
+        text = "\n".join(
+            (STAGES / name).read_text(encoding="utf-8")
+            for name in ("evaluate/harbor_cmd.sh", "evaluate/harbor_run.sh", "_common.sh")
+        )
         self.assertIn("icode_harbor_agent:ICodeAgent", text)
         self.assertIn("harbor run", text)
         # One run covers every selected task x rollout; Harbor schedules them.
@@ -1154,19 +1158,8 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
         self.assertIn("ICODE_PROVIDER=DeepSeek", text)
         self.assertIn('ICODE_REASONING_EFFORT:-high', text)
         self.assertIn('printf \'ICODE_MODEL=%s\\n\' "${ICODE_MODEL}"', text)
-        run_sh = (ROOT / "pipeline" / "lib" / "pier-agent-icode" / "run.sh").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("run -t", run_sh)
-        self.assertIn("-a code", run_sh)
-        self.assertIn("icode-usage.json", run_sh)
-        self.assertNotIn('icode" run "$PROMPT"', run_sh)
-        adapter = (ROOT / "pipeline" / "lib" / "icode_pier_agent.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("https://api.deepseek.com/v1", adapter)
-        self.assertIn("DeepSeek", adapter)
-        self.assertIn("ICODE_REASONING_EFFORT", adapter)
+        self.assertFalse((LIB / "icode_pier_agent.py").exists())
+        self.assertFalse((LIB / "pier-agent-icode").exists())
 
     def test_icode_nonzero_exit_does_not_fail_harbor_shell(self):
         agent = (ROOT / "pipeline" / "lib" / "icode_harbor_agent.py").read_text(encoding="utf-8")
@@ -1212,7 +1205,7 @@ exit 0
         self.assertIn('commit -q --no-verify -m "icode solution"', capture)
         self.assertLess(capture.find("lolbench-submit \"$REPO\""), capture.find('commit -q --no-verify -m "icode solution"'))
         self.assertIn("https://api.deepseek.com/v1", agent)
-        stage = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        stage = (STAGES / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
         # One `harbor run` per build names the agent once; the canary names its own.
         self.assertEqual(stage.count("icode_harbor_agent:ICodeAgent"), 1)
         self.assertIn("canary_harbor_agent:CanaryAgent", stage)
@@ -1222,11 +1215,14 @@ exit 0
         self.assertIn('BENCHMARK:-deepswe}" = "lolbench"', stage)
         self.assertLess(stage.find("= \"lolbench\""), stage.find("cmd=(harbor run)"))
 
-    def test_p5_lolbench_uses_harbor_agent(self):
-        text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+    def test_lolbench_uses_harbor_agent(self):
+        text = "\n".join(
+            (STAGES / name).read_text(encoding="utf-8")
+            for name in ("evaluate/harbor_cmd.sh", "evaluate/harbor_run.sh", "tasks/images.sh")
+        )
         self.assertIn("harbor run", text)
         self.assertIn("icode_harbor_agent:ICodeAgent", text)
-        self.assertIn("api.deepseek.com", text)
+        self.assertIn('python3 "$PIPELINE_LIB/network_allowlist.py" hosts', text)
         self.assertIn("ICODE_MODEL", text)
         self.assertIn("reward.json", text)
         self.assertIn('ensure_task_image "$tid" "$image"', text)
@@ -1242,42 +1238,44 @@ exit 0
         self.assertIn("/opt/icode-host", src)
         self.assertNotIn("gitcode.com", src)
 
-    def test_p0_checks_openai_models_when_key_set(self):
-        p0 = (ROOT / "pipeline" / "stages" / "p0_prereqs.sh").read_text(encoding="utf-8")
+    def test_env_checks_openai_models_when_key_set(self):
+        p0 = (STAGES / "env" / "model_api.sh").read_text(encoding="utf-8")
         self.assertIn("openai_compat.py", p0)
         self.assertIn("--check-model", p0)
         self.assertIn("GET /models", p0)
 
-    def test_p0_installs_buildx_for_harbor_sidecar(self):
-        p0 = (ROOT / "pipeline" / "stages" / "p0_prereqs.sh").read_text(encoding="utf-8")
-        compose = (ROOT / "pipeline" / "stages" / "ensure_compose.sh").read_text(encoding="utf-8")
-        self.assertIn("ensure_docker_buildx", p0)
+    def test_env_installs_buildx_for_harbor_sidecar(self):
+        env_phase = (STAGES / "env.sh").read_text(encoding="utf-8")
+        compose = (STAGES / "env" / "compose.sh").read_text(encoding="utf-8")
+        self.assertIn("env/compose", env_phase)
+        self.assertIn("\nensure_docker_buildx\n", compose)
         self.assertIn("docker-buildx", compose)
         self.assertIn("docker buildx", compose)
 
-    def test_p1_requires_agent_import_path(self):
-        text = (ROOT / "pipeline" / "stages" / "p1_pier.sh").read_text(encoding="utf-8")
-        self.assertIn('uv tool install "harbor==${HARBOR_VERSION}"', text)
-        self.assertIn("lolbench", text)
-        self.assertIn("swebenchpro", text)
-        self.assertIn("ensuring harbor", text)
+    def test_env_installs_pinned_harbor_only(self):
+        text = (STAGES / "env" / "harbor.sh").read_text(encoding="utf-8")
+        self.assertIn('uv tool install --force "harbor==${HARBOR_VERSION}"', text)
+        self.assertIn("pipeline/config/toolchain.env", text)
         self.assertNotIn("datacurve-pier", text)
+        self.assertNotRegex(text, r"\bpier\b")
 
-    def test_run_all_runs_p4_for_every_benchmark(self):
-        text = (ROOT / "pipeline" / "stages" / "run_all.sh").read_text(encoding="utf-8")
-        self.assertNotIn("P4 skipped", text)
-        self.assertIn("p3_icode.sh", text)
-        self.assertIn("p5_harness.sh", text)
-        self.assertIn("p4_agent.sh", text)
-        self.assertNotIn("Scale Docker eval", text)
+    def test_tasks_phase_installs_the_agent_for_every_benchmark(self):
+        tasks = (STAGES / "tasks.sh").read_text(encoding="utf-8")
+        evaluate = (STAGES / "evaluate.sh").read_text(encoding="utf-8")
+        for step in ("tasks/icode", "tasks/agent", "tasks/isolation"):
+            self.assertIn(f"  {step}\n", tasks)
+        self.assertIn("evaluate/harbor_run", evaluate)
+        agent = (STAGES / "tasks" / "agent.sh").read_text(encoding="utf-8")
+        self.assertNotIn("lolbench)", agent)
+        self.assertNotIn("Scale Docker eval", tasks + evaluate)
 
-    def test_p5_swebenchpro_uses_harbor(self):
-        text = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+    def test_swebenchpro_uses_harbor(self):
+        text = (STAGES / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
         self.assertNotIn("swebenchpro_run.py", text)
         self.assertNotIn("pier run", text)
         self.assertIn("harbor run", text)
         self.assertIn("icode_harbor_agent:ICodeAgent", text)
-        p2 = (ROOT / "pipeline" / "stages" / "p2_deepswe.sh").read_text(encoding="utf-8")
+        p2 = (STAGES / "tasks" / "benchmark.sh").read_text(encoding="utf-8")
         self.assertIn("swebenchpro_tasks.py", p2)
         self.assertIn("swebenchpro", p2)
 
@@ -1303,51 +1301,6 @@ exit 0
             }
         }
         self.assertIsNone(hollow_job_reason(ran))
-
-    def test_icode_adapter_module_parses(self):
-        path = LIB / "icode_pier_agent.py"
-        src = path.read_text(encoding="utf-8")
-        compile(src, str(path), "exec")
-        self.assertIn("class ICodeAgent", src)
-
-    def test_icode_adapter_imports_when_pier_installed(self):
-        env = {**os.environ, "PYTHONPATH": str(LIB)}
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "from icode_pier_agent import ICodeAgent; assert ICodeAgent.name() == 'icode'",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-        if proc.returncode != 0 and "ModuleNotFoundError" in (proc.stderr + proc.stdout):
-            pier = subprocess.run(
-                ["bash", "-lc", "command -v pier"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if pier.returncode != 0 or not pier.stdout.strip():
-                self.skipTest("pier not installed")
-            shebang = Path(pier.stdout.strip()).read_text(encoding="utf-8", errors="ignore").splitlines()[0]
-            py = shebang[2:].strip() if shebang.startswith("#!") else ""
-            if not py:
-                self.skipTest("pier interpreter not found")
-            proc = subprocess.run(
-                [
-                    py,
-                    "-c",
-                    "from icode_pier_agent import ICodeAgent; assert ICodeAgent.name() == 'icode'",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
 class TaskSelectTests(unittest.TestCase):
@@ -1451,9 +1404,9 @@ printf '%s' "$WORKDIR"
             self.assertTrue(workdir.endswith("rel-eval"), workdir)
 
 
-class P3IcodeBinaryTests(unittest.TestCase):
+class IcodeBuildToolTests(unittest.TestCase):
     def test_official_full_release_shapes(self):
-        script = ROOT / "pipeline" / "stages" / "test_p3_icode.sh"
+        script = ROOT / "pipeline" / "tools" / "test_icode_build.sh"
         proc = subprocess.run(
             ["bash", str(script)],
             check=False,
@@ -1461,10 +1414,10 @@ class P3IcodeBinaryTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("OK test_p3_icode.sh", proc.stdout)
+        self.assertIn("OK test_icode_build.sh", proc.stdout)
 
     def test_icode_input_url_ref_validation(self):
-        script = ROOT / "pipeline" / "stages" / "test_icode_input.sh"
+        script = ROOT / "pipeline" / "tools" / "test_icode_input.sh"
         proc = subprocess.run(
             ["bash", str(script)],
             check=False,
@@ -1645,8 +1598,8 @@ class SwebenchproTests(unittest.TestCase):
             self.assertEqual(eval_doc["resolved"], False)
             self.assertIs(scale_eval_resolved(harness / "django__forms-1234"), False)
 
-    def test_unknown_benchmark_dies_in_p2(self):
-        text = (ROOT / "pipeline" / "stages" / "p2_deepswe.sh").read_text(encoding="utf-8")
+    def test_unknown_benchmark_dies_in_the_benchmark_step(self):
+        text = (STAGES / "tasks" / "benchmark.sh").read_text(encoding="utf-8")
         self.assertIn("use deepswe, lolbench, or swebenchpro", text)
         common = (ROOT / "pipeline" / "stages" / "_common.sh").read_text(encoding="utf-8")
         self.assertIn("swebenchpro) echo \"$SWEBENCHPRO_DIR/tasks\"", common)
@@ -1693,7 +1646,7 @@ class SecretGuardTests(unittest.TestCase):
 
 
 class EvalReportTests(unittest.TestCase):
-    def test_parallel_degree_reads_the_plan_p5_wrote(self):
+    def test_parallel_degree_reads_the_plan_evaluate_wrote(self):
         """EVAL_SLOTS and EVAL_CPUS_EACH come from the applied plan, not a guess."""
         script = ROOT / "pipeline" / "lib" / "parallel_degree.sh"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1750,7 +1703,7 @@ class EvalReportTests(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual(proc.stdout.strip(), want)
 
-    def test_p8_renders_when_the_task_declares_float_cpus(self):
+    def test_report_renders_when_the_task_declares_float_cpus(self):
         """Build #51: ``render_report.py: error: argument --cpus-each: invalid int value: '2.0'``."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1787,7 +1740,7 @@ class EvalReportTests(unittest.TestCase):
                 }
             )
             proc = subprocess.run(
-                ["bash", str(ROOT / "pipeline" / "stages" / "p8_output.sh")],
+                ["bash", str(STAGES / "report.sh")],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -1823,7 +1776,6 @@ class EvalReportTests(unittest.TestCase):
                         "--cpus-each", value,
                         "--run-folder", "run",
                         "--out-dir", str(out),
-                        "--backup-root", str(root / "backup"),
                     ],
                     check=False,
                     capture_output=True,
@@ -1834,7 +1786,7 @@ class EvalReportTests(unittest.TestCase):
                 written = json.loads((out / "run" / "artifact.json").read_text(encoding="utf-8"))
                 self.assertEqual(written["cpus_each"], want)
 
-    def test_parallel_degree_does_not_guess_when_p5_never_ran(self):
+    def test_parallel_degree_does_not_guess_when_evaluate_never_ran(self):
         """A report-only replay of a tree with no plan reports 1x1, not a probe of this host."""
         script = ROOT / "pipeline" / "lib" / "parallel_degree.sh"
         with tempfile.TemporaryDirectory() as tmp:
@@ -2108,7 +2060,10 @@ class EvalReportTests(unittest.TestCase):
         self.assertIn("MAC_K3D_PHASE", run_all)
         for name in ("deepswe", "lolbench", "swebenchpro"):
             self.assertIn(name, common)
-        p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        p5 = "\n".join(
+            (STAGES / "evaluate" / name).read_text(encoding="utf-8")
+            for name in ("slots.sh", "harbor_cmd.sh", "harbor_run.sh")
+        )
         self.assertIn('"$HARNESS_DIR/container_mem.jsonl"', p5)
         self.assertNotIn("container_mem_history.jsonl", p5)
         self.assertIn('task_resources.py" sample', p5)
@@ -2374,7 +2329,7 @@ class EvalReportTests(unittest.TestCase):
         self.assertAlmostEqual(doc["eta_s"], (452 - 12) * 18 * 60 / 4)
         self.assertEqual(doc["eta_note"], ETA_FORMULA)
         text = heartbeat_text(doc, elapsed_s=3600)
-        self.assertIn("P5 harbor heartbeat 3600s 12/452 (2.7%)", text)
+        self.assertIn("harbor heartbeat 3600s 12/452 (2.7%)", text)
         self.assertIn("inflight=4 slots=4", text)
         self.assertNotIn("ETA", text)
         self.assertIn("PROGRESS", text)
@@ -2398,7 +2353,9 @@ class EvalReportTests(unittest.TestCase):
         )
         self.assertIsNone(early["eta_s"])
         self.assertNotIn("ETA", heartbeat_text(early, elapsed_s=60))
-        p5 = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+        p5 = "\n".join(
+            (STAGES / "evaluate" / name).read_text(encoding="utf-8") for name in ("slots.sh", "harbor_run.sh")
+        )
         self.assertIn("progress.json", p5)
         self.assertIn("eval_progress.py", p5)
         self.assertNotIn("ETA ≈ remaining", p5)
@@ -2491,10 +2448,12 @@ class EvalReportTests(unittest.TestCase):
             got = trial_reward_files([flat, Path(tmp) / "nested", empty])
             self.assertEqual(got, [flat / "reward.json", nested / "reward.json"])
 
-    def test_p8_backs_up_outside_the_workspace(self):
+    def test_archive_backs_up_outside_the_workspace(self):
         from render_report import run_folder_name
 
-        p8 = (ROOT / "pipeline" / "stages" / "p8_output.sh").read_text(encoding="utf-8")
+        p8 = "\n".join(
+            (STAGES / name).read_text(encoding="utf-8") for name in ("report/render.sh", "archive/backup.sh")
+        )
         self.assertNotIn("score_results.py", p8)
         self.assertIn("MAC_K3D_OUTPUT_ROOT", p8)
         self.assertEqual(run_folder_name("20260923T023527Z", ["abs-module-cache-flags"]), "20260923T023527Z-abs-module-cache-flags")
@@ -2555,7 +2514,7 @@ class EvalReportTests(unittest.TestCase):
                 }
             )
             proc = subprocess.run(
-                ["bash", str(ROOT / "pipeline" / "stages" / "p8_output.sh")],
+                ["bash", "-c", 'bash "$1/report.sh" && bash "$1/archive.sh"', "_", str(STAGES)],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -2574,6 +2533,7 @@ class EvalReportTests(unittest.TestCase):
                 self.assertIn(f"{folder}/report.html", names)
                 self.assertIn(f"{folder}/container_mem.jsonl", names)
                 self.assertIn(f"{folder}/skipped_questions.txt", names)
+                self.assertIn(f"{folder}/cost-token-report.md", names)
                 self.assertIn(f"{folder}/icode/alpha/attempt-01/result.json", names)
                 self.assertIn(f"{folder}/icode/alpha/attempt-02/result.json", names)
                 self.assertIn(f"{folder}/icode/alpha/attempt-01/agent.patch", names)
@@ -2687,7 +2647,7 @@ class ProvenanceTests(unittest.TestCase):
         path.write_text(body, encoding="utf-8")
         path.chmod(0o755)
 
-    def _run_p1(self, version_line: str) -> subprocess.CompletedProcess[str]:
+    def _run_env_harbor(self, version_line: str) -> subprocess.CompletedProcess[str]:
         tmp = Path(self._p1_tmp)
         bindir = tmp / "bin"
         bindir.mkdir()
@@ -2717,30 +2677,30 @@ class ProvenanceTests(unittest.TestCase):
         env["BENCHMARK"] = "deepswe"
         env.pop("OFFICIAL", None)
         return subprocess.run(
-            ["bash", str(ROOT / "pipeline" / "stages" / "p1_pier.sh")],
+            ["bash", str(STAGES / "env" / "harbor.sh")],
             check=False,
             capture_output=True,
             text=True,
             env=env,
         )
 
-    def test_p1_harbor_pin_rejects_wrong_version(self):
+    def test_env_harbor_reinstalls_and_rejects_a_wrong_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._p1_tmp = tmp
-            proc = self._run_p1("9.9.9")
+            proc = self._run_env_harbor("harbor 9.9.9")
             log = Path(tmp) / "uv.log"
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("wanted 0.22.0", proc.stderr)
-            self.assertIn("harbor==0.22.0", log.read_text(encoding="utf-8"))
+            self.assertIn("tool install --force harbor==0.22.0", log.read_text(encoding="utf-8"))
             self.assertFalse((Path(tmp) / "work" / "harbor_version.txt").is_file())
 
-    def test_p1_harbor_pin_accepts_matching_version(self):
+    def test_env_harbor_keeps_a_matching_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._p1_tmp = tmp
-            proc = self._run_p1("0.22.0")
+            proc = self._run_env_harbor("0.22.0")
             log = Path(tmp) / "uv.log"
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("harbor==0.22.0", log.read_text(encoding="utf-8"))
+            self.assertFalse(log.exists(), "a matching harbor must not be reinstalled")
             recorded = (Path(tmp) / "work" / "harbor_version.txt").read_text(encoding="utf-8").strip()
             self.assertEqual(recorded, "0.22.0")
 
@@ -3521,7 +3481,7 @@ class AgentIsolationTests(unittest.TestCase):
             inside.mkdir()
             self.assertTrue(any("overlaps" in err for err in check_mounts(build_mounts(inside), inside, forbid)))
 
-    def _run_p5_dry(
+    def _run_eval_dry(
         self, tmp: Path, host_root: Path | None = None, extra_env: dict | None = None
     ) -> tuple[subprocess.CompletedProcess[str], Path]:
         work = tmp / "eval"
@@ -3578,12 +3538,18 @@ class AgentIsolationTests(unittest.TestCase):
                 "N_ROLLOUTS": "1",
                 "CPU_LOCK_QTY": "1",
                 "BUILD_NUMBER": "dry",
-                "MAC_K3D_P5_DRY_RUN": "1",
+                "MAC_K3D_HARBOR_DRY_RUN": "1",
             }
         )
         env.update(extra_env or {})
+        stages = ROOT / "pipeline" / "stages"
+        script = (
+            "set -e\n"
+            'for step in tasks/icode_sandbox tasks/isolation tasks/leakscan; do bash "$1/$step.sh"; done\n'
+            'bash "$1/evaluate.sh"\n'
+        )
         proc = subprocess.run(
-            ["bash", str(ROOT / "pipeline" / "stages" / "p5_harness.sh")],
+            ["bash", "-c", script, "_", str(stages)],
             capture_output=True,
             text=True,
             check=False,
@@ -3592,16 +3558,19 @@ class AgentIsolationTests(unittest.TestCase):
         self.assertFalse(marker.exists(), "dry run must not call harbor run")
         return proc, work
 
-    def test_p5_dry_run_has_no_gitcode_token_and_read_only_mount(self):
+    def test_eval_dry_run_has_no_gitcode_token_and_read_only_mount(self):
         with tempfile.TemporaryDirectory() as tmp:
-            proc, work = self._run_p5_dry(Path(tmp))
+            proc, work = self._run_eval_dry(Path(tmp))
             output = proc.stdout + proc.stderr
             self.assertEqual(proc.returncode, 0, output)
-            line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("P5 harbor dry-run")), "")
+            line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("harbor dry-run")), "")
             self.assertIn("harbor run", line)
             self.assertIn('"read_only": true', line)
             self.assertIn('"target": "/opt/icode-host"', line)
             self.assertIn("DEEPSEEK_API_KEY=***", line)
+            tokens = line.split()
+            hosts = [tokens[i + 1] for i, tok in enumerate(tokens) if tok == "--allow-agent-host"]
+            self.assertEqual(hosts, ["api.deepseek.com", "api.deepseek.ai"])
             self.assertNotIn("GITCODE_TOKEN", output)
             self.assertNotIn(self.SENTINEL_TOKEN, output)
             self.assertNotIn(self.SENTINEL_KEY, output)
@@ -3618,7 +3587,9 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertEqual(isolation["leak_scan"]["scanner"], "mac-k3d-leakscan-v1")
             self.assertEqual(isolation["leak_scan"]["hit_tasks"], [])
             self.assertEqual(isolation["leak_scan"]["statuses"], {"too_small": 1})
-        stage = (ROOT / "pipeline" / "stages" / "p5_harness.sh").read_text(encoding="utf-8")
+            self.assertEqual(isolation["network_allowlist"]["version"], "mac-k3d-network-allowlist-v1")
+            self.assertEqual(isolation["network_allowlist"]["agent_hosts"], ["api.deepseek.com", "api.deepseek.ai"])
+        stage = (ROOT / "pipeline" / "stages" / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
         self.assertIn("unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT", stage)
 
     def test_lolbench_image_of_another_arch_is_rebuilt(self):
@@ -3696,8 +3667,8 @@ class AgentIsolationTests(unittest.TestCase):
                 self.assertEqual("MTU 1280 but Docker's bridge uses 1500" in proc.stderr, warns,
                                  (tunnel_mtu, bridge_mtu, proc.stderr))
                 self.assertEqual("daemon.json" in proc.stderr, warns)
-        for stage in ("p0_prereqs.sh", "p5_harness.sh"):
-            self.assertIn("\nwarn_docker_mtu\n", (ROOT / "pipeline" / "stages" / stage).read_text(encoding="utf-8"))
+        for stage in ("env/host.sh", "evaluate/canary.sh", "evaluate/harbor_run.sh"):
+            self.assertIn("\nwarn_docker_mtu\n", (STAGES / stage).read_text(encoding="utf-8"))
 
     @staticmethod
     def _dry_line(stdout: str, prefix: str) -> list[str]:
@@ -3717,13 +3688,13 @@ class AgentIsolationTests(unittest.TestCase):
             out.append(tok)
         return out
 
-    def test_p5_canary_runs_with_icode_flags_mounts_and_env(self):
+    def test_canary_runs_with_icode_flags_mounts_and_env(self):
         with tempfile.TemporaryDirectory() as tmp:
-            proc, work = self._run_p5_dry(Path(tmp), extra_env={"CANARY": "only"})
+            proc, work = self._run_eval_dry(Path(tmp), extra_env={"CANARY": "only"})
             output = proc.stdout + proc.stderr
             self.assertEqual(proc.returncode, 0, output)
-            icode = self._dry_line(proc.stdout, "P5 harbor dry-run")
-            canary = self._dry_line(proc.stdout, "P5 canary dry-run")
+            icode = self._dry_line(proc.stdout, "harbor dry-run")
+            canary = self._dry_line(proc.stdout, "canary dry-run")
             self.assertTrue(icode and canary, output)
             self.assertIn("canary_harbor_agent:CanaryAgent", canary)
             self.assertIn("--disable-verification", canary)
@@ -3745,25 +3716,25 @@ class AgentIsolationTests(unittest.TestCase):
             )
             self.assertTrue((work / "canary" / "jenkins-dry" / "alpha" / "canary_spec.json").is_file())
 
-    def test_p5_canary_off_prints_no_canary_line(self):
+    def test_canary_off_prints_no_canary_line(self):
         with tempfile.TemporaryDirectory() as tmp:
-            proc, _ = self._run_p5_dry(Path(tmp))
+            proc, _ = self._run_eval_dry(Path(tmp))
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertNotIn("P5 canary dry-run", proc.stdout)
+            self.assertNotIn("canary dry-run", proc.stdout)
 
-    def test_p5_canary_allow_host_opens_one_host_for_the_canary_only(self):
+    def test_canary_allow_host_opens_one_host_for_the_canary_only(self):
         with tempfile.TemporaryDirectory() as tmp:
-            proc, _ = self._run_p5_dry(Path(tmp), extra_env={"CANARY": "on", "CANARY_ALLOW_HOST": "github.com"})
+            proc, _ = self._run_eval_dry(Path(tmp), extra_env={"CANARY": "on", "CANARY_ALLOW_HOST": "github.com"})
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            icode = self._dry_line(proc.stdout, "P5 harbor dry-run")
-            canary = self._dry_line(proc.stdout, "P5 canary dry-run")
+            icode = self._dry_line(proc.stdout, "harbor dry-run")
+            canary = self._dry_line(proc.stdout, "canary dry-run")
             self.assertIn("github.com", canary)
             self.assertNotIn("github.com", icode)
             spec_arg = canary[canary.index("--ak") + 1]
             spec = json.loads(Path(spec_arg[len("spec="):]).read_text(encoding="utf-8"))
             self.assertEqual(spec["allow_host"], "github.com")
 
-    def test_p5_official_refuses_canary_off_and_allow_host(self):
+    def test_official_refuses_canary_off_and_allow_host(self):
         cases = (
             ({"OFFICIAL": "1", "CANARY": "off"}, "OFFICIAL=1 runs the isolation canary"),
             ({"OFFICIAL": "1", "CANARY_ALLOW_HOST": "github.com"}, "OFFICIAL=1 refuses it"),
@@ -3771,18 +3742,18 @@ class AgentIsolationTests(unittest.TestCase):
         )
         for extra, message in cases:
             with tempfile.TemporaryDirectory() as tmp:
-                proc, _ = self._run_p5_dry(Path(tmp), extra_env=extra)
+                proc, _ = self._run_eval_dry(Path(tmp), extra_env=extra)
                 self.assertNotEqual(proc.returncode, 0, (extra, proc.stdout))
                 self.assertIn(message, proc.stderr, extra)
-                self.assertNotIn("P5 harbor dry-run", proc.stdout)
+                self.assertNotIn("harbor dry-run", proc.stdout)
 
-    def test_p5_refuses_icode_root_that_contains_benchmark(self):
+    def test_isolation_refuses_icode_root_that_contains_benchmark(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp) / "eval"
-            proc, _ = self._run_p5_dry(Path(tmp), host_root=work)
+            proc, _ = self._run_eval_dry(Path(tmp), host_root=work)
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("overlaps benchmark path", proc.stderr)
-            self.assertNotIn("P5 harbor dry-run", proc.stdout)
+            self.assertNotIn("harbor dry-run", proc.stdout)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# P1 — ensure Harbor for DeepSWE, LoLBench, and SWE-bench Pro
+# env/harbor: Harbor at HARBOR_VERSION (pipeline/config/toolchain.env), the same
+# pin `mac-k3d setup` installs. Reinstalls only when the version differs.
 set -euo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
+# shellcheck source=../_common.sh
+source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 
 ensure_uv() {
   have uv && return 0
@@ -11,23 +13,20 @@ ensure_uv() {
   have uv || die "uv still not on PATH after install"
 }
 
-case "${BENCHMARK:-deepswe}" in
-  deepswe | lolbench | swebenchpro | "")
-    ;;
-  *)
-    die "unknown BENCHMARK=${BENCHMARK} (use deepswe, lolbench, or swebenchpro)"
-    ;;
-esac
+harbor_version() {
+  have harbor || return 0
+  harbor --version 2>/dev/null | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/.*[[:space:]]//'
+}
 
-progress 15 "P1: ensuring harbor"
-ensure_uv
-echo "Installing harbor ${HARBOR_VERSION}…"
-uv tool install "harbor==${HARBOR_VERSION}"
 export PATH="${HOME}/.local/bin:${PATH}"
-have harbor || die "harbor still not on PATH after install. Try: uv tool install \"harbor==${HARBOR_VERSION}\""
-harbor --help >/dev/null || true
-got="$(harbor --version 2>/dev/null | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+got="$(harbor_version)"
+if [ "$got" != "$HARBOR_VERSION" ]; then
+  ensure_uv
+  echo "Installing harbor ${HARBOR_VERSION} (found ${got:-none})…"
+  uv tool install --force "harbor==${HARBOR_VERSION}"
+  got="$(harbor_version)"
+fi
+have harbor || die "harbor still not on PATH after install. Try: uv tool install --force \"harbor==${HARBOR_VERSION}\""
 [ "$got" = "$HARBOR_VERSION" ] || die "harbor --version is '${got}', wanted ${HARBOR_VERSION}"
 printf '%s\n' "$got" >"$WORKDIR/harbor_version.txt"
 echo "OK harbor=$(command -v harbor) version=$got"
-progress 20 "P1 complete"

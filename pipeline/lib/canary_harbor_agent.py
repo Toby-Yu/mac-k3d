@@ -1,6 +1,6 @@
 """Harbor isolation canary (report P0.6): iCode's sandbox, probed instead of used.
 
-P5 runs it with the same flags, mounts and environment as ICodeAgent, plus
+evaluate/canary runs it with the same flags, mounts and environment as ICodeAgent, plus
 `--ak spec=<canary_verdict.py spec output>` and `--disable-verification`. The
 install is ICodeAgent's own; run() never starts iCode and never calls the model.
 canary_probe.sh writes the facts to /logs/agent, and canary_verdict.py on the

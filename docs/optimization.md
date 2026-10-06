@@ -30,7 +30,7 @@ Admission and throughput use different numbers on purpose:
 
 If one declared task does not fit under either test, the build **fails before the first container starts** with the shortfall printed. That is deliberate: a half-resourced run produces numbers nobody can use.
 
-After the question list is chosen, P5 prints the plan and `artifact.json` keeps it:
+After the question list is chosen, `evaluate/slots` prints the plan and `artifact.json` keeps it:
 
 ```json
 "resources": {
@@ -50,11 +50,11 @@ python3 pipeline/lib/task_resources.py plan \
 
 On Jenkins, `CPU_LOCK_QTY` is not a parameter: the `Evaluate` stage locks every `<node>-core-N` resource of its worker and exports how many it got. A local stage run that leaves `CPU_LOCK_QTY` unset uses 1. Set `EVAL_RESOURCE_CAP=0` only for fixture tests that must ignore RAM.
 
-Later stages do not re-derive any of this: `eval_parallel_degree` reads the `eval_resources.json` that P5 wrote, so the report describes the run that happened rather than a fresh guess about the current machine.
+Later stages do not re-derive any of this: `eval_parallel_degree` reads the `eval_resources.json` that `evaluate/slots` wrote, so the report describes the run that happened rather than a fresh guess about the current machine.
 
 ## Memory trace
 
-A single `harbor run` has no one "active question", so the memory trace is per build rather than per question. P5's heartbeat appends a `docker stats` snapshot to `harness/container_mem.jsonl` for containers whose names contain `_icode_` or `__env-main-`, ignoring sidecars. The largest `peak_gb` is kept in `harness/container_mem_peak_gb`, and the next build feeds it back in as `--measured-peak-gb` so a worker learns its real ceiling over time.
+A single `harbor run` has no one "active question", so the memory trace is per build rather than per question. The `evaluate/harbor_run` heartbeat appends a `docker stats` snapshot to `harness/container_mem.jsonl` for containers whose names contain `_icode_` or `__env-main-`, ignoring sidecars. The largest `peak_gb` is kept in `harness/container_mem_peak_gb`, and the next build feeds it back in as `--measured-peak-gb` so a worker learns its real ceiling over time.
 
 ```bash
 python3 pipeline/lib/task_resources.py sample --harness-dir eval-runs/harness --slots 2

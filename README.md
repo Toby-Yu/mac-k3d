@@ -7,13 +7,14 @@ Turn a **new Linux or Mac** into a **Jenkins controller or worker**. Download a 
 This project is a CI path for AI harness evaluation: many short jobs, each in its own sandbox, so one agent cannot read answers online or touch another run.
 
 - **Jenkins** queues one task per build, caps CPU with a lock, and discards the job when it finishes. That is the parallelism and the short lifetime.
-- **Harbor** runs DeepSWE, LoLBench, and SWE-bench Pro. The agent allowlist is the isolation in this tree: the sandbox may reach the DeepSeek API and nothing else.
+- **Harbor** (pinned in `pipeline/config/toolchain.env`) runs DeepSWE, LoLBench, and SWE-bench Pro as a black box. The agent allowlist (`pipeline/config/network-allowlist-v1.json`) is the isolation in this tree: the sandbox may reach the DeepSeek API and nothing else.
+- **mac-k3d** prepares the machine and each build's tasks, calls Harbor once, then runs anti-cheat, scoring, the report and the archive. The seven phases and every Harbor flag: [docs/pipeline.md](docs/pipeline.md).
 - **k3d** already hosts Jenkins on the controller. The next sandbox is a short-lived k3d cluster per build: a default-deny NetworkPolicy (DeepSeek API only), image pulls through a Harbor registry proxy cache, then the cluster is deleted. That cluster, the NetworkPolicy, and the registry cache are **not** in this tree yet. Do not report them as shipped.
 
 Pier is not the eval runner. It keeps a Docker Compose sandbox on the worker host, so it does not give a fresh Kubernetes network, a NetworkPolicy, or a registry cache. One Harbor runner is the path that can move onto that k3d sandbox next. End-to-end story: [docs/workflow.md](docs/workflow.md).
 
 - **Controller** — Docker → k3d → Jenkins UI (`http://localhost:17070`)
-- **Worker** — Docker + Java + Jenkins inbound agent (not a k3d node)
+- **Worker** — Docker + Java + git + the pinned Harbor + Jenkins inbound agent (not a k3d node)
 
 Users do **not** need Rust. Developers who build from source do.
 
@@ -25,8 +26,8 @@ Leftovers it cannot hide:
 
 - **Linux:** one logout after the `docker` group is added, then re-run `mac-k3d setup`
 - **macOS:** first Docker Desktop window (and Homebrew if missing)
-- **sudo** / brew for package install
-- **Worker:** paste a Jenkins API token from the UI
+- **sudo** / brew for package install (without sudo, setup saves your answers and prints the root commands for an administrator)
+- **Worker:** paste a Jenkins API token from the UI into `worker.yaml` (`api_user` / `api_token` are always there, empty until filled in)
 
 If auto-install fails, install Docker yourself and re-run setup ([docs/new-machine.md](docs/new-machine.md)).
 
@@ -82,7 +83,7 @@ mac-k3d clean --yes
 
 ```bash
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
-# Role: CI worker — Docker, Java, Jenkins agent (Harbor optional)
+# Role: CI worker — Docker, Java, git, Jenkins agent; Harbor is installed at the pinned version
 # Jenkins URL: press Enter for the wizard default, or type http://localhost:17070 for a controller on this PC
 mac-k3d prepare --non-interactive -c ~/.config/mac-k3d/worker.yaml
 ```

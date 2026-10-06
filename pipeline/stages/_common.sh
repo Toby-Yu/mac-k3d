@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Shared env for pipeline stage scripts (pipeline/stages).
+# Shared env and helpers for the phase scripts (pipeline/stages/<phase>.sh) and
+# their steps (pipeline/stages/<phase>/<step>.sh). Every step sources this file
+# in its own process; steps hand state to each other only through $WORKDIR.
 set -euo pipefail
 
 # Repo or share dir that contains pipeline/stages + pipeline/lib.
@@ -17,9 +19,21 @@ export OUTPUT_DIR="${MAC_K3D_EVAL_OUTPUT:-$WORKDIR/reports}"
 export DEEPSWE_DIR="${DEEPSWE_DIR:-$WORKDIR/deep-swe}"
 export LOLBENCH_DIR="${LOLBENCH_DIR:-$WORKDIR/lolbench}"
 export LOLBENCH_GIT_URL="${LOLBENCH_GIT_URL:-https://github.com/MichaelLing83/LoLBench-Preview.git}"
-# P0.2 pins. Checked out on this worker on 2026-10-02: Harbor 0.22.0,
-# DeepSWE 113 tasks, LoLBench 20 harbor tasks. Override per run; do not float.
-export HARBOR_VERSION="${HARBOR_VERSION:-0.22.0}"
+# Tool pins (Harbor, compose, buildx) shared with `mac-k3d setup`. A value the
+# job or caller already exported wins over the file.
+TOOLCHAIN_ENV="$ROOT/pipeline/config/toolchain.env"
+[ -f "$TOOLCHAIN_ENV" ] || { echo "ERROR: missing $TOOLCHAIN_ENV" >&2; exit 1; }
+while IFS='=' read -r _pin_key _pin_value || [ -n "$_pin_key" ]; do
+  [[ "$_pin_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+  if [ -z "${!_pin_key:-}" ]; then
+    export "${_pin_key}=${_pin_value}"
+  else
+    export "${_pin_key?}"
+  fi
+done <"$TOOLCHAIN_ENV"
+unset _pin_key _pin_value
+# Benchmark pins. Checked out on this worker on 2026-10-02: DeepSWE 113 tasks,
+# LoLBench 20 harbor tasks. Override per run; do not float.
 export DEEPSWE_GIT_URL="${DEEPSWE_GIT_URL:-https://github.com/datacurve-ai/deep-swe}"
 export DEEPSWE_REF="${DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea}"
 export DEEPSWE_TASK_COUNT="${DEEPSWE_TASK_COUNT:-113}"
@@ -39,7 +53,6 @@ export TASK="${TASK:-}"
 export HARNESS="${HARNESS:-icode}"
 export LLM="${LLM:-deepseek}"
 export BENCHMARK="${BENCHMARK:-deepswe}"
-export PIER_AGENT_DIR="$PIPELINE_LIB/pier-agent-icode"
 export BASELINE_DIR="$WORKDIR/baseline"
 export HARNESS_DIR="$WORKDIR/harness"
 export RESULTS_DIR="$WORKDIR/results"
@@ -62,6 +75,15 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# Run each named step (stages/<phase>/<step>.sh) in its own process, in order.
+run_steps() {
+  local step
+  for step in "$@"; do
+    echo "== $step"
+    bash "$PIPELINE_STAGES/$step.sh"
+  done
+}
+
 # Docker daemon architecture in image terms (amd64 / arm64); empty if unknown.
 docker_host_arch() {
   case "$(docker info --format '{{.Architecture}}' 2>/dev/null || true)" in
@@ -79,22 +101,22 @@ ensure_task_image() {
     image_arch="$(docker image inspect "$image" --format '{{.Architecture}}' 2>/dev/null || true)"
     host_arch="$(docker_host_arch)"
     if [ -z "$image_arch" ] || [ -z "$host_arch" ] || [ "$image_arch" = "$host_arch" ]; then
-      echo "P5 harbor: using local image $image"
+      echo "images: using local image $image"
       return 0
     fi
     [ -f "$env_dir/Dockerfile" ] || die "local $image is $image_arch, this worker is $host_arch, and $env_dir/Dockerfile is missing"
-    echo "P5 harbor: local $image is $image_arch, this worker is $host_arch; docker build --progress=plain $image"
+    echo "images: local $image is $image_arch, this worker is $host_arch; docker build --progress=plain $image"
     docker build --progress=plain -t "$image" "$env_dir"
     return 0
   fi
   leftover="$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^${tid}__.*__env-main" | head -n 1 || true)"
   if [ -n "$leftover" ]; then
-    echo "P5 harbor: retag $leftover -> $image (skip Harbor force build; it hangs after tagging)"
+    echo "images: retag $leftover -> $image (skip Harbor force build; it hangs after tagging)"
     docker tag "$leftover" "$image"
     return 0
   fi
   [ -f "$env_dir/Dockerfile" ] || die "missing $env_dir/Dockerfile and no local $image"
-  echo "P5 harbor: Hub tag is arm64-only; docker build --progress=plain $image"
+  echo "images: Hub tag is arm64-only; docker build --progress=plain $image"
   docker build --progress=plain -t "$image" "$env_dir"
 }
 
@@ -114,22 +136,37 @@ warn_docker_mtu() {
   echo "WARNING: disconnect the VPN, or set \"mtu\": $host_mtu and \"default-network-opts\": {\"bridge\": {\"com.docker.network.driver.mtu\": \"$host_mtu\"}} in /etc/docker/daemon.json and restart Docker." >&2
 }
 
-# Isolation canary (P0.6). CANARY=official (default) runs it on official runs only;
+official_run() {
+  case "$(printf '%s' "${OFFICIAL:-0}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+  esac
+  return 1
+}
+
+# Isolation canary. CANARY=official (default) runs it on official runs only;
 # on runs it once before the rollouts; only runs it on every selected task and
-# stops after P5.
+# stops after the evaluate phase.
 canary_mode() {
   local raw
   raw="$(printf '%s' "${CANARY:-official}" | tr '[:upper:]' '[:lower:]')"
   case "$raw" in
     official)
-      case "$(printf '%s' "${OFFICIAL:-0}" | tr '[:upper:]' '[:lower:]')" in
-        1|true|yes|on) echo on ;;
-        *) echo off ;;
-      esac
+      if official_run; then echo on; else echo off; fi
       ;;
     on|only|off) echo "$raw" ;;
     *) return 1 ;;
   esac
+}
+
+# Refuse canary settings an official run must not use. Checked in env (fail
+# before any clone) and again where the canary runs.
+check_canary_settings() {
+  local mode
+  mode="$(canary_mode)" || die "CANARY must be official, on, only or off (got ${CANARY:-})"
+  if official_run; then
+    [ "$mode" != off ] || die "OFFICIAL=1 runs the isolation canary; remove CANARY=off"
+    [ -z "${CANARY_ALLOW_HOST:-}" ] || die "CANARY_ALLOW_HOST breaks isolation on purpose; OFFICIAL=1 refuses it"
+  fi
 }
 
 # Check out url at sha. A directory already at that commit is kept.
@@ -147,7 +184,7 @@ pin_benchmark_sha() {
   else
     head="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
     if [ "$head" != "$sha" ]; then
-      echo "P2: $dir is at ${head:-unknown}; fetching $sha"
+      echo "benchmark: $dir is at ${head:-unknown}; fetching $sha"
       GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch --depth 1 origin "$sha"
       git -c advice.detachedHead=false -C "$dir" checkout --force --detach "$sha" \
         || git -c advice.detachedHead=false -C "$dir" checkout --force --detach FETCH_HEAD
@@ -232,6 +269,38 @@ load_local_env() {
 
 load_local_env
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
+
+# What the agent talks to. tasks/isolation.sh checks this host against
+# pipeline/config/network-allowlist-v1.json; the report records it.
+export ICODE_MODEL="${ICODE_MODEL:-$DEEPSEEK_MODEL}"
+export ICODE_API_BASE="${ICODE_API_BASE:-https://api.deepseek.com/v1}"
+if [ -z "${ICODE_PROVIDER:-}" ]; then
+  case "$ICODE_API_BASE" in
+    *deepseek.com*) export ICODE_PROVIDER=DeepSeek ;;
+    *) export ICODE_PROVIDER=OpenAI ;;
+  esac
+fi
+export ICODE_REASONING_EFFORT="${ICODE_REASONING_EFFORT:-high}"
+
+# The iCode tree Harbor mounts read-only at /opt/icode-host (tasks/icode.sh).
+icode_host_root() {
+  local bin
+  if [ -s "$WORKDIR/icode_host_root.txt" ]; then
+    cat "$WORKDIR/icode_host_root.txt"
+    return 0
+  fi
+  [ -s "$WORKDIR/icode_bin_path.txt" ] || die "no iCode in $WORKDIR; run the tasks phase first"
+  bin="$(cat "$WORKDIR/icode_bin_path.txt")"
+  (cd "$(dirname "$bin")" && pwd)
+}
+
+# The run folder report/render.sh wrote; the archive steps read it.
+report_dir() {
+  local dir
+  dir="$(cat "$WORKDIR/report_dir.txt" 2>/dev/null || true)"
+  [ -n "$dir" ] && [ -f "$dir/artifact.json" ] || die "no report in $WORKDIR; run the report phase first"
+  printf '%s\n' "$dir"
+}
 
 # Memory (GB) and disk (GB) fail-fast. Override with MAC_K3D_MIN_RAM_GB / MAC_K3D_MIN_DISK_GB.
 ensure_eval_preflight() {
@@ -423,7 +492,7 @@ selected_tasks_csv_source() {
 write_selected_tasks() {
   local list="$WORKDIR/selected_tasks.txt" n root tid csv skip
   root="$(benchmark_tasks_dir)"
-  [ -d "$root" ] || die "run P2 first (missing $root)"
+  [ -d "$root" ] || die "run the tasks phase first (missing $root)"
   csv="$(selected_tasks_csv_source || true)"
   if [ -n "$csv" ]; then
     : >"$list"

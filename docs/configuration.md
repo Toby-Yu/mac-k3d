@@ -55,11 +55,13 @@ dependencies:
   helm:
     source: skip
   harbor:
-    source: skip          # install via `uv tool install harbor` or pipx
+    source: skip          # worker / standalone eval: setup installs HARBOR_VERSION from pipeline/config/toolchain.env with uv
   java:
     source: skip          # required on workers (Jenkins agent)
+  git:
+    source: skip          # required on workers (the tasks phase clones benchmarks and iCode)
 
-lolbench:
+lolbench:                 # not asked any more: the pipeline clones LoLBench itself at its pin
   path: null
   source: skip            # skip | existing | clone | release
   git_url: https://github.com/MichaelLing83/LoLBench-Preview.git
@@ -71,8 +73,8 @@ jenkins_agent:
   remote_fs: null
   agent_jar: null
   cpu_cores: 0            # logical cores recorded at prepare
-  api_user: null          # CLI registration only; plaintext for now → Keychain later
-  api_token: null         # not for LLM/Git — those live in Jenkins Credentials (see secrets.md)
+  api_user: ''            # worker: always written, '' until filled in; CLI registration only
+  api_token: ''           # plaintext for now; not for LLM/Git — those live in Jenkins Credentials (see secrets.md)
 
 resources:
   cpu_cores_label: CPU_CORES
@@ -89,7 +91,7 @@ All fields are optional; omitted keys use defaults above.
 |-------|---------|
 | `standalone` | Local k3d only |
 | `controller` | Jenkins in-cluster on this Mac |
-| `worker` | Jenkins agent + Harbor/LoLBench; no in-cluster Jenkins |
+| `worker` | Jenkins agent + the pinned Harbor, Java and git; no cluster, no in-cluster Jenkins |
 
 ### `cluster`
 
@@ -229,7 +231,7 @@ LLM API keys and forge PATs are **not** fields in `config.yaml`. Configure them 
 
 Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml` (mode 0600); `mac-k3d config` creates Jenkins Secret text credentials and clears uploaded entries.
 
-`jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys.
+`jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys. A worker's YAML always has both keys; `''` means not filled in yet, and `config` then prints which keys to fill in. `mac-k3d export` writes `api_token: ''`.
 
 ### `jenkins_job` (controller)
 
@@ -245,7 +247,7 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `default_llm` | *(empty → `deepseek`)* | Catalog LLM family (`mac-k3d set --llm`) |
 | `default_deepseek_model` | *(empty → `deepseek-v4-pro`)* | Catalog Chat Completions id (`mac-k3d set --model`; also `deepseek-flash`) |
 | `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench` \| `swebenchpro`) |
-| `ui_profile` | `user` | `user` hides developer parameters (pipeline ref, pins, canary, `SHARD_SIZE`) as hidden parameters that keep their defaults; `developer` shows them. `mac-k3d set --ui-profile`, then `config --skip-secrets` |
+| `ui_profile` | `user` | `user` hides developer parameters (pins, canary, `SHARD_SIZE`) as hidden parameters that keep their defaults; `developer` shows them. `mac-k3d set --ui-profile`, then `config --skip-secrets` |
 | `default_shard_size` | `10` | Default `SHARD_SIZE` (questions per shard) for `some_task` / `full_suite_task` (`mac-k3d set --shard-size`) |
 
 ## Environment variables

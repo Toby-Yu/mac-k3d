@@ -13,6 +13,7 @@ pub struct DiscoveredDeps {
     pub helm: Option<DiscoveredTool>,
     pub harbor: Option<DiscoveredTool>,
     pub java: Option<DiscoveredTool>,
+    pub git: Option<DiscoveredTool>,
     pub uv: Option<DiscoveredTool>,
     pub pipx: Option<DiscoveredTool>,
 }
@@ -33,6 +34,7 @@ pub fn discover_all() -> DiscoveredDeps {
         helm: discover_on_path("helm"),
         harbor: discover_on_path("harbor"),
         java: discover_java(),
+        git: discover_on_path("git"),
         uv: discover_on_path("uv"),
         pipx: discover_on_path("pipx"),
     }
@@ -143,8 +145,7 @@ fn version_of(name: &str, binary: &PathBuf) -> Option<String> {
         return None;
     }
     let flag = match name {
-        "docker" | "java" => "--version",
-        "harbor" => "--version",
+        "docker" | "java" | "harbor" | "git" => "--version",
         _ => "version",
     };
     let output = Command::new(binary).arg(flag).output().ok()?;
@@ -164,32 +165,6 @@ pub fn which(name: &str) -> Option<PathBuf> {
         let candidate = dir.join(name);
         candidate.exists().then_some(candidate)
     })
-}
-
-/// Search common locations for a LoLBench-Preview checkout.
-pub fn find_lolbench_checkouts() -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut candidates = Vec::new();
-
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        candidates.push(home.join("github/LoLBench-Preview"));
-        candidates.push(home.join("src/LoLBench-Preview"));
-        candidates.push(home.join("LoLBench-Preview"));
-    }
-
-    for root in platform::scan_extra_mount_roots() {
-        candidates.push(root.join("github/LoLBench-Preview"));
-        candidates.push(root.join("LoLBench-Preview"));
-    }
-
-    for path in candidates {
-        if path.join("harbor_tasks").is_dir() || path.join("scripts/run_task.sh").is_file() {
-            if !found.contains(&path) {
-                found.push(path);
-            }
-        }
-    }
-    found
 }
 
 impl DiscoveredTool {
@@ -228,6 +203,7 @@ pub fn to_dependencies_config(deps: &DiscoveredDeps) -> DependenciesConfig {
         helm: default_entry(&deps.helm),
         harbor: default_entry(&deps.harbor),
         java: default_entry(&deps.java),
+        git: default_entry(&deps.git),
     }
 }
 

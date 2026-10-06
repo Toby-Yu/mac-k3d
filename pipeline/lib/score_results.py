@@ -236,7 +236,7 @@ def find_pier_task_dir(harness_dir: Path, tid: str) -> Path | None:
 
 
 def load_icode_git() -> dict | None:
-    """P3 writes WORKDIR/icode_git.json so a PR SHA eval can be identified later."""
+    """tasks/icode writes WORKDIR/icode_git.json so a PR SHA eval can be identified later."""
     candidates: list[Path] = []
     for env in ("WORKDIR", "MAC_K3D_EVAL_WORKDIR"):
         raw = os.environ.get(env)

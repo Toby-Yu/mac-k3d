@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harbor --mounts for the iCode agent, and the allowlist P5 checks before any rollout.
+"""Harbor --mounts for the iCode agent, and the allowlist tasks/isolation checks before any rollout.
 
 The only mount is the iCode host tree, read-only, at /opt/icode-host. It must not
 be, contain, or sit inside a benchmark checkout (solution/ and tests/private).
@@ -53,7 +53,7 @@ def check_mounts(mounts: object, icode_root: Path, forbidden: list[Path]) -> lis
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Agent mounts for P5")
+    parser = argparse.ArgumentParser(description="Agent mounts for the evaluate phase")
     sub = parser.add_subparsers(dest="cmd", required=True)
     build = sub.add_parser("build")
     build.add_argument("--icode-root", required=True)

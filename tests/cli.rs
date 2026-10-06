@@ -83,6 +83,25 @@ fn pipeline_extract_needs_no_config() {
 }
 
 #[test]
+fn missing_explicit_config_points_at_setup() {
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("worker.yaml");
+    for cmd in ["config", "status", "start", "eval"] {
+        Command::cargo_bin("mac-k3d")
+            .unwrap()
+            .env("HOME", dir.path())
+            .args([cmd, "-c"])
+            .arg(&missing)
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains(format!(
+                "no config at {m}; run `mac-k3d setup -c {m}` first",
+                m = missing.display()
+            )));
+    }
+}
+
+#[test]
 fn setup_help_describes_wizard() {
     Command::cargo_bin("mac-k3d")
         .unwrap()
@@ -282,8 +301,8 @@ fn export_import_worker_yaml_scratch_dest() {
         .success();
     let portable_text = fs::read_to_string(&portable).unwrap();
     assert!(
-        !portable_text.contains("api_token"),
-        "export must strip api_token:\n{portable_text}"
+        portable_text.contains("api_token: ''"),
+        "export must blank api_token:\n{portable_text}"
     );
     assert!(
         !portable_text.contains("test-jenkins-token"),
@@ -317,8 +336,8 @@ fn export_import_worker_yaml_scratch_dest() {
         "{scratch_text}"
     );
     assert!(
-        !scratch_text.contains("api_token"),
-        "scratch import must not write api_token:\n{scratch_text}"
+        scratch_text.contains("api_token: ''"),
+        "scratch import must leave api_token blank:\n{scratch_text}"
     );
     assert!(
         !scratch_text.contains("test-jenkins-token"),
@@ -378,8 +397,8 @@ fn import_force_strips_dest_worker_token() {
     let dest_text = fs::read_to_string(&dest).unwrap();
     assert!(!dest_text.contains("leftover-token"), "{dest_text}");
     assert!(
-        !dest_text.contains("api_token"),
-        "import --force must not keep dest api_token:\n{dest_text}"
+        dest_text.contains("api_token: ''"),
+        "import --force must blank the dest api_token:\n{dest_text}"
     );
     assert!(
         dest_text.contains("http://43.107.42.252:17070"),

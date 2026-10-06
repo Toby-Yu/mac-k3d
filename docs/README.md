@@ -15,6 +15,7 @@ Do not add a new top-level folder for each feature branch. Update these product 
 | [export-import.md](export-import.md) | Worker vs controller YAML; `--force` vs `--skip-secrets` |
 | [secrets.md](secrets.md) | Jenkins credentials on the controller; local `.env` for `--local` |
 | [lolbench-jenkins.md](lolbench-jenkins.md) | The nine jobs `config` writes: three shapes x three benchmarks |
+| [pipeline.md](pipeline.md) | The seven phases, how Harbor and its flags are used, anti-cheat layers, outputs |
 | [evaluation.md](evaluation.md) | What a run stores, which job shape to pick, and what the fields mean |
 | [optimization.md](optimization.md) | Declared per-task resources, how many fit, RAM/disk gates |
 
@@ -25,7 +26,7 @@ Copy-paste checklists with this lab’s IPs live under [testing/](testing/).
 | Document | Description |
 |----------|-------------|
 | [testing/README.md](testing/README.md) | What belongs in `testing/` |
-| [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | E0–E8 / P0–P8 |
+| [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | E0–E8 / pipeline phases |
 | [testing/cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | This cloud VM + this PC |
 | [testing/testing-binary-initializer.md](testing/testing-binary-initializer.md) | Bootstrap sign-off |
 | [testing/clean-machine-binary-test.md](testing/clean-machine-binary-test.md) | Wipe or new PC → eval-ready |

@@ -6,7 +6,7 @@ This is the **binary-initializer** path (`setup`, Release asset). Full workflow:
 
 Use this document to **verify** a prebuilt `mac-k3d` on macOS and Linux.
 
-**Linux bootstrap sign-off is Task 0–5, Task 7, and Task 8.** Task 6 is macOS (later). Eval pipeline (Task 9 / P1–P8): [testing-eval-pipeline.md](testing-eval-pipeline.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../scripts/env_set_up/run_all.sh).
+**Linux bootstrap sign-off is Task 0–5, Task 7, and Task 8.** Task 6 is macOS (later). Eval pipeline (Task 9, the phases after `env`): [testing-eval-pipeline.md](testing-eval-pipeline.md). After setup, run [`scripts/env_set_up/run_all.sh`](../../scripts/env_set_up/run_all.sh).
 
 If live YAML already exists, `setup` shows **Config already exists** (Validate). To test as a **new user**, wipe first (Task 8a), then follow Task 8b / [clean-machine-binary-test.md](clean-machine-binary-test.md).
 
@@ -112,7 +112,7 @@ mac-k3d setup -c ~/.config/mac-k3d/config.yaml
 
 If **Config already exists** (re-test on this lab): choose **Validate existing config only**, then **yes** on **Continue and apply now (start/config)?**. If credentials are offered: **n** unless you have keys ready; empty Enter skips a key. GitCode/GitHub PATs are not required for Task 2.
 
-To test as a **completely new machine** (first-run Role wizard, not Validate), wipe live YAML first — **Task 8a** — then **Task 8b**. First-write prompt table: [clean-machine-binary-test.md](clean-machine-binary-test.md) (role **CI controller**, Harbor/LoLBench skip, Jenkins port **17070**). If host **8080** is taken, **`Host port 8080 in use → using 18080` is PASS**; Jenkins stays **17070**.
+To test as a **completely new machine** (first-run Role wizard, not Validate), wipe live YAML first — **Task 8a** — then **Task 8b**. First-write prompt table: [clean-machine-binary-test.md](clean-machine-binary-test.md) (role **CI controller**, Jenkins port **17070**). If host **8080** is taken, **`Host port 8080 in use → using 18080` is PASS**; Jenkins stays **17070**.
 
 Then verify:
 
@@ -148,7 +148,7 @@ Optional: `mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins` print
 
 Purpose: check `setup -c worker.yaml` registers a Jenkins agent (`config` only, not `start`), the systemd unit is active, and `start` on the worker file is rejected.
 
-Prerequisite: Jenkins API token from the UI (**admin** → **Configure** → **API Token**). `api_user` is **`admin`**. Paste the **token secret string**, not the token **name**. If the field is still empty, put `api_user` / `api_token` in `worker.yaml`, then `mac-k3d config -c ~/.config/mac-k3d/worker.yaml`.
+Prerequisite: Jenkins API token from the UI (**admin** → **Configure** → **API Token**). `api_user` is **`admin`**. Paste the **token secret string**, not the token **name**. If you skipped it, `worker.yaml` still has `api_user: ''` / `api_token: ''`; fill them in, then `mac-k3d config -c ~/.config/mac-k3d/worker.yaml`.
 
 command:
 
@@ -157,7 +157,7 @@ export PATH="$HOME/.local/bin:$PATH"
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 ```
 
-If **Config already exists** (re-test): **Validate existing config only**, then **yes** on apply. Worker apply runs **config** only.
+If **Config already exists** (re-test): **Use existing config (finish pending installs, then validate)**, then **yes** on apply. Worker apply runs **config** only.
 
 First-run (no live `worker.yaml`): Task 8a wipe, then Task 8b. At **Jenkins controller URL**, the wizard default is `http://43.107.42.252:17070`. Type a new URL or export `JENKINS_URL` for another controller. Same-PC controller: type `http://127.0.0.1:17070`. Do not paste a command block while prompts are open. If URL/name/labels are garbled: edit `jenkins_agent` in `worker.yaml` (`controller_url`, `api_user`, `api_token`, `name`, `labels`, `remote_fs`) then `mac-k3d config`, or **Re-run wizard (overwrite config)**.
 
@@ -181,13 +181,13 @@ expected results:
 - `OK worker status role=worker`
 - `OK Linux agent unit mac-k3d-jenkins-agent.service active`
 - `OK 03_check_worker complete`
-- Harbor / LoLBench / uv not required. Optional: Jenkins **Manage Jenkins → Nodes** shows the agent **online**.
+- `harbor: 0.22.0 found` or Harbor installed with `uv` into `~/.local/bin` (no root); `harbor 0.22.0: ok` from `config`. No k3d, kubectl or LoLBench question. Optional: Jenkins **Manage Jenkins → Nodes** shows the agent **online**.
 
 ---
 
-## Task 4 — full env check + eval-ready (P0)
+## Task 4 — full env check + eval-ready (`env` phase)
 
-Purpose: check controller, worker, and eval-ready scripts together, including `mac-k3d eval --stage p0`.
+Purpose: check controller, worker, and eval-ready scripts together, including `mac-k3d eval --stage env`.
 
 command:
 
@@ -202,11 +202,12 @@ expected results:
 - `OK SKIP_DOWNLOAD=1 — using existing binary` and `mac-k3d 0.4.0`
 - `OK 02_check_controller complete`
 - `OK 03_check_worker complete`
-- `OK eval --stage p0` / `PROGRESS 10% P0 complete`
+- `OK docker compose and buildx present`
+- `OK eval --stage env` / `PROGRESS 10% env complete`
 - `OK 04_check_eval_ready complete`
 - `OK ALL CHECKS PASSED`
 
-P0 only checks Docker Server, CLI `eval`, and the agent unit. It does not clone DeepSWE or call an LLM.
+The `env` phase checks RAM and disk, Docker Server, compose and buildx, the pinned Harbor, CLI `eval`, the agent unit, and (with a key) that the model is served. It does not clone DeepSWE or call an LLM.
 
 ---
 
@@ -354,7 +355,6 @@ Controller wizard (type answers; do not paste a multi-line block into a prompt):
 | Base directory | recommended |
 | Role | **CI controller (Jenkins in k3d)** |
 | Docker / k3d / kubectl / helm | **Use this installation** (or **Install**) |
-| Harbor / LoLBench | Skip |
 | Jenkins UI host port | **17070** |
 | Job defaults | Enter |
 | CI secrets | **yes** if you have `deepseek-api-key`; else skip / empty Enter |
@@ -378,11 +378,11 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 | Prompt | Choose |
 |--------|--------|
 | Role | **CI worker (Jenkins agent only)** |
-| Harbor / LoLBench | **No** |
-| Docker / Java | Use this installation |
+| Docker / Java / git | Use this installation |
+| Harbor | Not asked: setup installs the pinned 0.22.0 with `uv` (no root) |
 | Jenkins controller URL | wizard default `http://127.0.0.1:17070`. This lab cloud: type `http://43.107.42.252:17070` |
 | Jenkins API user | `admin` |
-| Jenkins API token | paste the **secret string** |
+| Jenkins API token | paste the **secret string** (Enter at the user skips both; fill them in `worker.yaml` later) |
 | Agent name / labels / remote root | Enter |
 | Write + apply | **yes** |
 
@@ -402,7 +402,7 @@ expected results:
 - `OK 02_check_controller complete` (status healthy, login HTTP 200, both jobs).
 - Worker: `agent.jar` from `http://localhost:17070/jnlpJars/agent.jar`; unit `mac-k3d-jenkins-agent.service` started; `ci-worker` missing is OK.
 - `OK 03_check_worker complete` (`start` rejected, role=worker, unit active).
-- `OK ALL CHECKS PASSED` (includes P0).
+- `OK ALL CHECKS PASSED` (includes the `env` phase).
 
 ---
 
@@ -439,9 +439,9 @@ launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>&1 | head -20
 
 ---
 
-### Task 9 — eval pipeline P1–P8
+### Task 9 — eval pipeline phases after `env`
 
-Purpose: check Process 2 (Pier, DeepSWE, iCode). **P0 is already covered in Task 4.** A full eval does not run P6. Details: [testing-eval-pipeline.md](testing-eval-pipeline.md). LLM stages need Jenkins credential **`deepseek-api-key`**.
+Purpose: check Process 2 (Harbor, DeepSWE, iCode). **The `env` phase is already covered in Task 4.** A full eval does not run the LLM-only baseline. Phases and steps: [pipeline.md](../pipeline.md); checks: [testing-eval-pipeline.md](testing-eval-pipeline.md). Paid phases need Jenkins credential **`deepseek-api-key`** (or a local `.env`).
 
 command:
 
@@ -449,13 +449,12 @@ command:
 export PATH="$HOME/.local/bin:$PATH"
 cd ~/Documents/Toby/mac-k3d
 
-mac-k3d eval --stage p1
-mac-k3d eval --stage p2
-mac-k3d eval --stage p3
-mac-k3d eval --stage p4
-mac-k3d eval --stage p5 --n-tasks 1
-mac-k3d eval --stage p7
-mac-k3d eval --stage p8 --n-tasks 1
+mac-k3d eval --stage tasks --n-tasks 1
+mac-k3d eval --stage evaluate --n-tasks 1
+mac-k3d eval --stage anticheat
+mac-k3d eval --stage score
+mac-k3d eval --stage report --n-tasks 1
+mac-k3d eval --stage archive
 ```
 
 Then once:
@@ -467,17 +466,14 @@ mac-k3d eval --n-tasks 1 --icode-mode release
 
 expected results:
 
-- **P1:** `pier --help` works (`uv tool install datacurve-pier` if missing).
-- **P2:** `$WORKDIR/deep-swe/tasks` exists (clone `https://github.com/datacurve-ai/deep-swe`).
-- **P3:** `icode --help` succeeds (`ICODE_MODE=release` drop or `ICODE_MODE=git` clone).
-- **P4:** Pier agent `icode` install script is executable.
-- **P5:** `PROGRESS` lines; one DeepSWE task through iCode (`--n-tasks 1`). Clear pier/docker errors still count as “stage ran”.
-- **P6:** not part of a full eval. A hand `mac-k3d eval --stage p6` still exists and is not published.
-- **P7:** temp JSON with `reward` / `f2p` / `p2p` rates / `pass_at_1`.
-- **P8:** `eval-runs/output/<benchmark>/<run>/artifact.json`, `summary.md`, and `report.html`.
+- **tasks:** `$WORKDIR/deep-swe/tasks` exists (`https://github.com/datacurve-ai/deep-swe` at its pin); `OK icode helps` (`ICODE_MODE=release` drop or `ICODE_MODE=git` clone); `icode_harbor_agent:ICodeAgent` imports; `OK isolation`; `OK leak scan`.
+- **evaluate:** `OK slots`, then `PROGRESS n% evaluate` lines; one DeepSWE task through iCode in one `harbor run` (`--n-tasks 1`); `reward.json` under `harness/`.
+- **baseline:** not part of a full eval. A hand `mac-k3d eval --stage baseline` still exists and is not published.
+- **anticheat / score:** a verdict per trial; temp JSON with `reward` / `f2p` / `p2p` rates / `pass_at_1`.
+- **report / archive:** `eval-runs/output/<benchmark>/<run>/artifact.json`, `summary.md`, `report.html`, `cost-token-report.md`, and `output/<benchmark>/<run>.tar.gz`.
 - Full runner: Jenkins job `deepswe_one_task` (or `--local`) runs the harness and archives that folder.
 
-P5+ costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **private** iCode clone or tarball.
+The `evaluate` phase costs time, disk, and API usage. GitHub/GitCode PATs are only needed for **private** iCode clone or tarball.
 
 ---
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """OpenAI-compatible GET /models (DeepSeek uses the same JSON as OpenAI).
 
-Used by P0 and `mac-k3d set --check-models` so catalog ids are provider Chat
+Used by env/model_api and `mac-k3d set --check-models` so catalog ids are provider Chat
 Completions ids (e.g. deepseek-flash), not product names (deepseek-v4.1-flash).
 Does not print API keys.
 """

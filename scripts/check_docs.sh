@@ -28,6 +28,7 @@ PRODUCT_MD=(
   initializer-new-machine.md
   lolbench-jenkins.md
   new-machine.md
+  pipeline.md
   prepare-wizard.md
   secrets.md
   setup.md

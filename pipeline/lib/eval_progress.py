@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P5 work-unit progress.json and the 60s heartbeat line."""
+"""evaluate/harbor_run: work-unit progress.json and the 60s heartbeat line."""
 
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def write_progress(path: Path, doc: dict) -> None:
 
 
 def p5_progress_pct(done: int, needed: int) -> int:
-    """Map rollout completion onto the P5 band (55–70)."""
+    """Map rollout completion onto the evaluate band (55–70)."""
     if needed <= 0:
         return 55
     frac = min(1.0, max(0.0, done / needed))
@@ -114,11 +114,11 @@ def heartbeat_text(doc: dict, elapsed_s: int | None = None) -> str:
         elapsed_s = 0
     frac = (done / needed * 100.0) if needed else 0.0
     line = (
-        f"P5 harbor heartbeat {elapsed_s}s {done}/{needed} ({frac:.1f}%) "
+        f"harbor heartbeat {elapsed_s}s {done}/{needed} ({frac:.1f}%) "
         f"inflight={inflight} slots={slots}"
     )
     pct = p5_progress_pct(done, needed)
-    progress = f"PROGRESS {pct}% P5 {done}/{needed} rollouts"
+    progress = f"PROGRESS {pct}% evaluate {done}/{needed} rollouts"
     return f"{line}\n{progress}\n"
 
 
@@ -154,7 +154,7 @@ def main() -> int:
     path = Path(args.progress)
     if not path.is_file():
         elapsed = args.elapsed if args.elapsed >= 0 else 0
-        print(f"P5 harbor heartbeat {elapsed}s")
+        print(f"harbor heartbeat {elapsed}s")
         return 0
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))

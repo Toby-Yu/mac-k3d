@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fixture tests for P3 binary-mode official *-full-* names (no network).
+# Fixture tests for tasks/icode.sh: binary-mode official *-full-* names (no network).
 set -euo pipefail
 
-STAGES="$(cd "$(dirname "$0")" && pwd)"
+STAGES="$(cd "$(dirname "$0")/../stages" && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -24,7 +24,7 @@ EOF
   chmod +x "$1"
 }
 
-run_p3() {
+run_icode() {
   # Ignore the worker's saved release in ~/.config/mac-k3d/icode-paths.yaml.
   env \
     MAC_K3D_EVAL_WORKDIR="$1" \
@@ -32,12 +32,12 @@ run_p3() {
     MAC_K3D_ICODE_PATHS="$TMP/no-saved-icode-paths.yaml" \
     ICODE_MODE=binary \
     ICODE_RELEASE="${3-}" \
-    bash "$STAGES/p3_icode.sh"
+    bash "$STAGES/tasks/icode.sh"
 }
 
-assert_p3_ok() {
+assert_icode_ok() {
   local work="$1"
-  run_p3 "$work" "$2" "${3-}" >/dev/null
+  run_icode "$work" "$2" "${3-}" >/dev/null
   [ -s "$work/icode_bin_path.txt" ] || fail "missing $work/icode_bin_path.txt"
   local bin
   bin="$(cat "$work/icode_bin_path.txt")"
@@ -61,14 +61,14 @@ mkdir -p "$SHARE"
 TARBALL="$TMP/icode-linux-x86_64-full-v0.1.41.tar.gz"
 pack_full_tarball "$TARBALL"
 W1="$TMP/w1"
-assert_p3_ok "$W1" "$SHARE" "$TARBALL"
+assert_icode_ok "$W1" "$SHARE" "$TARBALL"
 ok "ICODE_RELEASE tarball icode-linux-x86_64-full-v0.1.41.tar.gz"
 
 # 2. Same archive, extensionless official name
 BARE="$TMP/icode-linux-x86_64-full-v0.1.41"
 cp "$TARBALL" "$BARE"
 W2="$TMP/w2"
-assert_p3_ok "$W2" "$SHARE" "$BARE"
+assert_icode_ok "$W2" "$SHARE" "$BARE"
 ok "ICODE_RELEASE extensionless icode-linux-x86_64-full-v0.1.41"
 
 # 3. Unpacked official directory (keep sibling files)
@@ -77,7 +77,7 @@ mkdir -p "$DIR"
 make_stub "$DIR/icode"
 echo sibling >"$DIR/libicode.so"
 W3="$TMP/w3"
-assert_p3_ok "$W3" "$SHARE" "$DIR"
+assert_icode_ok "$W3" "$SHARE" "$DIR"
 BIN3="$(cat "$W3/icode_bin_path.txt")"
 [ -f "$(dirname "$BIN3")/libicode.so" ] || fail "sibling lib not copied next to icode"
 ok "ICODE_RELEASE unpacked *-full-* directory"
@@ -85,15 +85,15 @@ ok "ICODE_RELEASE unpacked *-full-* directory"
 # 4. Discover official tarball in MAC_K3D_SHARE (ICODE_RELEASE empty)
 cp "$TARBALL" "$SHARE/icode-linux-x86_64-full-v0.1.41.tar.gz"
 W4="$TMP/w4"
-assert_p3_ok "$W4" "$SHARE" ""
+assert_icode_ok "$W4" "$SHARE" ""
 ok "discover MAC_K3D_SHARE/icode-linux-x86_64-full-v0.1.41.tar.gz"
 
 # 5. Random file is not a release
 RAND="$TMP/notes.txt"
 echo not-icode >"$RAND"
 W5="$TMP/w5"
-if run_p3 "$W5" "$TMP/empty-share" "$RAND" >/dev/null 2>&1; then
-  fail "expected P3 to reject $RAND"
+if run_icode "$W5" "$TMP/empty-share" "$RAND" >/dev/null 2>&1; then
+  fail "expected tasks/icode to reject $RAND"
 fi
 ok "reject random file that is not icode or *-full-*"
 
@@ -108,7 +108,7 @@ EOF
 chmod +x "$SHARE6/icode"
 cp "$TARBALL" "$SHARE6/icode-linux-x86_64-full-v0.1.41.tar.gz"
 W6="$TMP/w6"
-assert_p3_ok "$W6" "$SHARE6" ""
+assert_icode_ok "$W6" "$SHARE6" ""
 BIN6="$(cat "$W6/icode_bin_path.txt")"
 help6="$("$BIN6" --help)"
 echo "$help6" | grep -q "usage: icode" || fail "expected tarball stub, got: $help6"
@@ -127,7 +127,7 @@ env \
   ICODE_MODE=git \
   MAC_K3D_ICODE_FETCH_DIR="$FETCH" \
   ICODE_RELEASE="" \
-  bash "$STAGES/p3_icode.sh" >/dev/null
+  bash "$STAGES/tasks/icode.sh" >/dev/null
 BIN7="$(cat "$W7/icode_bin_path.txt")"
 ROOT7="$(cat "$W7/icode_host_root.txt")"
 [ "$ROOT7" = "$FETCH" ] || fail "icode_host_root.txt expected $FETCH got $ROOT7"
@@ -136,13 +136,13 @@ grep -q 'sandbox-cpython' "$BIN7" || fail "wrapper does not exec sandbox-cpython
 "$FETCH/.venv/bin/icode" --help >/dev/null || fail "fixture venv icode --help"
 ok "ICODE_MODE=git MAC_K3D_ICODE_FETCH_DIR wrapper"
 
-# 8. Release P3 must not keep a previous git-mode icode_git.json
+# 8. Release mode must not keep a previous git-mode icode_git.json
 W8="$TMP/w8"
 mkdir -p "$W8"
 printf '%s\n' '{"url":"stale","kind":"commit","ref":"dead","sha":"deadbeef","subject":"no"}' >"$W8/icode_git.json"
-assert_p3_ok "$W8" "$SHARE" "$TARBALL"
-[ ! -f "$W8/icode_git.json" ] || fail "release P3 left stale icode_git.json"
-ok "release P3 drops leftover icode_git.json"
+assert_icode_ok "$W8" "$SHARE" "$TARBALL"
+[ ! -f "$W8/icode_git.json" ] || fail "release mode left stale icode_git.json"
+ok "release mode drops leftover icode_git.json"
 
 # 9. source mode is rejected (worker is not a developer checkout)
 W9="$TMP/w9"
@@ -152,10 +152,10 @@ if env \
   MAC_K3D_SHARE="$SHARE" \
   ICODE_MODE=source \
   ICODE_RELEASE="" \
-  bash "$STAGES/p3_icode.sh" >/dev/null 2>&1; then
-  fail "expected P3 to reject ICODE_MODE=source"
+  bash "$STAGES/tasks/icode.sh" >/dev/null 2>&1; then
+  fail "expected tasks/icode to reject ICODE_MODE=source"
 fi
-ok "P3 rejects ICODE_MODE=source"
+ok "tasks/icode rejects ICODE_MODE=source"
 
 # 10. release from persist parent folder containing *-full-* child
 PARENT="$TMP/iCode-binary"
@@ -170,9 +170,9 @@ env \
   MAC_K3D_ICODE_PATHS="$PATHS" \
   ICODE_MODE=release \
   ICODE_RELEASE="" \
-  bash "$STAGES/p3_icode.sh" >/dev/null
+  bash "$STAGES/tasks/icode.sh" >/dev/null
 [ -s "$W10/icode_bin_path.txt" ] || fail "missing release bin from parent folder persist"
-ok "release P3 from persist parent folder with *-full-* child"
+ok "release mode from persist parent folder with *-full-* child"
 
 # 11. Jenkins File Parameter: gzip magic, name is not *-full-*
 UP_GZ="$TMP/ws-upload/ICODE_RELEASE_FILE"
@@ -186,7 +186,7 @@ env \
   ICODE_MODE=release \
   ICODE_RELEASE="$UP_GZ" \
   ICODE_RELEASE_UPLOADED=1 \
-  bash "$STAGES/p3_icode.sh" >/dev/null
+  bash "$STAGES/tasks/icode.sh" >/dev/null
 [ -s "$W11/icode_bin_path.txt" ] || fail "missing bin from unnamed gzip upload"
 ok "Jenkins upload unnamed gzip (ICODE_RELEASE_FILE) unpacks"
 
@@ -202,7 +202,7 @@ env \
   ICODE_MODE=release \
   ICODE_RELEASE="$UP_BIN" \
   ICODE_RELEASE_UPLOADED=1 \
-  bash "$STAGES/p3_icode.sh" >/dev/null
+  bash "$STAGES/tasks/icode.sh" >/dev/null
 [ -s "$W12/icode_bin_path.txt" ] || fail "missing bin from unnamed stub upload"
 ok "Jenkins upload unnamed stub copies as icode"
 
@@ -218,9 +218,9 @@ if env \
   ICODE_MODE=release \
   ICODE_RELEASE="" \
   ICODE_RELEASE_UPLOADED=1 \
-  bash "$STAGES/p3_icode.sh" >/dev/null 2>&1; then
-  fail "expected P3 to reject empty Jenkins upload"
+  bash "$STAGES/tasks/icode.sh" >/dev/null 2>&1; then
+  fail "expected tasks/icode to reject empty Jenkins upload"
 fi
 ok "empty Jenkins upload does not fall back to persist"
 
-echo "OK test_p3_icode.sh"
+echo "OK test_icode_build.sh"

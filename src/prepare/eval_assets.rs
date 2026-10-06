@@ -11,6 +11,9 @@ use crate::error::{Error, Result};
 static PIPELINE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/pipeline");
 
 const RUN_ALL: &str = "pipeline/stages/run_all.sh";
+/// The phases `run_all.sh` runs, in order (its PHASES array). Each is
+/// `pipeline/stages/<phase>.sh` and one Jenkins stage.
+pub const PHASES: [&str; 7] = ["env", "tasks", "evaluate", "anticheat", "score", "report", "archive"];
 /// Written next to the extracted scripts; `provenance.py` reads it into the artifact.
 const BUILD_JSON: &str = "pipeline/BUILD.json";
 
@@ -247,12 +250,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn phases_match_run_all_and_are_embedded() {
+        let run_all = PIPELINE
+            .get_file("stages/run_all.sh")
+            .and_then(|f| f.contents_utf8())
+            .unwrap();
+        let line = format!("PHASES=({})", PHASES.join(" "));
+        assert!(run_all.contains(&line), "run_all.sh must define {line}");
+        for phase in PHASES {
+            assert!(
+                PIPELINE.get_file(format!("stages/{phase}.sh")).is_some(),
+                "missing pipeline/stages/{phase}.sh"
+            );
+        }
+    }
+
+    #[test]
     fn embedded_pipeline_has_run_all() {
         assert!(
             PIPELINE.get_file("stages/run_all.sh").is_some(),
             "pipeline/stages/run_all.sh must be embedded"
         );
-        assert!(PIPELINE.get_file("lib/icode_pier_agent.py").is_some());
+        assert!(
+            PIPELINE.get_file("stages/evaluate/harbor_cmd.sh").is_some(),
+            "phase steps under pipeline/stages/<phase>/ must be embedded"
+        );
+        assert!(PIPELINE.get_file("lib/icode_harbor_agent.py").is_some());
+        assert!(PIPELINE.get_file("config/network-allowlist-v1.json").is_some());
+        assert!(PIPELINE.get_file("lib/icode_pier_agent.py").is_none());
         assert!(
             PIPELINE.get_file("lib/openai_compat.py").is_some(),
             "pipeline/lib/openai_compat.py must be embedded"

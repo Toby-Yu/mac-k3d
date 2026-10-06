@@ -2,9 +2,9 @@
 
 Which questions have a Harbor run on this PC, and the Docker memory recorded for each. Product packing rules stay in [optimization.md](../optimization.md). Branch notes: [eval-comparison-report](../eval-comparison-report/README.md).
 
-Jenkins build numbers are the `jenkins-<n>` trees under each job’s `eval-runs/harness/harbor_runs`. `peak_gb`, `slots`, and `memory_mb` come from that run’s `container_mem.jsonl` after P8 (copied next to `artifact.json`). Historical builds finished before that file existed, so those cells stay empty.
+Jenkins build numbers are the `jenkins-<n>` trees under each job’s `eval-runs/harness/harbor_runs`. `peak_gb`, `slots`, and `memory_mb` come from that run’s `container_mem.jsonl` after the report phase (copied next to `artifact.json`). Historical builds finished before that file existed, so those cells stay empty.
 
-A skip (`skip question=` / `skipped_questions.txt`) stays **not run**. An out-of-memory skip can still have a sampled `peak_gb` in that run’s `container_mem.jsonl`. After a finished P8, fill the three memory cells and set status to `run`.
+A skip (`skip question=` / `skipped_questions.txt`) stays **not run**. An out-of-memory skip can still have a sampled `peak_gb` in that run’s `container_mem.jsonl`. After a finished report phase, fill the three memory cells and set status to `run`.
 
 ## Next DeepSWE TASKS
 
@@ -14,7 +14,7 @@ Paste into **TASKS** on `deepswe_some_task`, **N_ROLLOUTS=4**. `TASKS` replaces 
 eicrud-keyset-pagination-cursor,scc-bounded-memory-spilling,meriyah-explicit-resource-declarations
 ```
 
-These three are not in jenkins-21 through jenkins-30. A build extracts its own copy of the pipeline in `Prepare`, so redeploying the worker binary mid-build does not change the scripts it runs. The one exception is a redeploy that changes `agent.jar`: worker `config` then restarts the agent, which drops the running build.
+These three are not in jenkins-21 through jenkins-30. A build extracts its own copy of the pipeline in its first stage, so redeploying the worker binary mid-build does not change the scripts it runs. The one exception is a redeploy that changes `agent.jar`: worker `config` then restarts the agent, which drops the running build.
 
 ## DeepSWE
 
@@ -165,7 +165,7 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 
 ## SWE-bench Pro
 
-Only the instance P2 has materialized on this worker is listed. The rest of the dataset is omitted until a later P2 writes it under `eval-runs/swebenchpro/tasks`.
+Only the instance `tasks/benchmark` has materialized on this worker is listed. The rest of the dataset is omitted until a later run writes it under `eval-runs/swebenchpro/tasks`.
 
 | question | status | builds | peak_gb | slots | memory_mb |
 |----------|--------|--------|---------|-------|-----------|

@@ -278,7 +278,7 @@ def main() -> int:
 
     why = "; ".join(plan["reasons"]) or "no declared resources found; one at a time"
     print(
-        f"P5 resources: declared cpus={peak['cpus'] or '?'} memory_mb={peak['memory_mb'] or '?'} "
+        f"slots: declared cpus={peak['cpus'] or '?'} memory_mb={peak['memory_mb'] or '?'} "
         f"per trial, {plan['slots']} at a time ({why})",
         file=sys.stderr,
     )

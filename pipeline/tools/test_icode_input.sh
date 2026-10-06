@@ -184,7 +184,7 @@ fi
 grep -q 'icode_paths_get' "$IN" || fail "missing icode_paths_get"
 ok "no local source helper; persist remains for release"
 
-COMMON="$(cd "$(dirname "$0")" && pwd)/_common.sh"
+COMMON="$(cd "$(dirname "$0")/../stages" && pwd)/_common.sh"
 grep -q 'icode_release_is_uploaded' "$COMMON" || fail "missing icode_release_is_uploaded"
 grep -q 'ICODE_RELEASE_UPLOADED' "$COMMON" || fail "missing ICODE_RELEASE_UPLOADED"
 ok "Jenkins unnamed upload helper"

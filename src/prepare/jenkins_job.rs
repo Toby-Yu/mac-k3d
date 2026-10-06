@@ -839,7 +839,12 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
     }
     p.extend([
         text_param("AGENT_LABEL", "lolbench", DESC_AGENT_LABEL, Developer),
-        text_param("HARBOR_VERSION", "0.22.0", "Harbor version installed in P1. A mismatch fails the stage.", Developer),
+        text_param(
+            "HARBOR_VERSION",
+            crate::prepare::toolchain::harbor_version(),
+            "Harbor version the Environment stage installs and checks (pin: pipeline/config/toolchain.env). A mismatch fails the stage.",
+            Developer,
+        ),
         text_param("DEEPSWE_REF", "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea", "DeepSWE commit pinned by P2.", Developer),
         text_param("LOLBENCH_REF", "1b10d10bb4a10cea54374ac34b8f76b69dc8ce75", "LoLBench commit pinned by P2.", Developer),
         text_param("ICODE_EXPECT_SHA", "", "When set, P3 fails unless the iCode checkout SHA equals this value.", Developer),
@@ -948,13 +953,38 @@ fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     eval_jenkinsfile(job_benchmark, JobShape::One, opts)
 }
 
+/// One Jenkins stage per pipeline phase, in run order. Each runs
+/// `MAC_K3D_PHASE=<phase> run_all.sh` in its own shell; state passes through
+/// eval-runs/. Only Evaluate holds this worker's CPU lock.
+struct EvalStage {
+    title: &'static str,
+    phase: &'static str,
+    holds_cpu_lock: bool,
+}
+
+const EVAL_STAGES: [EvalStage; 7] = [
+    EvalStage { title: "Environment", phase: "env", holds_cpu_lock: false },
+    EvalStage { title: "Tasks", phase: "tasks", holds_cpu_lock: false },
+    EvalStage { title: "Evaluate", phase: "evaluate", holds_cpu_lock: true },
+    EvalStage { title: "Anti-cheat", phase: "anticheat", holds_cpu_lock: false },
+    EvalStage { title: "Score", phase: "score", holds_cpu_lock: false },
+    EvalStage { title: "Report", phase: "report", holds_cpu_lock: false },
+    EvalStage { title: "Archive", phase: "archive", holds_cpu_lock: false },
+];
+
 fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> String {
     if shape.is_dispatcher() {
         return dispatcher_jenkinsfile(job_benchmark, shape, opts);
     }
-    let (cred_open, cred_close) = with_credentials_block(&opts.credential_ids);
     let params = groovy_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
     let readers = groovy_escape(&shard_readers(job_benchmark).join(","));
+    let bootstrap = eval_bootstrap_sh(job_benchmark, opts, 12);
+    let stages = EVAL_STAGES
+        .iter()
+        .enumerate()
+        .map(|(i, stage)| eval_stage(stage, i == 0, &bootstrap, opts))
+        .collect::<Vec<_>>()
+        .join("\n\n");
     format!(
         r#"pipeline {{
   agent {{ label params.AGENT_LABEL }}
@@ -969,65 +999,7 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
   }}
 
   stages {{
-    stage('Prepare') {{
-      steps {{
-{cred_open}          script {{
-            {display_name}
-            if (params.RUN_GROUP?.trim()) {{
-              currentBuild.description = "shard ${{params.SHARD}}"
-            }}
-            try {{
-              unstash 'ICODE_RELEASE_FILE'
-            }} catch (Throwable t) {{
-              echo "No ICODE_RELEASE_FILE stash (${{t}})"
-            }}
-          }}
-          sh '''
-            rm -rf "${{WORKSPACE}}/mac-k3d-pipeline/pipeline"
-{bootstrap}
-            echo "PROGRESS 10% P0-P4 prepare (no CPU lock held)"
-            MAC_K3D_PHASE=prepare bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
-          '''
-{cred_close}      }}
-    }}
-
-    stage('Evaluate') {{
-      steps {{
-{cred_open}          script {{
-            // Lock every core of this worker. The resources are named
-            // <node>-core-N and carry the node name as a label, so two workers
-            // never draw from one pool. No quantity means every matching
-            // resource. Held for the rollouts only.
-            lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES') {{
-              String heldCores = env.HELD_CORES ?: ''
-              int held = heldCores.trim() ? heldCores.split(',').size() : 0
-              if (held < 1) {{
-                error "No ${{env.NODE_NAME}}-core-N lockable resources. Run mac-k3d config on this worker to register them."
-              }}
-              env.CPU_LOCK_QTY = "${{held}}"
-              sh '''
-{bootstrap}
-                echo "PROGRESS 40% P5 canary + the Harbor run (holding $CPU_LOCK_QTY cores on $NODE_NAME)"
-                MAC_K3D_PHASE=evaluate bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
-              '''
-            }}
-          }}
-{cred_close}      }}
-    }}
-
-    stage('Report') {{
-      steps {{
-{cred_open}          sh '''
-{bootstrap}
-            echo "PROGRESS 80% P7-P8 score and report (lock released)"
-            MAC_K3D_PHASE=report bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
-            echo "PROGRESS 100% done"
-            if [ -f "$MAC_K3D_EVAL_WORKDIR/last_output.txt" ]; then
-              echo "RESULT $(cat "$MAC_K3D_EVAL_WORKDIR/last_output.txt")"
-            fi
-          '''
-{cred_close}      }}
-    }}
+{stages}
   }}
 
   post {{
@@ -1048,9 +1020,75 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
     }}
   }}
 }}
-"#,
-        display_name = DISPLAY_NAME_GROOVY,
-        bootstrap = eval_bootstrap_sh(job_benchmark, opts, 12),
+"#
+    )
+}
+
+/// One `stage('<title>')`. The first stage names the build, unstashes the
+/// iCode upload and clears the previous build's pipeline extract.
+fn eval_stage(stage: &EvalStage, first: bool, bootstrap: &str, opts: &JobOpts) -> String {
+    let (cred_open, cred_close) = with_credentials_block(&opts.credential_ids);
+    let title = stage.title;
+    let run = format!(
+        r#"MAC_K3D_PHASE={} bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh""#,
+        stage.phase
+    );
+    if stage.holds_cpu_lock {
+        return format!(
+            r#"    stage('{title}') {{
+      steps {{
+{cred_open}          script {{
+            // Lock every core of this worker. The resources are named
+            // <node>-core-N and carry the node name as a label, so two workers
+            // never draw from one pool. No quantity means every matching
+            // resource. Held for this stage only.
+            lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES') {{
+              String heldCores = env.HELD_CORES ?: ''
+              int held = heldCores.trim() ? heldCores.split(',').size() : 0
+              if (held < 1) {{
+                error "No ${{env.NODE_NAME}}-core-N lockable resources. Run mac-k3d config on this worker to register them."
+              }}
+              env.CPU_LOCK_QTY = "${{held}}"
+              sh '''
+{bootstrap}
+                {run}
+              '''
+            }}
+          }}
+{cred_close}      }}
+    }}"#
+        );
+    }
+    let (setup, clear) = if first {
+        (
+            format!(
+                r#"          script {{
+            {DISPLAY_NAME_GROOVY}
+            if (params.RUN_GROUP?.trim()) {{
+              currentBuild.description = "shard ${{params.SHARD}}"
+            }}
+            try {{
+              unstash 'ICODE_RELEASE_FILE'
+            }} catch (Throwable t) {{
+              echo "No ICODE_RELEASE_FILE stash (${{t}})"
+            }}
+          }}
+"#
+            ),
+            "            rm -rf \"${WORKSPACE}/mac-k3d-pipeline/pipeline\"\n",
+        )
+    } else {
+        (String::new(), "")
+    };
+    format!(
+        r#"    stage('{title}') {{
+      steps {{
+{cred_open}{setup}          sh '''
+{clear}{bootstrap}
+            {run}
+          '''
+{cred_close}      }}
+    }}"#
     )
 }
 
@@ -1213,7 +1251,7 @@ export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
 export OFFICIAL="${{OFFICIAL:-0}}"
 
 # The pipeline is the one embedded in this worker's mac-k3d binary, extracted
-# once per build (Prepare clears it), so a redeploy mid-build cannot change the
+# once per build (the first stage clears it), so a redeploy mid-build cannot change the
 # scripts under a running build. BUILD.json names the commit for the artifact.
 export MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
 if [ ! -f "$MAC_K3D_ROOT/pipeline/BUILD.json" ]; then
@@ -1254,7 +1292,7 @@ fi
 export ICODE_GIT_URL="${{ICODE_GIT_URL:-}}"
 export ICODE_GIT_REF="${{ICODE_GIT_REF:-main}}"
 export ICODE_GIT_REF_KIND="${{ICODE_GIT_REF_KIND:-branch}}"
-export HARBOR_VERSION="${{HARBOR_VERSION:-0.22.0}}"
+export HARBOR_VERSION="${{HARBOR_VERSION:-{harbor_fb}}}"
 export DEEPSWE_REF="${{DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea}}"
 export LOLBENCH_REF="${{LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75}}"
 export ICODE_EXPECT_SHA="${{ICODE_EXPECT_SHA:-}}"
@@ -1276,6 +1314,7 @@ if [ "${{ICODE_MODE}}" = "release" ] || [ "${{ICODE_MODE}}" = "binary" ]; then
 fi
 echo "MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK ICODE_MODE=$ICODE_MODE""#,
         icode_mode_fb = jenkins_icode_mode(opts),
+        harbor_fb = crate::prepare::toolchain::harbor_version(),
         harness_fb = eval_catalog::HARNESSES[0],
         llm_fb = eval_catalog::LLMS[0],
         bench = groovy_escape(job_benchmark),
@@ -1862,15 +1901,6 @@ mod tests {
         // No quantity: the build takes every core of its worker.
         assert!(!jf.contains("quantity:"));
         assert!(jf.contains("env.CPU_LOCK_QTY = \"${held}\""));
-        // And it holds them for the rollouts only.
-        assert!(jf.contains("stage('Prepare')"));
-        assert!(jf.contains("stage('Evaluate')"));
-        assert!(jf.contains("stage('Report')"));
-        assert!(jf.find("lock(label: env.NODE_NAME").unwrap() > jf.find("stage('Evaluate')").unwrap());
-        assert!(jf.find("lock(label: env.NODE_NAME").unwrap() < jf.find("stage('Report')").unwrap());
-        assert!(jf.contains("MAC_K3D_PHASE=prepare"));
-        assert!(jf.contains("MAC_K3D_PHASE=evaluate"));
-        assert!(jf.contains("MAC_K3D_PHASE=report"));
         assert!(jf.contains("withCredentials"));
         assert!(jf.contains("deepseek-api-key"));
         assert!(jf.contains("deepseek-v4-pro"));
@@ -2064,6 +2094,35 @@ mod tests {
     }
 
     #[test]
+    fn eval_job_runs_one_stage_per_phase_and_locks_only_evaluate() {
+        let opts = deepswe_opts(vec!["deepseek-api-key".into()]);
+        let jf = eval_jenkinsfile("deepswe", JobShape::One, &opts);
+        let phases: Vec<&str> = EVAL_STAGES.iter().map(|s| s.phase).collect();
+        assert_eq!(phases, crate::prepare::eval_assets::PHASES);
+        let mut last = 0;
+        for stage in &EVAL_STAGES {
+            let at = jf
+                .find(&format!("stage('{}')", stage.title))
+                .unwrap_or_else(|| panic!("no stage {}", stage.title));
+            assert!(at > last, "stage {} out of order", stage.title);
+            last = at;
+            let run = format!(r#"MAC_K3D_PHASE={} bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh""#, stage.phase);
+            assert_eq!(jf.matches(&run).count(), 1, "{}", stage.phase);
+        }
+        assert_eq!(jf.matches("    stage('").count(), 7);
+        assert!(!jf.contains("MAC_K3D_PHASE=prepare"));
+        // The CPU lock covers the canary and the Harbor run, nothing else.
+        assert_eq!(jf.matches("lock(").count(), 1);
+        let lock = jf.find("lock(label: env.NODE_NAME").unwrap();
+        let evaluate = jf.find("MAC_K3D_PHASE=evaluate ").unwrap();
+        assert!(jf.find("stage('Evaluate')").unwrap() < lock);
+        assert!(jf.find("MAC_K3D_PHASE=tasks ").unwrap() < lock);
+        assert!(lock < evaluate);
+        assert!(evaluate < jf.find("stage('Anti-cheat')").unwrap());
+        assert!(jf.find("lock(").unwrap() < jf.find("stage('Anti-cheat')").unwrap());
+    }
+
+    #[test]
     fn bootstrap_extracts_pipeline_from_installed_binary() {
         let opts = deepswe_opts(vec!["deepseek-api-key".into()]);
         let jf = eval_jenkinsfile("deepswe", JobShape::One, &opts);
@@ -2073,15 +2132,16 @@ mod tests {
         assert!(jf.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT""#));
         assert!(!jf.contains("git fetch"));
         assert!(!jf.contains("MAC_K3D_GIT"));
-        // Prepare starts from a fresh extract; Evaluate and Report reuse it.
-        // Only pipeline/ goes: output/ under the same root keeps P8's backups.
+        // The first stage starts from a fresh extract; the other six reuse it.
+        // Only pipeline/ goes: output/ under the same root keeps the archive
+        // phase's backups.
         let clear = r#"rm -rf "${WORKSPACE}/mac-k3d-pipeline/pipeline""#;
         assert_eq!(jf.matches(clear).count(), 1);
-        let prepare = jf.find("stage('Prepare')").unwrap();
-        let evaluate = jf.find("stage('Evaluate')").unwrap();
+        let first = jf.find("stage('Environment')").unwrap();
+        let second = jf.find("stage('Tasks')").unwrap();
         let at = jf.find(clear).unwrap();
-        assert!(prepare < at && at < evaluate);
-        assert_eq!(jf.matches("mac-k3d pipeline --extract-to").count(), 6);
+        assert!(first < at && at < second);
+        assert_eq!(jf.matches("mac-k3d pipeline --extract-to").count(), 14);
 
         let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
         assert!(some.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT""#));
@@ -2317,7 +2377,7 @@ mod tests {
         assert!(xml.contains("<![CDATA["));
         assert!(xml.contains("pipeline/stages/run_all.sh"));
         assert!(!xml.contains("Documents/Toby/mac-k3d"));
-        assert!(xml.contains("PROGRESS"));
+        assert!(xml.contains("MAC_K3D_PHASE=evaluate"));
         assert!(xml.contains("deepswe"));
         assert!(xml.contains("deepseek"));
         assert!(xml.contains("DEEPSEEK_MODEL"));
