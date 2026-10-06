@@ -32,12 +32,19 @@ load_eval_state() {
   [ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
   have harbor || die "harbor not on PATH (run the env phase)"
   ensure_selected_tasks
-  mapfile -t TASK_IDS < <(grep -v '^[[:space:]]*$' "$WORKDIR/selected_tasks.txt" || true)
+  local line
+  TASK_IDS=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) TASK_IDS+=("$line") ;; esac
+  done <"$WORKDIR/selected_tasks.txt"
   [ "${#TASK_IDS[@]}" -gt 0 ] || die "no task under $TASKS_DIR (wanted ${TASK:-<empty>})"
   [ -s "$WORKDIR/agent_mounts.json" ] || die "run tasks/isolation first (missing $WORKDIR/agent_mounts.json)"
   MOUNTS_JSON="$(cat "$WORKDIR/agent_mounts.json")"
   HOST_ICODE="$(icode_host_root)"
-  mapfile -t AGENT_HOSTS < <(python3 "$PIPELINE_LIB/network_allowlist.py" hosts)
+  AGENT_HOSTS=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    AGENT_HOSTS+=("$line")
+  done < <(python3 "$PIPELINE_LIB/network_allowlist.py" hosts)
   [ "${#AGENT_HOSTS[@]}" -gt 0 ] || die "pipeline/config/network-allowlist-v1.json lists no agent hosts"
   [ -f "$WORKDIR/eval_resources.json" ] || die "run evaluate/slots first (missing $WORKDIR/eval_resources.json)"
   eval_parallel_degree || die "N_ROLLOUTS and CPU_LOCK_QTY must be integers >= 1"

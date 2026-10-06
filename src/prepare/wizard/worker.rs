@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::prepare::discovery::DiscoveredDeps;
 use crate::prepare::{jenkins_agent, resources};
 
-/// Shown in the summary, in question order. Harbor is pinned, not asked.
+/// Shown in the summary, in question order. Java and Harbor are pinned, not asked.
 pub(super) const TOOLS: &[&str] = &["docker", "java", "git", "harbor"];
 
 /// Lab cloud Jenkins; type a new URL when you stand up another controller.
@@ -27,7 +27,7 @@ pub(super) fn ask(base_dir: &Path, discovered: &DiscoveredDeps) -> Result<MacK3d
         true,
         true,
     )?;
-    let java = prompts::prompt_dependency("java", discovered.java.as_ref(), true, false)?;
+    let java = prompts::pinned_java(discovered.java.as_ref());
     let git = prompts::prompt_dependency("git", discovered.git.as_ref(), true, false)?;
     let harbor = prompts::pinned_harbor();
     let agent = prompt_agent(base_dir, resources::logical_cpu_cores())?;
@@ -152,6 +152,7 @@ mod tests {
 
     #[test]
     fn worker_jenkins_url_default_and_env_override() {
+        let _serial = crate::test_support::global_state();
         let prev_j = std::env::var_os("JENKINS_URL");
         let prev_m = std::env::var_os("MAC_K3D_JENKINS_URL");
         std::env::remove_var("JENKINS_URL");

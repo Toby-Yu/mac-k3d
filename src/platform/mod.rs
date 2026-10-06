@@ -111,6 +111,11 @@ pub fn requires_docker_app() -> bool {
     os::requires_docker_app()
 }
 
+/// Dirs the agent PATH puts before the configuring shell's PATH.
+pub fn agent_path_first() -> Vec<&'static str> {
+    os::agent_path_first()
+}
+
 pub fn agent_path_extras() -> Vec<&'static str> {
     os::agent_path_extras()
 }

@@ -107,6 +107,7 @@ mod tests {
         let drop = dir.join("icode-linux-x86_64-full-v0.1.41");
         fs::write(&drop, b"stub").unwrap();
         let file = dir.join("icode-paths.yaml");
+        let _serial = crate::test_support::global_state();
         let prev = std::env::var_os("MAC_K3D_ICODE_PATHS");
         std::env::set_var("MAC_K3D_ICODE_PATHS", &file);
         set_release(drop.to_str().unwrap()).unwrap();

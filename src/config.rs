@@ -556,15 +556,17 @@ impl MacK3dConfig {
         }
     }
 
-    /// Minimum free disk in GB for prepare validation.
+    /// Minimum free disk in GB for prepare validation. Hosts that run builds
+    /// use WORKER_MIN_DISK_GB from toolchain.env, as the env phase does.
     pub fn disk_min_gb(&self) -> u64 {
         if self.resources.disk_min_gb > 0 {
             return self.resources.disk_min_gb;
         }
         match self.role {
-            NodeRole::Standalone => 40,
+            NodeRole::Standalone | NodeRole::Worker => {
+                crate::prepare::toolchain::worker_min_disk_gb()
+            }
             NodeRole::Controller => 60,
-            NodeRole::Worker => 40,
         }
     }
 }

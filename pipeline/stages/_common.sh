@@ -7,6 +7,35 @@ set -euo pipefail
 # Repo or share dir that contains pipeline/stages + pipeline/lib.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export MAC_K3D_ROOT="$ROOT"
+# Tool pins shared with `mac-k3d setup` (Harbor, compose, buildx, Java, bash,
+# python3, host minimums). A value the job or caller already exported wins.
+# This loop and the bash guard below must parse on bash 3.2 (macOS /bin/bash).
+TOOLCHAIN_ENV="$ROOT/pipeline/config/toolchain.env"
+[ -f "$TOOLCHAIN_ENV" ] || { echo "ERROR: missing $TOOLCHAIN_ENV" >&2; exit 1; }
+while IFS='=' read -r _pin_key _pin_value || [ -n "$_pin_key" ]; do
+  [[ "$_pin_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+  if [ -z "${!_pin_key:-}" ]; then
+    export "${_pin_key}=${_pin_value}"
+  else
+    export "${_pin_key?}"
+  fi
+done <"$TOOLCHAIN_ENV"
+unset _pin_key _pin_value
+
+# The steps use bash 4.4 features (mapfile, empty arrays under set -u).
+require_bash_min() {
+  local want="${BASH_MIN:?BASH_MIN missing from $TOOLCHAIN_ENV}" major minor
+  major="${want%%.*}"
+  minor="${want#*.}"
+  if [ "${BASH_VERSINFO[0]}" -lt "$major" ] \
+    || { [ "${BASH_VERSINFO[0]}" -eq "$major" ] && [ "${BASH_VERSINFO[1]}" -lt "$minor" ]; }; then
+    echo "ERROR: bash ${BASH_VERSION} is older than ${want} (BASH_MIN in pipeline/config/toolchain.env)." >&2
+    echo "macOS: brew install bash (mac-k3d setup does this), then make sure the Homebrew bin comes before /bin on PATH." >&2
+    exit 1
+  fi
+}
+require_bash_min
+
 export PIPELINE_LIB="$ROOT/pipeline/lib"
 # shellcheck source=../lib/parallel_degree.sh
 source "$PIPELINE_LIB/parallel_degree.sh"
@@ -19,19 +48,6 @@ export OUTPUT_DIR="${MAC_K3D_EVAL_OUTPUT:-$WORKDIR/reports}"
 export DEEPSWE_DIR="${DEEPSWE_DIR:-$WORKDIR/deep-swe}"
 export LOLBENCH_DIR="${LOLBENCH_DIR:-$WORKDIR/lolbench}"
 export LOLBENCH_GIT_URL="${LOLBENCH_GIT_URL:-https://github.com/MichaelLing83/LoLBench-Preview.git}"
-# Tool pins (Harbor, compose, buildx) shared with `mac-k3d setup`. A value the
-# job or caller already exported wins over the file.
-TOOLCHAIN_ENV="$ROOT/pipeline/config/toolchain.env"
-[ -f "$TOOLCHAIN_ENV" ] || { echo "ERROR: missing $TOOLCHAIN_ENV" >&2; exit 1; }
-while IFS='=' read -r _pin_key _pin_value || [ -n "$_pin_key" ]; do
-  [[ "$_pin_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
-  if [ -z "${!_pin_key:-}" ]; then
-    export "${_pin_key}=${_pin_value}"
-  else
-    export "${_pin_key?}"
-  fi
-done <"$TOOLCHAIN_ENV"
-unset _pin_key _pin_value
 # Benchmark pins. Checked out on this worker on 2026-10-02: DeepSWE 113 tasks,
 # LoLBench 20 harbor tasks. Override per run; do not float.
 export DEEPSWE_GIT_URL="${DEEPSWE_GIT_URL:-https://github.com/datacurve-ai/deep-swe}"
@@ -125,10 +141,20 @@ ensure_task_image() {
 # (model API, canary hosts). Warns only; a host that clamps TCP MSS is fine.
 warn_docker_mtu() {
   local dev host_mtu docker_mtu
-  have ip || return 0
-  dev="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1 || true)"
-  [ -n "$dev" ] || return 0
-  host_mtu="$(ip -o link show dev "$dev" 2>/dev/null | sed -n 's/.* mtu \([0-9]*\).*/\1/p' || true)"
+  case "$(uname -s)" in
+    Darwin)
+      have route || return 0
+      dev="$(route -n get 1.1.1.1 2>/dev/null | sed -n 's/^ *interface: *//p' | head -n 1 || true)"
+      [ -n "$dev" ] || return 0
+      host_mtu="$(ifconfig "$dev" 2>/dev/null | sed -n 's/.* mtu \([0-9]*\).*/\1/p' | head -n 1 || true)"
+      ;;
+    *)
+      have ip || return 0
+      dev="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1 || true)"
+      [ -n "$dev" ] || return 0
+      host_mtu="$(ip -o link show dev "$dev" 2>/dev/null | sed -n 's/.* mtu \([0-9]*\).*/\1/p' || true)"
+      ;;
+  esac
   docker_mtu="$(docker network inspect bridge --format '{{index .Options "com.docker.network.driver.mtu"}}' 2>/dev/null || true)"
   docker_mtu="${docker_mtu:-1500}"
   [ "$host_mtu" -lt "$docker_mtu" ] 2>/dev/null || return 0
@@ -302,12 +328,22 @@ report_dir() {
   printf '%s\n' "$dir"
 }
 
-# Memory (GB) and disk (GB) fail-fast. Override with MAC_K3D_MIN_RAM_GB / MAC_K3D_MIN_DISK_GB.
+# Total RAM in kB: /proc/meminfo on Linux, sysctl hw.memsize (bytes) on macOS.
+host_mem_kb() {
+  case "$(uname -s)" in
+    Darwin) echo $(($(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1024)) ;;
+    *) awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0 ;;
+  esac
+}
+
+# Memory (GB) and disk (GB) fail-fast. The minimums come from toolchain.env
+# (MIN_RAM_GB, WORKER_MIN_DISK_GB), the same values `mac-k3d setup` checks;
+# MAC_K3D_MIN_RAM_GB / MAC_K3D_MIN_DISK_GB override them for one run.
 ensure_eval_preflight() {
-  local min_ram="${MAC_K3D_MIN_RAM_GB:-8}"
-  local min_disk="${MAC_K3D_MIN_DISK_GB:-40}"
+  local min_ram="${MAC_K3D_MIN_RAM_GB:-$MIN_RAM_GB}"
+  local min_disk="${MAC_K3D_MIN_DISK_GB:-$WORKER_MIN_DISK_GB}"
   local mem_kb mem_gb disk_kb disk_gb check_path
-  mem_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  mem_kb="$(host_mem_kb)"
   if [ "${mem_kb:-0}" -gt 0 ]; then
     mem_gb=$((mem_kb / 1024 / 1024))
     if [ "$mem_gb" -lt "$min_ram" ]; then

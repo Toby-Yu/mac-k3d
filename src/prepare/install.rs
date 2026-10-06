@@ -19,12 +19,19 @@ pub fn install_and_discover(name: &str) -> Result<DependencyEntry> {
         }
         "java" | "docker" | "k3d" | "kubectl" | "helm" | "git" | "uv" => {
             platform::install_package(name)?;
-            discover_single(name)
+            discover_usable(name)
                 .map(|t| tool_to_entry(&t))
                 .ok_or_else(|| {
-                    Error::DependencyMissing(format!(
-                        "{name} installed but binary not found on PATH"
-                    ))
+                    if name == "java" {
+                        Error::DependencyMissing(format!(
+                            "java installed but no Java {} found (JAVA_HOME, PATH, /usr/lib/jvm)",
+                            toolchain::java_major()
+                        ))
+                    } else {
+                        Error::DependencyMissing(format!(
+                            "{name} installed but binary not found on PATH"
+                        ))
+                    }
                 })
         }
         other => Err(Error::Config(format!(
@@ -57,6 +64,17 @@ pub fn discover_single(name: &str) -> Option<DiscoveredTool> {
         "git" => deps.git,
         _ => None,
     }
+}
+
+/// Like `discover_single`, but a Java below the controller's major does not count.
+pub fn discover_usable(name: &str) -> Option<DiscoveredTool> {
+    let tool = discover_single(name)?;
+    if name == "java"
+        && toolchain::java_major_of(&tool.binary).map_or(true, |m| m < toolchain::java_major())
+    {
+        return None;
+    }
+    Some(tool)
 }
 
 pub fn tool_to_entry(tool: &DiscoveredTool) -> DependencyEntry {

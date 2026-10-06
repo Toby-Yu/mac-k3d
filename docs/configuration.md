@@ -91,7 +91,7 @@ All fields are optional; omitted keys use defaults above.
 |-------|---------|
 | `standalone` | Local k3d only |
 | `controller` | Jenkins in-cluster on this Mac |
-| `worker` | Jenkins agent + the pinned Harbor, Java and git; no cluster, no in-cluster Jenkins |
+| `worker` | Jenkins agent + the pinned Harbor, Java (at least `JAVA_MAJOR`, the controller image's Java) and git; no cluster, no in-cluster Jenkins |
 
 ### `cluster`
 
@@ -171,9 +171,14 @@ Per-tool resolution. The prepare wizard discovers existing installs first and ne
 | Tool | Required when |
 |------|---------------|
 | `docker` | Always |
-| `k3d` | Always |
-| `kubectl` | Always |
+| `k3d` | controller, standalone |
+| `kubectl` | controller, standalone |
 | `helm` | Jenkins controller (`jenkins.enabled: true`) |
+| `java` | worker. Must be at least `JAVA_MAJOR` (21) from `pipeline/config/toolchain.env`, the Java of the controller image; an older one makes validation fail and the agent drop with `UnsupportedClassVersionError` |
+| `git` | worker; standalone with Harbor |
+| `harbor` | worker (exactly `HARBOR_VERSION`); standalone unless `source: skip` |
+
+Versions, pins, and what installs and checks each tool on Linux and macOS: [dependencies.md](dependencies.md).
 
 ## Example: Jenkins enabled
 

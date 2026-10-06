@@ -498,6 +498,29 @@ pub fn default_remote_fs() -> PathBuf {
         .join("jenkins-agent")
 }
 
+/// The Java the launch script runs: the recorded one when it runs, else what
+/// discovery picks (a Java that meets JAVA_MAJOR first), else `java` on PATH.
+pub fn agent_java(config: &crate::config::MacK3dConfig) -> String {
+    config
+        .dependencies
+        .java
+        .binary
+        .as_ref()
+        .filter(|p| p.exists())
+        .map(|p| p.display().to_string())
+        .filter(|s| {
+            std::process::Command::new(s)
+                .arg("-version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+        .or_else(|| {
+            crate::prepare::discovery::best_java().map(|(bin, _)| bin.display().to_string())
+        })
+        .unwrap_or_else(|| "java".into())
+}
+
 /// Download jar, register node (if credentials present), write launch script.
 pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
     use crate::config::NodeRole;
@@ -564,26 +587,7 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         .or_else(|| existing_secret(&script))
         .unwrap_or_else(|| "REPLACE_ME".into());
 
-    let java_bin = config
-        .dependencies
-        .java
-        .binary
-        .as_ref()
-        .filter(|p| p.exists())
-        .map(|p| p.display().to_string())
-        .filter(|s| {
-            std::process::Command::new(s)
-                .arg("-version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        })
-        .or_else(|| {
-            crate::prepare::discovery::discover_all()
-                .java
-                .map(|t| t.binary.display().to_string())
-        })
-        .unwrap_or_else(|| "java".into());
+    let java_bin = agent_java(config);
 
     let script_changed =
         write_launch_script_with_java(&script, &url, &name, &jar, &secret_placeholder, &java_bin)?;

@@ -139,13 +139,15 @@ Setup runs everything it can as you. When a step needs root and you cannot use `
 ```text
 Ask an administrator to run these as root on this machine:
 
-  apt-get install -y openjdk-17-jre-headless   # install java
+  apt-get install -y openjdk-21-jre-headless   # install java
   apt-get install -y git                       # install git
   usermod -aG docker <you>                     # let <you> use Docker without sudo (then log out and back in)
   loginctl enable-linger <you>                 # keep the Jenkins agent running after you log out
 ```
 
-The block lists only what is missing on this machine. Harbor and the Jenkins agent never need root. After the administrator has run it, log out and back in, then run `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` again and choose **Use existing config**; setup carries on from the installs.
+The block lists only what is missing on this machine. Harbor and the Jenkins agent never need root. Java is the controller's major version (`JAVA_MAJOR=21` in `pipeline/config/toolchain.env`); an older Java already on the machine is not enough, because the controller refuses the agent. Every tool and version is listed in [dependencies.md](dependencies.md).
+
+On a Mac worker there is no root block: Homebrew installs as you (`brew install --cask temurin@21`, plus `brew install bash` and `brew install python`, because macOS ships bash 3.2 and python3 3.9). macOS is supported by the code and CI but not yet lab-tested. After the administrator has run it, log out and back in, then run `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` again and choose **Use existing config**; setup carries on from the installs.
 
 ### 2. Jenkins API token (after Jenkins is up)
 

@@ -925,6 +925,7 @@ mod tests {
 
     #[test]
     fn icode_paths_load_empty_without_file() {
+        let _serial = crate::test_support::global_state();
         let prev = std::env::var_os("MAC_K3D_ICODE_PATHS");
         let missing =
             std::env::temp_dir().join(format!("mac-k3d-no-icode-paths-{}", std::process::id()));
@@ -940,6 +941,7 @@ mod tests {
 
     #[test]
     fn discover_icode_release_empty_without_drop() {
+        let _serial = crate::test_support::global_state();
         let prev = std::env::var_os("MAC_K3D_SHARE");
         std::env::set_var("MAC_K3D_SHARE", "/tmp/mac-k3d-no-icode-drop-xyz");
         let got = discover_icode_release();
@@ -952,6 +954,7 @@ mod tests {
 
     #[test]
     fn discover_icode_release_finds_full_tarball_in_share() {
+        let _serial = crate::test_support::global_state();
         let dir = std::env::temp_dir().join(format!("mac-k3d-eval-full-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

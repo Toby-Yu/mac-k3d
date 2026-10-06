@@ -72,6 +72,10 @@ pub fn requires_docker_app() -> bool {
     false
 }
 
+pub fn agent_path_first() -> Vec<&'static str> {
+    Vec::new()
+}
+
 pub fn agent_path_extras() -> Vec<&'static str> {
     vec![
         "/usr/local/bin",
@@ -103,7 +107,8 @@ pub fn install_package(name: &str) -> Result<()> {
         )));
     }
     match name {
-        "java" => apt_install(&["openjdk-17-jre-headless"])?,
+        "java" => apt_install(&[java_package().as_str()])?,
+        "python" => apt_install(&["python3"])?,
         "docker" => install_docker_engine()?,
         "k3d" => install_k3d_curl()?,
         "kubectl" => apt_install(&["kubectl"]).or_else(|_| install_kubectl_curl())?,
@@ -123,9 +128,19 @@ pub fn harbor_bootstrap_hint() -> &'static str {
     "neither uv nor pipx found; install will try curl → uv first"
 }
 
+/// JRE package matching the controller's Java (JAVA_MAJOR in toolchain.env).
+fn java_package() -> String {
+    format!(
+        "openjdk-{}-jre-headless",
+        crate::prepare::toolchain::java_major()
+    )
+}
+
 pub fn root_install_command(name: &str) -> Option<String> {
+    let java = format!("apt-get install -y {}", java_package());
     let cmd = match name {
-        "java" => "apt-get install -y openjdk-17-jre-headless",
+        "java" => java.as_str(),
+        "python" => "apt-get install -y python3",
         "git" => "apt-get install -y git",
         "docker" => "apt-get install -y docker.io docker-compose-v2 && systemctl enable --now docker",
         "kubectl" => "apt-get install -y kubectl",
@@ -203,6 +218,12 @@ pub fn worker_host_root_steps() -> Vec<super::RootStep> {
         steps.push(super::RootStep {
             why: "keep the Jenkins agent running after you log out".into(),
             command: format!("loginctl enable-linger {user}"),
+        });
+    }
+    if crate::prepare::toolchain::on_agent_path("python3").is_none() {
+        steps.push(super::RootStep {
+            why: "python3 for the pipeline's host scripts".into(),
+            command: "apt-get install -y python3".into(),
         });
     }
     steps

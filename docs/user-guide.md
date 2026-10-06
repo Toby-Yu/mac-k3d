@@ -87,7 +87,8 @@ mac-k3d --help   # must list setup and eval
 
 # Worker wizard. Enter keeps the printed default, or type http://CONTROLLER_IP:17070
 # Type http://<new-ip>:17070 if you created another controller
-# Docker / Java / git: Install if not found. Harbor is not asked: setup installs the pinned version
+# Docker / git: Install if not found. Java and Harbor are not asked: setup uses or installs
+# Java 21+ (the controller's Java) and the pinned Harbor
 # API user: admin   API token: the secret from step 1
 #   (or press Enter to skip; worker.yaml keeps api_user: '' and api_token: '' to fill in later)
 # Never run: mac-k3d start -c worker.yaml
@@ -116,6 +117,8 @@ mac-k3d import /tmp/worker.yaml -c ~/.config/mac-k3d/worker.yaml
 ```
 
 Linux without sudo stops before installing Docker and prints the root commands; after an administrator runs them, re-run `setup` and choose **Use existing config**. As **root**, Docker is ready without a logout. As a normal user, log out/in after the `docker` group is added, then re-run `setup`. macOS: open **Docker Desktop** until it is idle.
+
+Worker tools and versions (all in [dependencies.md](dependencies.md)): Docker with compose and buildx, Java 21 or newer (the controller image's Java; Linux `openjdk-21-jre-headless`, macOS `temurin@21`), git, python3 3.11+, bash 4.4+, Harbor 0.22.0. On a Mac, setup installs Java, bash and python with Homebrew as you (no root). macOS is supported by the code and CI, not yet lab-tested; the Mac commands are the same as above with the `mac-k3d-darwin-aarch64` (or `-x86_64`) asset.
 
 ```bash
 # Optional: confirm this PC can reach cloud Jenkins and the agent unit is up
@@ -240,6 +243,9 @@ mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode binary
 | Symptom | What to do |
 |---------|------------|
 | Waiting for executor | Worker node offline; do not `start -c worker.yaml` |
+| Node offline, agent log `UnsupportedClassVersionError` (class file 65 vs 61) or "Connection was broken" | The worker's Java is older than the controller's Java 21 (`JAVA_MAJOR`). Run `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml`, choose **Use existing config**: it switches to an installed Java 21 or installs one (without sudo it prints `apt-get install -y openjdk-21-jre-headless` for an administrator). `mac-k3d config` then shows `java 21: ok` |
+| `bash … is older than 4.4` | macOS `/bin/bash` 3.2. `brew install bash` (setup does it); the agent PATH puts `/opt/homebrew/bin` first |
+| `python3 … is older than 3.11` | macOS `/usr/bin/python3` 3.9: `brew install python` (setup does it). Linux: python3 3.11+ ahead of `/usr/bin` on PATH |
 | `pipeline/stages/run_all.sh` missing | Worker: `mac-k3d config -c worker.yaml` (extracts) **or** `mac-k3d eval --stage env` |
 | iCode not found | Jenkins release: upload `ICODE_RELEASE_FILE`. Local: drop official `icode-*-full-*` or a file named `icode` in `~/.local/share/mac-k3d/` (see §3), or use `ICODE_MODE=git`. All three benchmarks bind-mount that tree at `/opt/icode-host`. |
 | `cannot remove leftover … icode-src` | Old pipeline on the worker. Rebuild/install CLI, then `mac-k3d eval --stage env` (or `config -c worker.yaml`) so `~/.local/share/mac-k3d/pipeline` has `icode_force_rm`. Do not `sudo rm` as a routine step. |

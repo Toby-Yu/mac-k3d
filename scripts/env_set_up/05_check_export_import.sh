@@ -29,9 +29,10 @@ token_filled() {
   } END { exit !found }' "$1"
 }
 
-out="$(mktemp /tmp/mac-k3d-export-XXXX.yaml)"
-dest="$(mktemp /tmp/mac-k3d-import-XXXX.yaml)"
-rm -f "$dest"
+# BSD mktemp (macOS) only fills trailing Xs, so no suffix after them.
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/mac-k3d-export.XXXXXX")"
+out="$scratch/export.yaml"
+dest="$scratch/import.yaml"
 
 "$MAC_K3D_BIN" export -c "$src" -o "$out"
 token_filled "$out" && die "exported YAML still has an api_token value: $out"

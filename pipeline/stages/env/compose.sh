@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# env/compose: `docker compose` (v2 plugin) and `docker buildx`, user-level, at
-# the versions pinned in pipeline/config/toolchain.env. Harbor runs every trial
-# through compose; LoLBench's egress sidecar needs buildx.
+# env/compose: `docker compose` (v2 plugin) and `docker buildx`. An existing
+# plugin is kept; a missing one is downloaded user-level at the version pinned
+# in pipeline/config/toolchain.env (`mac-k3d setup` does the same on a worker,
+# src/prepare/docker_plugins.rs). Harbor runs every trial through compose;
+# LoLBench's egress sidecar needs buildx.
 set -euo pipefail
 # shellcheck source=../_common.sh
 source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"

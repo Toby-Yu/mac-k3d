@@ -489,7 +489,7 @@ icode_embed_sandbox_cpython() {
   if [ -x "$dest/.venv/sandbox-cpython/bin/python3.13" ] || [ -x "$dest/.venv/sandbox-cpython/bin/python3" ] || [ -x "$dest/.venv/sandbox-cpython/bin/python" ]; then
     return 0
   fi
-  py="$(readlink -f "$dest/.venv/bin/python" 2>/dev/null || true)"
+  py="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$dest/.venv/bin/python" 2>/dev/null || true)"
   [ -n "$py" ] && [ -x "$py" ] || return 0
   case "$py" in
     "$dest"/*) return 0 ;;

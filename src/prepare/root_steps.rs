@@ -53,7 +53,7 @@ mod tests {
         let steps = vec![
             RootStep {
                 why: "install java".into(),
-                command: "apt-get install -y openjdk-17-jre-headless".into(),
+                command: "apt-get install -y openjdk-21-jre-headless".into(),
             },
             RootStep {
                 why: "let toby use Docker without sudo (then log out and back in)".into(),
@@ -77,11 +77,16 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_packages_map_to_apt_without_sudo() {
-        let steps = for_packages(&["java", "git", "harbor"]);
-        let cmds: Vec<&str> = steps.iter().map(|s| s.command.as_str()).collect();
+        let steps = for_packages(&["java", "git", "python", "harbor"]);
+        let cmds: Vec<String> = steps.iter().map(|s| s.command.clone()).collect();
+        let java = format!(
+            "apt-get install -y openjdk-{}-jre-headless",
+            crate::prepare::toolchain::java_major()
+        );
+        assert_eq!(java, "apt-get install -y openjdk-21-jre-headless");
         assert_eq!(
             cmds,
-            vec!["apt-get install -y openjdk-17-jre-headless", "apt-get install -y git"],
+            vec![java, "apt-get install -y git".into(), "apt-get install -y python3".into()],
             "harbor installs per user with uv, so it is never a root step"
         );
     }

@@ -97,31 +97,50 @@ mod tests {
     use super::*;
     use crate::config::{ClusterConfig, JenkinsConfig, MacK3dConfig, PortMapping};
 
+    /// Anything else on the machine may take a port in the gap between
+    /// releasing it and binding it again, so a single attempt is not evidence.
+    const ATTEMPTS: u8 = 10;
+
     #[test]
     fn pick_keeps_preferred_when_free() {
+        let _serial = crate::test_support::global_state();
         let used = HashSet::new();
-        // Ephemeral: bind 0 to get a free port, then release and pick it.
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        let got = pick_free_host_port(port, &used).unwrap();
-        assert_eq!(got, port);
+        let mut last = (0, 0);
+        for _ in 0..ATTEMPTS {
+            // Ephemeral: bind 0 to get a free port, then release and pick it.
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
+            let got = pick_free_host_port(port, &used).unwrap();
+            if got == port {
+                return;
+            }
+            last = (port, got);
+        }
+        panic!("every free port was taken before pick could bind it: {last:?}");
     }
 
     #[test]
     fn pick_remaps_when_preferred_busy() {
-        let listener = TcpListener::bind(("0.0.0.0", 0)).unwrap();
-        let busy = listener.local_addr().unwrap().port();
+        let _serial = crate::test_support::global_state();
         let used = HashSet::new();
-        let got = pick_free_host_port(busy, &used).unwrap();
-        assert_ne!(got, busy);
-        assert!(got >= busy.saturating_add(CANDIDATE_OFFSET) || got != busy);
-        // Still holding listener — remapped port must be free to bind
-        assert!(host_tcp_available(got));
+        for attempt in 1..=ATTEMPTS {
+            let listener = TcpListener::bind(("0.0.0.0", 0)).unwrap();
+            let busy = listener.local_addr().unwrap().port();
+            let got = pick_free_host_port(busy, &used).unwrap();
+            assert_ne!(got, busy);
+            assert!(got >= busy.saturating_add(CANDIDATE_OFFSET) || got != busy);
+            // Still holding listener — the remapped port must be free to bind.
+            if host_tcp_available(got) {
+                return;
+            }
+            assert!(attempt < ATTEMPTS, "remapped port {got} was taken every time");
+        }
     }
 
     #[test]
     fn ensure_remaps_cluster_port_when_busy() {
+        let _serial = crate::test_support::global_state();
         let listener = TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let busy = listener.local_addr().unwrap().port();
 
@@ -151,6 +170,7 @@ mod tests {
 
     #[test]
     fn ensure_avoids_colliding_with_jenkins_port() {
+        let _serial = crate::test_support::global_state();
         // Leave both preferred free; ensure they stay distinct after ensure.
         let mut config = MacK3dConfig {
             cluster: ClusterConfig {

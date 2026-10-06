@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::config::{DependenciesConfig, DependencyEntry, DependencySource};
 use crate::platform;
+use crate::prepare::toolchain;
 
 /// Result of scanning the system for installed tools.
 #[derive(Debug, Default)]
@@ -70,56 +71,81 @@ fn discover_docker() -> Option<DiscoveredTool> {
     }
 }
 
+/// Java for the Jenkins agent: the first candidate at or above the controller's
+/// major (JAVA_MAJOR), else the newest that runs so validation can name it.
+/// A candidate whose `-version` fails (the macOS stub without a JDK) is skipped.
 fn discover_java() -> Option<DiscoveredTool> {
-    // macOS: prefer a real JDK from java_home; /usr/bin/java is often Apple's stub.
+    let (binary, major) = best_java()?;
+    Some(DiscoveredTool {
+        binary,
+        app: None,
+        version_hint: Some(format!("Java {major}")),
+    })
+}
+
+/// The Java `discover_java` picks, with its major version.
+pub fn best_java() -> Option<(PathBuf, u32)> {
+    let want = toolchain::java_major();
+    let found = java_candidates(want)
+        .into_iter()
+        .filter_map(|bin| toolchain::java_major_of(&bin).map(|major| (bin, major)));
+    pick_java(found, want)
+}
+
+/// First `(binary, major)` meeting `want`, else the highest major seen.
+pub fn pick_java(
+    found: impl IntoIterator<Item = (PathBuf, u32)>,
+    want: u32,
+) -> Option<(PathBuf, u32)> {
+    let mut best: Option<(PathBuf, u32)> = None;
+    for (bin, major) in found {
+        if major >= want {
+            return Some((bin, major));
+        }
+        if best.as_ref().map_or(true, |(_, m)| major > *m) {
+            best = Some((bin, major));
+        }
+    }
+    best
+}
+
+/// Where a Java may live, in preference order: macOS java_home for the pinned
+/// major, JAVA_HOME, PATH, then every JVM under /usr/lib/jvm (newest name first).
+fn java_candidates(want: u32) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
     if cfg!(target_os = "macos") {
-        if let Ok(output) = Command::new("/usr/libexec/java_home").output() {
-            if output.status.success() {
-                let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !home.is_empty() {
-                    let binary = PathBuf::from(&home).join("bin/java");
-                    if java_runtime_works(&binary) {
-                        return Some(DiscoveredTool {
-                            binary,
-                            app: None,
-                            version_hint: Some(home),
-                        });
-                    }
-                }
+        for args in [vec!["-v".to_string(), format!("{want}+")], Vec::new()] {
+            let Ok(o) = Command::new("/usr/libexec/java_home").args(&args).output() else {
+                continue;
+            };
+            let home = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if o.status.success() && !home.is_empty() {
+                out.push(PathBuf::from(home).join("bin/java"));
             }
         }
     }
-
     if let Ok(home) = std::env::var("JAVA_HOME") {
-        let binary = PathBuf::from(&home).join("bin/java");
-        if java_runtime_works(&binary) {
-            return Some(DiscoveredTool {
-                binary,
-                app: None,
-                version_hint: Some(home),
-            });
-        }
+        out.push(PathBuf::from(home).join("bin/java"));
     }
-
-    if let Some(binary) = which("java") {
-        if java_runtime_works(&binary) {
-            return Some(DiscoveredTool {
-                binary: binary.clone(),
-                app: None,
-                version_hint: version_of("java", &binary),
-            });
-        }
+    out.extend(which("java"));
+    if let Ok(entries) = std::fs::read_dir("/usr/lib/jvm") {
+        let mut jvms: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path().join("bin/java"))
+            .filter(|p| p.is_file())
+            .collect();
+        jvms.sort();
+        jvms.reverse();
+        out.extend(jvms);
     }
-    None
-}
-
-/// True when `java -version` succeeds (rejects macOS stub without a JDK).
-fn java_runtime_works(binary: &PathBuf) -> bool {
-    Command::new(binary)
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let mut seen = Vec::new();
+    out.retain(|p| {
+        let key = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+        let fresh = !seen.contains(&key);
+        seen.push(key);
+        fresh
+    });
+    out
 }
 
 fn discover_on_path(name: &str) -> Option<DiscoveredTool> {
@@ -214,5 +240,16 @@ mod tests {
     #[test]
     fn which_finds_common_tools_or_none() {
         let _ = which("k3d");
+    }
+
+    #[test]
+    fn pick_java_prefers_the_first_at_or_above_the_pin() {
+        let j = |p: &str, m: u32| (PathBuf::from(p), m);
+        let found = [j("/usr/bin/java", 17), j("/usr/lib/jvm/java-21/bin/java", 21), j("/x/25", 25)];
+        assert_eq!(pick_java(found.clone(), 21), Some(j("/usr/lib/jvm/java-21/bin/java", 21)));
+        assert_eq!(pick_java(found, 17), Some(j("/usr/bin/java", 17)));
+        let old = [j("/a/11", 11), j("/b/17", 17), j("/c/8", 8)];
+        assert_eq!(pick_java(old, 21), Some(j("/b/17", 17)));
+        assert_eq!(pick_java(Vec::new(), 21), None);
     }
 }

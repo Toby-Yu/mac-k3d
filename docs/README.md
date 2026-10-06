@@ -38,6 +38,7 @@ Copy-paste checklists with this lab’s IPs live under [testing/](testing/).
 |----------|-------------|
 | [commands.md](commands.md) | CLI flags |
 | [configuration.md](configuration.md) | YAML schema |
+| [dependencies.md](dependencies.md) | Every dependency per role (build, binary, controller, worker, pipeline, benchmarks): version, pinned or floating, where the pin lives, what installs and checks it, Linux vs macOS |
 | [architecture.md](architecture.md) | Components |
 | [deployment.md](deployment.md) | Multi-Mac topology |
 | [setup.md](setup.md) | Wizard / k3d scenarios (includes local cluster without Jenkins) |

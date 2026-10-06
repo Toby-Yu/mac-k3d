@@ -378,6 +378,7 @@ print('ok')\n",
 
     #[test]
     fn share_dir_honors_mac_k3d_share() {
+        let _serial = crate::test_support::global_state();
         let prev = std::env::var_os("MAC_K3D_SHARE");
         std::env::set_var("MAC_K3D_SHARE", "/tmp/mac-k3d-share-test");
         let got = share_dir();

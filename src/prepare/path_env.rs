@@ -181,6 +181,9 @@ pub fn agent_tool_path() -> String {
         }
     };
 
+    for first in crate::platform::agent_path_first() {
+        push_unique(PathBuf::from(first));
+    }
     if let Ok(path) = env::var("PATH") {
         for p in env::split_paths(&path) {
             push_unique(p);
@@ -223,5 +226,18 @@ mod tests {
                 || p.contains("/opt/homebrew/bin")
         );
         assert!(p.contains(".local/bin") || p.contains("/usr/bin"));
+    }
+
+    #[test]
+    fn agent_path_puts_platform_first_dirs_ahead_of_system_bins() {
+        let p = agent_tool_path();
+        let dirs: Vec<PathBuf> = env::split_paths(&p).collect();
+        let at = |d: &str| dirs.iter().position(|x| x == Path::new(d));
+        for (i, first) in crate::platform::agent_path_first().into_iter().enumerate() {
+            assert_eq!(at(first), Some(i), "{first} must lead the agent PATH: {p}");
+        }
+        if cfg!(target_os = "macos") {
+            assert!(at("/opt/homebrew/bin") < at("/bin"), "{p}");
+        }
     }
 }

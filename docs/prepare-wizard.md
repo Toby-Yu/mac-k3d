@@ -168,7 +168,7 @@ Apply installs in the order docker, git, java, k3d, kubectl, helm, harbor. A too
 ```text
 Ask an administrator to run these as root on this machine:
 
-  apt-get install -y openjdk-17-jre-headless   # install java
+  apt-get install -y openjdk-21-jre-headless   # install java
   usermod -aG docker <you>                     # let <you> use Docker without sudo (then log out and back in)
   loginctl enable-linger <you>                 # keep the Jenkins agent running after you log out
 
@@ -180,17 +180,21 @@ and choose "Use existing config"; setup carries on from the installs.
 
 Harbor never appears there: it installs per user with `uv`.
 
+On a worker, Java is pinned like Harbor and is not a question. The wizard uses a Java at or above `JAVA_MAJOR` (21) if it finds one (`JAVA_HOME`, PATH, `/usr/lib/jvm/*`, macOS `java_home -v 21+`); otherwise it marks Java for install (`openjdk-21-jre-headless` on Linux, `temurin@21` on macOS). Apply re-checks a config written earlier: if the recorded Java is older than the pin it switches to a newer one on the machine, or installs one. A worker apply also downloads a missing `docker compose` / `docker buildx` plugin at the pinned version into `~/.docker/cli-plugins` (a warning only if that fails; the env phase retries), and on macOS runs `brew install bash` / `brew install python` when the agent PATH has bash < 4.4 or python3 < 3.11. See [dependencies.md](dependencies.md).
+
 ### Disk space check (hard fail)
 
-Free space on `storage.base_dir`'s volume, and at least 8 GB RAM:
+Free space on `storage.base_dir`'s volume (on a worker also at `jenkins_agent.remote_fs`, where builds clone and run), and at least `MIN_RAM_GB` (8) GB RAM:
 
 | Role | Minimum free (default) |
 |------|------------------------|
-| standalone | 40 GB |
+| standalone | `WORKER_MIN_DISK_GB` (40 GB) |
 | controller | 60 GB |
-| worker | 40 GB (plan on about 100 GB: Harbor task images are multi-GB) |
+| worker | `WORKER_MIN_DISK_GB` (40 GB; plan on about 100 GB: Harbor task images are multi-GB) |
 
-Override with `prepare --disk-min-gb N` for labs (discouraged). Each build's `env` phase checks free RAM and disk again (`MAC_K3D_MIN_RAM_GB`, `MAC_K3D_MIN_DISK_GB`).
+`MIN_RAM_GB` and `WORKER_MIN_DISK_GB` are in `pipeline/config/toolchain.env`, which each build's `env` phase reads too, so both checks use the same numbers. Override with `prepare --disk-min-gb N` for labs (discouraged), or per build with `MAC_K3D_MIN_RAM_GB` / `MAC_K3D_MIN_DISK_GB`.
+
+Validation of a worker also fails when the agent's Java is older than `JAVA_MAJOR`: the controller would refuse that agent. An old bash or python3 on the agent PATH is a **warning** here and in `mac-k3d config`, so setup still finishes and the agent comes up; each build's `env` phase then refuses to run until it is fixed.
 
 ---
 

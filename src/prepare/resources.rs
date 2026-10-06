@@ -18,7 +18,7 @@ pub fn ram_kb_meets(kb: u64, min_gb: u64) -> bool {
     kb / 1024 / 1024 >= min_gb
 }
 
-/// Worker/controller eval needs roughly 8 GB RAM.
+/// Eval hosts need MIN_RAM_GB (pipeline/config/toolchain.env); the env phase checks the same.
 pub fn ensure_ram_min(min_gb: u64) -> Result<()> {
     let kb = mem_total_kb().unwrap_or(0);
     if kb == 0 {
@@ -59,11 +59,10 @@ fn mem_total_kb() -> Option<u64> {
 
 /// Ensure free space on the volume containing `path` is at least `min_gb`.
 pub fn ensure_disk_min(path: &Path, min_gb: u64) -> Result<()> {
-    let check_path = if path.exists() {
-        path
-    } else {
-        path.parent().unwrap_or(Path::new("/"))
-    };
+    let check_path = path
+        .ancestors()
+        .find(|p| p.exists())
+        .unwrap_or(Path::new("/"));
     let available = crate::prepare::volumes::available_bytes(check_path).unwrap_or(0);
     let need = min_gb.saturating_mul(GB);
     if available < need {

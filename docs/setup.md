@@ -48,7 +48,7 @@ On a terminal, this launches an **interactive wizard** that:
 
 1. Picks a volume with the most free space and asks where to store large caches (Docker, k3d, Jenkins).
 2. Asks for this Mac's role (standalone, CI controller, or CI worker).
-3. Asks only about the tools that role uses (controller: Docker, k3d, kubectl, helm; worker: Docker, Java, git, plus the pinned Harbor, which is not a question) and whether to use them or install missing ones.
+3. Asks only about the tools that role uses (controller: Docker, k3d, kubectl, helm; worker: Docker and git, plus Java at the controller's major version and the pinned Harbor, which are not questions) and whether to use them or install missing ones.
 4. Writes `~/.config/mac-k3d/config.yaml`, then installs what you chose. Anything that needs root and cannot get `sudo` is printed as one block for an administrator.
 
 For scripting without prompts:
@@ -255,7 +255,7 @@ Repeat on each worker Mac. The worker wizard asks only what an agent needs:
 ```bash
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 # Role: CI worker
-# Docker / Java / git: Install if not found (Harbor is installed at the pin, not asked)
+# Docker / git: Install if not found (Java 21+ and Harbor are installed at the pin, not asked)
 # Jenkins controller URL: http://<mac-a-ip>:17070
 # API user / token: admin + an API token from Mac A, or Enter to skip
 ```
@@ -347,6 +347,7 @@ mac-k3d status
 | k3d cluster not found | First run or after `clean` | `mac-k3d start` recreates it |
 | Jenkins pod not ready | Helm install still rolling out | `kubectl get pods -n jenkins -w` |
 | Worker agent offline | Network, blank API keys, or agent process stopped | Check VPN/firewall; fill `api_user` / `api_token` in `worker.yaml`; `mac-k3d config -c worker.yaml` |
+| Agent log: `UnsupportedClassVersionError` (class file version 65 vs 61) or "Connection was broken"; node offline although the unit is active | The worker's Java is older than the controller's (`JAVA_MAJOR`, 21) | `mac-k3d setup -c worker.yaml` → **Use existing config**: switches to a Java 21 already on the machine, or installs `openjdk-21-jre-headless` (`temurin@21` on macOS; an administrator block without sudo). `mac-k3d config` prints `java 21: ok` when fixed |
 | Jobs queue forever on Mac B | Agent offline, or no `<agent>-core-N` resources | Check Nodes and Lockable Resources; re-run `mac-k3d config -c worker.yaml` |
 | Port already in use | Conflicting service on host port | Change `jenkins.host_port` or `cluster.ports` in config |
 

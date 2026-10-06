@@ -34,6 +34,41 @@ echo "$STATUS_OUT"
 echo "$STATUS_OUT" | grep -qi 'Role:.*worker' || die "status does not report worker role"
 pass "worker status role=worker"
 
+# The agent runs dependencies.java.binary from worker.yaml. launch-agent.sh is
+# never read here: it holds the agent secret.
+worker_java_binary() {
+  awk '
+    /^[^ #]/ { in_deps = ($0 ~ /^dependencies:/); in_java = 0; next }
+    in_deps && /^  [^ ]/ { in_java = ($0 ~ /^  java:/); next }
+    in_java && /^    binary:/ { sub(/^    binary:[ ]*/, ""); gsub(/["\047]/, ""); print; exit }
+  ' "$1"
+}
+java_major() {
+  local v
+  v="$("$1" -version 2>&1 | grep -v '^Picked up' | head -n 1 | sed -E 's/^[^0-9"]*"?([0-9][0-9._]*).*/\1/')"
+  case "$v" in 1.*) v="${v#1.}" ;; esac
+  echo "${v%%[._]*}"
+}
+TOOLCHAIN_ENV="$MAC_K3D_ROOT/pipeline/config/toolchain.env"
+[ -f "$TOOLCHAIN_ENV" ] || TOOLCHAIN_ENV="$HOME/.local/share/mac-k3d/pipeline/config/toolchain.env"
+[ -f "$TOOLCHAIN_ENV" ] || die "no pipeline/config/toolchain.env; run: $MAC_K3D_BIN config -c $WORKER_CONFIG"
+JAVA_WANT="$(sed -n 's/^JAVA_MAJOR=//p' "$TOOLCHAIN_ENV" | head -n 1)"
+[ -n "$JAVA_WANT" ] || die "JAVA_MAJOR missing from $TOOLCHAIN_ENV"
+JAVA_FIX="run: $MAC_K3D_BIN setup -c $WORKER_CONFIG and choose \"Use existing config\""
+JAVA_BIN="$(worker_java_binary "$WORKER_CONFIG")"
+case "$JAVA_BIN" in
+  '' | null | '~') die "worker.yaml has no dependencies.java.binary; $JAVA_FIX" ;;
+esac
+[ -x "$JAVA_BIN" ] || die "agent java $JAVA_BIN not found; $JAVA_FIX"
+JAVA_GOT="$(java_major "$JAVA_BIN")"
+case "$JAVA_GOT" in
+  '' | *[!0-9]*) die "could not read the Java version of $JAVA_BIN; Jenkins agents need Java $JAVA_WANT" ;;
+esac
+if [ "$JAVA_GOT" -lt "$JAVA_WANT" ]; then
+  die "agent java $JAVA_GOT at $JAVA_BIN; the controller needs Java $JAVA_WANT (UnsupportedClassVersionError); $JAVA_FIX"
+fi
+pass "agent java $JAVA_GOT at $JAVA_BIN (need $JAVA_WANT+)"
+
 AGENT_OK=0
 if have systemctl; then
   if systemctl --user is-active mac-k3d-jenkins-agent.service >/dev/null 2>&1; then

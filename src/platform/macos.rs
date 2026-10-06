@@ -52,6 +52,12 @@ pub fn requires_docker_app() -> bool {
     true
 }
 
+/// Ahead of the shell PATH: /bin/bash is 3.2 and /usr/bin/python3 is 3.9, and
+/// the pipeline needs the Homebrew ones (BASH_MIN, PYTHON_MIN in toolchain.env).
+pub fn agent_path_first() -> Vec<&'static str> {
+    vec!["/opt/homebrew/bin", "/usr/local/bin"]
+}
+
 pub fn agent_path_extras() -> Vec<&'static str> {
     vec![
         "/usr/local/bin",
@@ -134,8 +140,11 @@ pub fn install_package(name: &str) -> Result<()> {
             "Homebrew not found; install {name} from https://brew.sh"
         )));
     }
+    let temurin = format!("temurin@{}", crate::prepare::toolchain::java_major());
     let args: Vec<&str> = match name {
-        "java" => vec!["install", "--cask", "temurin"],
+        "java" => vec!["install", "--cask", temurin.as_str()],
+        "bash" => vec!["install", "bash"],
+        "python" => vec!["install", "python"],
         "docker" => vec!["install", "--cask", "docker"],
         "k3d" => vec!["install", "k3d"],
         "kubectl" => vec!["install", "kubectl"],

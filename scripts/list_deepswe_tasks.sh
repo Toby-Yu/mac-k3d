@@ -18,9 +18,9 @@ for base in "${candidates[@]}"; do
 done
 
 if [ -z "$found" ]; then
-  echo "ERROR: no deep-swe/tasks tree. Set MAC_K3D_EVAL_WORKDIR or run: mac-k3d eval --stage p2 --local --benchmark deepswe --n-tasks 2" >&2
+  echo "ERROR: no deep-swe/tasks tree. Set MAC_K3D_EVAL_WORKDIR or run: mac-k3d eval --stage tasks --local --benchmark deepswe --n-tasks 2" >&2
   exit 2
 fi
 
 echo "OK tasks dir $found" >&2
-find "$found" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
+find "$found" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||' | sort

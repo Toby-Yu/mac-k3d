@@ -191,7 +191,7 @@ If the config file already exists and stdin is a TTY, `prepare` (without `-i`) p
 1. Assert macOS or Linux.
 2. **Storage**: scan volumes, default to the one with most free space, prompt for base directory under that volume.
 3. **Role**: standalone / controller / worker; set `jenkins.enabled` for controller.
-4. **Tools for that role only**: worker → Docker, Java, git; controller → Docker, k3d, kubectl, helm; standalone → Docker, k3d, kubectl, and Harbor + git when it will run `eval --local`. Harbor is not a question: it is installed at `HARBOR_VERSION` from `pipeline/config/toolchain.env` with `uv` (no root).
+4. **Tools for that role only**: worker → Docker, Java, git; controller → Docker, k3d, kubectl, helm; standalone → Docker, k3d, kubectl, and Harbor + git when it will run `eval --local`. Harbor is not a question: it is installed at `HARBOR_VERSION` from `pipeline/config/toolchain.env` with `uv` (no root). Nor is a worker's Java: one at or above `JAVA_MAJOR` (the controller image's Java) is used, otherwise it is installed ([dependencies.md](dependencies.md)).
 5. **Worker agent block**: Jenkins URL, API user and token (Enter skips both; the YAML keeps `api_user: ''` / `api_token: ''`), agent name, labels, remote root. **Controller**: cluster, job defaults, CI secrets to the pending file.
 6. **Save** the YAML, then **apply**: storage directories, installs (root steps that cannot run here are printed as one block), worker host settings.
 7. **Disk check**: fail if free space on storage volume is below role minimum (standalone 40 GB, controller 60 GB, worker 40 GB). RAM preflight is 8 GB.

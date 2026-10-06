@@ -7,8 +7,11 @@ source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 
 TASKS_DIR="$(benchmark_tasks_dir)"
 ensure_selected_tasks
-mapfile -t TASK_IDS < <(grep -v '^[[:space:]]*$' "$WORKDIR/selected_tasks.txt" || true)
-for tid in "${TASK_IDS[@]}"; do
+TASK_IDS=()
+while IFS= read -r tid || [ -n "$tid" ]; do
+  case "$tid" in *[![:space:]]*) TASK_IDS+=("$tid") ;; esac
+done <"$WORKDIR/selected_tasks.txt"
+for tid in ${TASK_IDS[@]+"${TASK_IDS[@]}"}; do
   [ -d "$TASKS_DIR/$tid" ] || die "no task under $TASKS_DIR (wanted $tid)"
   [ "${BENCHMARK:-deepswe}" = "lolbench" ] || continue
   image="$(

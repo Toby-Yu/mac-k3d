@@ -1,6 +1,7 @@
 pub mod agent_service;
 pub mod apply;
 pub mod discovery;
+pub mod docker_plugins;
 pub mod eval_assets;
 pub mod icode_paths;
 pub mod install;
@@ -116,13 +117,26 @@ fn problems(config: &MacK3dConfig) -> Vec<String> {
         if config.jenkins_agent.cpu_cores == 0 {
             problems.push("worker role expects jenkins_agent.cpu_cores > 0".into());
         }
+        problems.extend(worker_java_problem(config));
     }
 
-    let disk_path = config.storage.base_dir.as_deref().unwrap_or(Path::new("/"));
-    if let Err(e) = resources::ensure_disk_min(disk_path, config.disk_min_gb()) {
-        problems.push(e.to_string());
+    for path in apply::disk_check_paths(config) {
+        if let Err(e) = resources::ensure_disk_min(&path, config.disk_min_gb()) {
+            problems.push(e.to_string());
+        }
     }
     problems
+}
+
+/// The agent runs the recorded Java; the controller refuses one below JAVA_MAJOR.
+fn worker_java_problem(config: &MacK3dConfig) -> Option<String> {
+    let entry = &config.dependencies.java;
+    if entry.source != DependencySource::Existing {
+        return None;
+    }
+    let bin = entry.binary.as_deref().filter(|b| b.exists())?;
+    toolchain::java_problem(bin, toolchain::java_major_of(bin), toolchain::java_major())
+        .map(|p| format!("{p}; run `mac-k3d setup` and choose \"Use existing config\""))
 }
 
 /// What each role must have. A worker runs builds: Docker, the agent's Java,
@@ -213,5 +227,44 @@ mod tests {
         let mut cfg = worker();
         cfg.dependencies.harbor = DependencyEntry::default();
         assert!(problems(&cfg).iter().any(|p| p.contains("harbor is marked for install")));
+    }
+
+    /// A stand-in `java` that prints `version` the way `java -version` does.
+    /// Exec can hit ETXTBSY while another test thread forks with the write fd
+    /// still open, so wait until the script actually runs.
+    fn fake_java(dir: &Path, version: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join(format!("java-{version}"));
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\necho 'openjdk version \"{version}\" 2024-01-16' >&2\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for _ in 0..100 {
+            if toolchain::java_major_of(&bin).is_some() {
+                return bin;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("fake java {} never ran", bin.display());
+    }
+
+    #[test]
+    fn worker_with_old_java_fails_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let want = toolchain::java_major();
+
+        let mut cfg = worker();
+        let old = fake_java(dir.path(), "17.0.20.1");
+        cfg.dependencies.java.binary = Some(old.clone());
+        let found = problems(&cfg);
+        let msg = format!("java 17 at {}; Jenkins agents need Java {want}", old.display());
+        assert!(found.iter().any(|p| p.starts_with(&msg)), "{found:?}");
+        assert!(found.iter().any(|p| p.contains("Use existing config")), "{found:?}");
+
+        cfg.dependencies.java.binary = Some(fake_java(dir.path(), &format!("{want}.0.4")));
+        let found = problems(&cfg);
+        assert!(!found.iter().any(|p| p.starts_with("java ")), "{found:?}");
     }
 }

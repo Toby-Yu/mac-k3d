@@ -19,6 +19,7 @@ PRODUCT_MD=(
   architecture.md
   commands.md
   configuration.md
+  dependencies.md
   deployment.md
   evaluation.md
   export-import.md

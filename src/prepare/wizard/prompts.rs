@@ -217,6 +217,37 @@ pub fn pinned_harbor() -> DependencyEntry {
     }
 }
 
+/// Java is not a question on a worker: the agent must run at least the
+/// controller image's Java (JAVA_MAJOR), so a Java that meets it is used and
+/// anything older is replaced by an install of that version.
+pub fn pinned_java(discovered: Option<&DiscoveredTool>) -> DependencyEntry {
+    let want = toolchain::java_major();
+    let found = discovered.and_then(|t| toolchain::java_major_of(&t.binary).map(|m| (t, m)));
+    match found {
+        Some((tool, major)) if major >= want => {
+            println!(
+                "\njava: Java {major} found at {} (agents need {want}+, pinned in pipeline/config/toolchain.env)",
+                tool.binary.display()
+            );
+            install::tool_to_entry(tool)
+        }
+        other => {
+            let seen = other
+                .map(|(t, m)| format!("Java {m} at {} is too old; ", t.binary.display()))
+                .unwrap_or_default();
+            println!(
+                "\njava: {seen}Jenkins agents need Java {want}. Setup installs it via {}",
+                install_label("java")
+            );
+            DependencyEntry {
+                source: DependencySource::Install,
+                binary: None,
+                app: None,
+            }
+        }
+    }
+}
+
 pub fn storage_for(base_dir: &Path) -> StorageConfig {
     StorageConfig {
         base_dir: Some(base_dir.to_path_buf()),
