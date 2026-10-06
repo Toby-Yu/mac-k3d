@@ -46,7 +46,7 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 | `evaluate/slots` | Clears this build's Harbor job and memory samples, then divides `CPU_LOCK_QTY` by each task's declared `cpus`/`memory_mb` into `EVAL_SLOTS`. Refuses a worker that cannot host one trial | `eval_resources.json` |
 | `evaluate/canary` | The isolation canary (see [Anti-cheat](#anti-cheat)) | `canary/jenkins-<N>/` |
 | `evaluate/harbor_run` | One `harbor run` for every selected task × rollout, with a 60 s heartbeat and memory sampling; then `meta.json`, and the iCode tree handed back to the build user | `harness/harbor_runs/jenkins-<N>/`, `harness/harbor.log`, `harness/progress.json`, `harness/meta.json` |
-| `anticheat/receipts` | For every trial, the patch the grader read must match the capture receipt, at the task's declared base commit | `<trial>/agent/capture_flags.json` |
+| `anticheat/receipts` | First, every trial in this build's Harbor jobs dir must belong to a selected task (`check-trials`; the build fails otherwise, since that trial would drop out of the score and report). Then, for every trial, the patch the grader read must match the capture receipt, at the task's declared base commit | `<trial>/agent/capture_flags.json` |
 | `anticheat/verdict` | `clean`, `flagged` or `rejected` per rollout | `<trial>/agent/anticheat.json`, `harness/anticheat/` |
 | `score/score` | F2P/P2P per rollout | `results/score-temp.json` |
 | `report/render` | The run folder; rejected rollouts score as unresolved | `output/<suite>/<run>/`, `report_dir.txt`, `last_output.txt` |

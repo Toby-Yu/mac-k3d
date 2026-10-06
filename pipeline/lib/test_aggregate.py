@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -33,7 +34,11 @@ def write_trial(job: Path, task: str, attempt: int, reward: float, patch_bytes: 
         ),
         encoding="utf-8",
     )
-    (trial / "result.json").write_text(json.dumps({"task_name": task}), encoding="utf-8")
+    # Harbor 0.22: task_name is <org>/<id> and task_id names the task dir.
+    (trial / "result.json").write_text(
+        json.dumps({"task_name": f"datacurve/{task}", "task_id": {"path": f"/eval-runs/deep-swe/tasks/{task}"}}),
+        encoding="utf-8",
+    )
     (trial / "agent").mkdir(exist_ok=True)
     (trial / "agent" / "capture.json").write_text(
         json.dumps({"patch": {"bytes": patch_bytes}}), encoding="utf-8"
@@ -78,6 +83,28 @@ def make_shard(
         encoding="utf-8",
     )
     return shard
+
+
+# What a shard's post step archives (src/prepare/jenkins_job.rs), relative to eval-runs/.
+SHARD_ARCHIVE = (
+    "harness/harbor_runs/jenkins-{build}",
+    "harness/anticheat",
+    "selected_tasks.txt",
+    "eval_protocol_inputs.json",
+    "eval_resources.json",
+)
+
+
+def archive_like_a_shard(work: Path, build: str, dest: Path) -> None:
+    """Copy a worker's eval-runs/ the way the shard archive and copyArtifacts would."""
+    for pattern in SHARD_ARCHIVE:
+        rel = pattern.format(build=build)
+        src, target = work / rel, dest / rel
+        if src.is_dir():
+            shutil.copytree(src, target)
+        elif src.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
 
 
 class ShardDiscoveryTests(unittest.TestCase):
@@ -212,6 +239,28 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("pipelines", doc)
             self.assertTrue((out / "summary.md").is_file())
             self.assertTrue((out / "report.html").is_file())
+
+    def test_shards_from_reused_workspaces_merge_only_their_own_build(self):
+        """Each worker still holds a pre-PF.1 build of the same task, scored 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            copied = root / "shards"
+            for build, task in (("101", "alpha"), ("102", "beta")):
+                work = make_shard(root / "workspaces", f"jenkins-{build}", {task: [1.0]})
+                write_trial(work / "harness" / "harbor_runs" / "jenkins-40" / task / "job", task, 1, 0.0)
+                archive_like_a_shard(work, build, copied / build / "eval-runs")
+            out = root / "aggregate"
+            self.assertEqual(self.run_main(copied, out, rollouts=1), 0)
+            doc = json.loads((out / "artifact.json").read_text(encoding="utf-8"))
+            builds = sorted(p.name for p in (out / "harness" / "harbor_runs").iterdir())
+            self.assertEqual(builds, ["shard1-jenkins-101", "shard2-jenkins-102"])
+            self.assertEqual(doc["shards"], 2)
+            self.assertEqual({row["id"]: row["c"] for row in doc["icode"]["tasks"]}, {"alpha": 1, "beta": 1})
+            self.assertEqual(doc["icode"]["macro_pass@1"], 1.0)
+            self.assertEqual(doc["anticheat"]["status"], "ok")
+            self.assertEqual(doc["anticheat"]["attempts"], 2)
+            self.assertEqual(doc["anticheat"]["counts"]["clean"], 2)
+            self.assertIn("clean **2**", (out / "summary.md").read_text(encoding="utf-8"))
 
     def test_shards_from_different_pipeline_builds_are_marked_mixed(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -14,7 +14,8 @@ ensure_selected_tasks
 # This build's Harbor job and memory samples start empty.
 mkdir -p "$HARNESS_DIR"
 rm -rf "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"
-rm -f "$HARNESS_DIR/container_mem_peak_gb" \
+rm -f "$HARNESS_DIR/harbor_jobs_dir.txt" \
+  "$HARNESS_DIR/container_mem_peak_gb" \
   "$HARNESS_DIR/container_mem.jsonl" \
   "$HARNESS_DIR/container_mem_current.json" \
   "$HARNESS_DIR/active_question.txt" \

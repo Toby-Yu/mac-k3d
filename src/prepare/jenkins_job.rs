@@ -1011,9 +1011,10 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
             archiveArtifacts artifacts: pattern, allowEmptyArchive: true
           }}
         }}
-        // A shard archives its trials so the dispatcher can merge them.
+        // A shard archives this build's trials and verdicts so the dispatcher
+        // can merge them. The workspace keeps every earlier build's trials too.
         if (params.RUN_GROUP?.trim()) {{
-          archiveArtifacts artifacts: 'eval-runs/harness/harbor_runs/**', allowEmptyArchive: true
+          archiveArtifacts artifacts: "eval-runs/harness/harbor_runs/jenkins-${{env.BUILD_NUMBER}}/**, eval-runs/harness/anticheat/**", allowEmptyArchive: true
           archiveArtifacts artifacts: 'eval-runs/selected_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json', allowEmptyArchive: true
         }}
       }}
@@ -2245,7 +2246,11 @@ mod tests {
         let opts = deepswe_opts(Vec::new());
         let jf = eval_jenkinsfile("deepswe", JobShape::One, &opts);
         assert!(jf.contains("params.RUN_GROUP?.trim()"));
-        assert!(jf.contains("eval-runs/harness/harbor_runs/**"));
+        // Only this build's trials, and the verdict summary the Aggregate merges.
+        assert!(jf.contains(
+            "\"eval-runs/harness/harbor_runs/jenkins-${env.BUILD_NUMBER}/**, eval-runs/harness/anticheat/**\""
+        ));
+        assert!(!jf.contains("'eval-runs/harness/harbor_runs/**'"));
         assert!(jf.contains("eval-runs/selected_tasks.txt"));
         assert!(jf.contains("currentBuild.description = \"shard ${params.SHARD}\""));
         // Copy Artifact refuses cross-job copies unless the source job allows them.

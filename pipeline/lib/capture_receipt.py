@@ -6,6 +6,8 @@ declared-repo  Print the repo path and base commit a task declares, one per line
                LoLBench: /workspace/<metadata.project> and the image tag
                lolbench-base. DeepSWE and SWE-bench Pro: the `cd <path>` and the
                commit in the first [[verifier.collect]] command.
+check-trials   anticheat/receipts, first. Every trial in this build's Harbor jobs dir must
+               belong to a selected task; exit 1 naming any that does not.
 annotate       anticheat/receipts. For every trial, compare the patch the grader read with the
                capture receipt and write agent/capture_flags.json. Same check
                for every suite; only the grader's file name differs.
@@ -164,6 +166,34 @@ def trial_flags(trial: Path, benchmark: str, gold_binary: set[str], declared_bas
     }
 
 
+def check_trials(harness_dir: Path, task_ids: list[str]) -> int:
+    """0 when every trial this build's Harbor run wrote belongs to a selected task.
+
+    A trial no task claims is left out of the anti-cheat, the score and the
+    report, which would then publish a lower Pass@1 than Harbor measured.
+    """
+    from score_results import current_jobs_dir, harbor_task_trials, trial_task_ids, unmatched_trials
+
+    jobs = current_jobs_dir(harness_dir)
+    if jobs is None:
+        print(f"check trials: no harbor_jobs_dir.txt naming a dir under {harness_dir / 'harbor_runs'}; nothing to check")
+        return 0
+    stray = unmatched_trials(jobs, task_ids)
+    if stray:
+        print(
+            f"ERROR: {len(stray)} Harbor trial(s) in {jobs} match no selected task, so anti-cheat, "
+            "score and report would leave them out:",
+            file=sys.stderr,
+        )
+        for trial in stray:
+            names = ", ".join(sorted(trial_task_ids(trial))) or "no task recorded"
+            print(f"  {trial.relative_to(jobs)}: {names}", file=sys.stderr)
+        return 1
+    matched = sum(len(harbor_task_trials(harness_dir, tid)) for tid in task_ids)
+    print(f"OK trials: {matched} matched for {len(task_ids)} tasks")
+    return 0
+
+
 def annotate(harness_dir: Path, tasks_dir: Path, task_ids: list[str], benchmark: str) -> dict:
     from score_results import harbor_task_trials
 
@@ -203,6 +233,10 @@ def main(argv: list[str] | None = None) -> int:
     decl.add_argument("--task-dir", required=True)
     decl.add_argument("--benchmark", default="deepswe")
 
+    check = sub.add_parser("check-trials")
+    check.add_argument("--harness-dir", required=True)
+    check.add_argument("--task-file", required=True)
+
     note = sub.add_parser("annotate")
     note.add_argument("--harness-dir", required=True)
     note.add_argument("--tasks-dir", required=True)
@@ -215,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
         print(repo)
         print(base)
         return 0
+    if args.cmd == "check-trials":
+        return check_trials(Path(args.harness_dir), _read_task_ids(Path(args.task_file)))
     summary = annotate(
         Path(args.harness_dir),
         Path(args.tasks_dir),

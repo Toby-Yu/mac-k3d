@@ -573,6 +573,44 @@ class CaptureReceiptHostTests(unittest.TestCase):
             summary = annotate(root / "harness", tasks, ["alpha"], "deepswe")
             self.assertEqual(summary, {"trials": 1, "base_commit_mismatch": 1})
 
+    def test_check_trials_fails_on_a_trial_no_selected_task_claims(self):
+        """A trial nothing claims used to vanish into a 0% report; now the anti-cheat stage stops."""
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "harness"
+            jobs = harness / "harbor_runs" / "jenkins-52"
+            for tid in ("alpha", "beta"):
+                trial = jobs / "icode_deepswe_52" / f"{tid}__x"
+                (trial / "verifier").mkdir(parents=True)
+                (trial / "verifier" / "reward.json").write_text('{"reward": 1}', encoding="utf-8")
+                (trial / "result.json").write_text(json.dumps({"task_name": f"datacurve/{tid}"}), encoding="utf-8")
+            (harness / "harbor_jobs_dir.txt").write_text(f"{jobs}\n", encoding="utf-8")
+            selected = Path(tmp) / "selected_tasks.txt"
+
+            def check(*tids: str) -> subprocess.CompletedProcess:
+                selected.write_text("".join(f"{tid}\n" for tid in tids), encoding="utf-8")
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        str(LIB / "capture_receipt.py"),
+                        "check-trials",
+                        "--harness-dir",
+                        str(harness),
+                        "--task-file",
+                        str(selected),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+            ok = check("alpha", "beta")
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            self.assertIn("OK trials: 2 matched for 2 tasks", ok.stdout)
+            stray = check("alpha")
+            self.assertEqual(stray.returncode, 1)
+            self.assertIn("icode_deepswe_52/beta__x: beta, datacurve/beta", stray.stderr)
+            self.assertNotIn("alpha__x", stray.stderr)
+
     def test_trial_flags_same_check_for_every_suite(self):
         data = b"diff --git a/x b/x\n"
         for suite in SUITES:
@@ -667,6 +705,11 @@ class CaptureWiringTests(unittest.TestCase):
         self.assertIn("MAC_K3D_REPO_CANDIDATES=", p5)
         self.assertNotIn('--ae "MAC_K3D_REPO=', p5)
         self.assertIn("capture_receipt.py\" annotate", receipts)
+        guard = receipts.index("capture_receipt.py\" check-trials")
+        annotate_at = receipts.index("capture_receipt.py\" annotate")
+        self.assertLess(guard, annotate_at)
+        # Only annotate may warn and carry on; the guard's exit status is the step's.
+        self.assertNotIn("||", receipts[guard:annotate_at])
         run_all = (stages / "run_all.sh").read_text(encoding="utf-8")
         self.assertIn("PHASES=(env tasks evaluate anticheat score report archive)", run_all)
 

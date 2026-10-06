@@ -109,20 +109,35 @@ def find_harbor_task_dir(harness_dir: Path, tid: str) -> Path | None:
     return max(candidates, key=_mtime)
 
 
-def trial_task_name(trial: Path) -> str:
-    """Task id a Harbor trial recorded for itself; empty when it recorded none."""
+def trial_task_ids(trial: Path) -> set[str]:
+    """Every id a Harbor trial recorded for its task; empty when it recorded none.
+
+    Harbor 0.22 writes ``task_name`` as ``<org>/<id>`` (``datacurve/abs-module-cache-flags``)
+    and ``task_id`` as ``{"path": ".../<id>"}``, while mac-k3d selects tasks by
+    their directory name, so each form is reduced to that name as well.
+    """
+    ids: set[str] = set()
+
+    def add_dir_name(raw) -> None:
+        if isinstance(raw, str) and raw.strip():
+            ids.add(Path(raw.strip()).name)
+
     data = load_json(trial / "result.json")
     if isinstance(data, dict):
-        for key in ("task_name", "task_id"):
-            got = data.get(key)
-            if isinstance(got, str) and got.strip():
-                return got.strip()
+        name = data.get("task_name")
+        if isinstance(name, str) and name.strip():
+            ids.add(name.strip())
+            ids.add(name.strip().rsplit("/", 1)[-1])
+        got = data.get("task_id")
+        if isinstance(got, str) and got.strip():
+            ids.add(got.strip())
+        elif isinstance(got, dict):
+            add_dir_name(got.get("path"))
     data = load_json(trial / "config.json")
-    if isinstance(data, dict):
-        path = (data.get("task") or {}).get("path") if isinstance(data.get("task"), dict) else None
-        if isinstance(path, str) and path.strip():
-            return Path(path.strip()).name
-    return ""
+    if isinstance(data, dict) and isinstance(data.get("task"), dict):
+        add_dir_name(data["task"].get("path"))
+    ids.discard("")
+    return ids
 
 
 def harbor_runs_root(harness_dir: Path) -> Path | None:
@@ -130,6 +145,32 @@ def harbor_runs_root(harness_dir: Path) -> Path | None:
         return harness_dir
     runs = harness_dir / "harbor_runs"
     return runs if runs.is_dir() else None
+
+
+def current_jobs_dir(harness_dir: Path) -> Path | None:
+    """This build's Harbor jobs dir, named by the harbor_jobs_dir.txt that evaluate writes.
+
+    A Jenkins workspace keeps every earlier build under harbor_runs/, so per-build
+    phases read only this one. None when the file is missing or names no dir under
+    harness_dir/harbor_runs, as in the Aggregate's merged harness.
+    """
+    try:
+        raw = (harness_dir / "harbor_jobs_dir.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    runs = harness_dir / "harbor_runs"
+    if not raw or not runs.is_dir():
+        return None
+    root = runs.resolve()
+    # A harness copied elsewhere still names its build by the last path part.
+    for candidate in (Path(raw), runs / Path(raw).name):
+        try:
+            jobs = candidate.resolve()
+        except OSError:
+            continue
+        if jobs != root and jobs.is_relative_to(root) and jobs.is_dir():
+            return jobs
+    return None
 
 
 def _trial_stamp(trial: Path) -> float:
@@ -149,18 +190,25 @@ def _trial_stamp(trial: Path) -> float:
 def harbor_task_trials(harness_dir: Path, tid: str) -> list[Path]:
     """Trials for one task, oldest attempt first.
 
-    Builds up to PF.1 gave every task its own jobs dir named <tid>. One
-    ``harbor run`` per build has no such level, so fall back to the task each
-    trial recorded and keep only the newest build that ran it.
+    With this build's jobs dir known, only its trials count, so a task this build
+    did not score stays unscored instead of borrowing an older build's result.
+    Otherwise (the Aggregate's merged harness): builds up to PF.1 gave every task
+    its own jobs dir named <tid>; one ``harbor run`` per build has no such level,
+    so match the ids each trial recorded and keep the newest build that ran it.
     """
+    if not tid:
+        return []
+    jobs = current_jobs_dir(harness_dir)
+    if jobs is not None:
+        return [trial for trial in trial_dirs(jobs) if tid in trial_task_ids(trial)]
     job = find_harbor_task_dir(harness_dir, tid)
     if job is not None:
         return trial_dirs(job)
     runs = harbor_runs_root(harness_dir)
     by_build: dict[Path, list[Path]] = {}
-    if runs is not None and tid:
+    if runs is not None:
         for trial in trial_dirs(runs):
-            if trial_task_name(trial) != tid:
+            if tid not in trial_task_ids(trial):
                 continue
             try:
                 rel = trial.relative_to(runs)
@@ -169,9 +217,15 @@ def harbor_task_trials(harness_dir: Path, tid: str) -> list[Path]:
             build = runs / rel.parts[0] if rel.parts else runs
             by_build.setdefault(build, []).append(trial)
     if not by_build:
-        return trial_dirs(harness_dir / tid) if tid else []
+        return trial_dirs(harness_dir / tid)
     newest = max(by_build, key=lambda b: max(_trial_stamp(t) for t in by_build[b]))
     return by_build[newest]
+
+
+def unmatched_trials(jobs_dir: Path, task_ids: list[str]) -> list[Path]:
+    """Trials in this build's jobs dir that match none of the selected tasks."""
+    wanted = set(task_ids)
+    return [trial for trial in trial_dirs(jobs_dir) if not trial_task_ids(trial) & wanted]
 
 
 def find_scale_task_dir(harness_dir: Path, tid: str) -> Path | None:
@@ -434,9 +488,8 @@ def collect_fraction_counts(obj, rate_aliases: set[str]) -> tuple[int | None, in
     return found[0] if found else (None, None)
 
 
-def verifier_rates(d: Path) -> dict:
-    """F2P / P2P rates and optional counts from Pier or Harbor JSON (not test-name lists)."""
-    empty = {
+def no_rates() -> dict:
+    return {
         "f2p": None,
         "p2p": None,
         "partial": None,
@@ -445,6 +498,11 @@ def verifier_rates(d: Path) -> dict:
         "p2p_pass": None,
         "p2p_total": None,
     }
+
+
+def verifier_rates(d: Path) -> dict:
+    """F2P / P2P rates and optional counts from Pier or Harbor JSON (not test-name lists)."""
+    empty = no_rates()
     if not d.is_dir():
         return empty
     files: list[Path] = []
@@ -805,26 +863,34 @@ def main() -> int:
     suite = (os.environ.get("BENCHMARK") or "deepswe").strip().lower()
     lolbench = suite == "lolbench"
     n_rollouts = requested_rollouts()
+    jobs = current_jobs_dir(harness_dir)
     d_h = harness_meta.get("duration_seconds")
     meta_h_in, meta_h_out = usage_pair(harness_meta.get("token_usage"))
     if lolbench:
         meta_h_in = meta_h_out = None
     elif (not meta_h_in and not meta_h_out):
-        scraped = find_icode_usage(harness_dir)
+        scraped = find_icode_usage(jobs if jobs is not None else harness_dir)
         if scraped:
             meta_h_in = int(scraped.get("prompt") or 0)
             meta_h_out = int(scraped.get("completion") or 0)
 
     per_task = []
     for tid in ids:
-        hdir = find_harbor_task_dir(harness_dir, tid)
-        h = scan_dir(hdir) if hdir is not None else scan_dir(harness_dir / tid)
-        if h["resolved"] is None and h["patch_path"] is None:
-            h = scan_dir(harness_dir)
-        rates_root = hdir if hdir is not None else harness_dir
-        rates = verifier_rates(rates_root)
-        if rates["f2p"] is None and rates["p2p"] is None:
-            rates = verifier_rates(harness_dir)
+        if jobs is not None:
+            # This build's trials for tid are the only evidence; the whole-harness
+            # scans below would read other tasks or older builds.
+            hdir = None
+            h = {"resolved": None, "patch_path": None}
+            rates = no_rates()
+        else:
+            hdir = find_harbor_task_dir(harness_dir, tid)
+            h = scan_dir(hdir) if hdir is not None else scan_dir(harness_dir / tid)
+            if h["resolved"] is None and h["patch_path"] is None:
+                h = scan_dir(harness_dir)
+            rates_root = hdir if hdir is not None else harness_dir
+            rates = verifier_rates(rates_root)
+            if rates["f2p"] is None and rates["p2p"] is None:
+                rates = verifier_rates(harness_dir)
         derived_partial = None
         if rates["partial"] is None:
             derived_partial = partial_from_counts(rates)

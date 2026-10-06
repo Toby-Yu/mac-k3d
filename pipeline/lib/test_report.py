@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -2387,13 +2388,154 @@ class EvalReportTests(unittest.TestCase):
         self.assertFalse(rows[3]["has_reward"])
 
     @staticmethod
-    def _trial(at: Path, task: str, reward: float | None = None) -> Path:
+    def _trial(at: Path, task: str, reward: float | None = None, rates: dict | None = None) -> Path:
+        """A trial as Harbor 0.22 writes it: task_name <org>/<id>, task_id {"path": ...}."""
         at.mkdir(parents=True, exist_ok=True)
-        (at / "result.json").write_text(json.dumps({"task_name": task}), encoding="utf-8")
+        result = {"task_name": f"datacurve/{task}", "task_id": {"path": f"/eval-runs/deep-swe/tasks/{task}"}}
+        (at / "result.json").write_text(json.dumps(result), encoding="utf-8")
         if reward is not None:
             (at / "verifier").mkdir(exist_ok=True)
-            (at / "verifier" / "reward.json").write_text(json.dumps({"reward": reward}), encoding="utf-8")
+            (at / "verifier" / "reward.json").write_text(
+                json.dumps({"reward": reward, **(rates or {})}), encoding="utf-8"
+            )
         return at
+
+    @staticmethod
+    def _artifact(harness: Path, task_ids: list[str]) -> dict:
+        from render_report import build_artifact
+
+        return build_artifact(
+            suite="deepswe",
+            model="deepseek-flash",
+            api_base="https://example.test/v1",
+            task_ids=task_ids,
+            harness_dir=harness,
+            baseline_dir=harness.parent / "baseline",
+            n_rollouts=1,
+            concurrency=1,
+            cpus_each=1,
+            run_id="local-test",
+        )
+
+    @staticmethod
+    def _score_temp(root: Path, harness: Path, task_ids: list[str]) -> dict:
+        for tid in task_ids:
+            (root / "tasks" / tid).mkdir(parents=True, exist_ok=True)
+        (root / "selected.txt").write_text("".join(f"{tid}\n" for tid in task_ids), encoding="utf-8")
+        out = root / "score-temp.json"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(LIB / "score_results.py"),
+                "--harness-dir",
+                str(harness),
+                "--baseline-dir",
+                str(root / "baseline"),
+                "--tasks-dir",
+                str(root / "tasks"),
+                "--task-file",
+                str(root / "selected.txt"),
+                "--n-tasks",
+                str(len(task_ids)),
+                "--out",
+                str(out),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "BENCHMARK": "deepswe", "N_ROLLOUTS": "1"},
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return json.loads(out.read_text(encoding="utf-8"))
+
+    def test_each_id_harbor_records_matches_the_selected_task(self):
+        from score_results import harbor_task_trials, trial_task_ids
+
+        recorded = {
+            "prefixed task_name": ({"task_name": "datacurve/alpha"}, None),
+            "dict task_id": ({"task_id": {"path": "/eval-runs/deep-swe/tasks/alpha"}}, None),
+            "config.json only": ({}, {"task": {"path": "/eval-runs/deep-swe/tasks/alpha"}}),
+        }
+        for label, (result, config) in recorded.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                harness = Path(tmp) / "harness"
+                trial = harness / "harbor_runs" / "jenkins-51" / "icode_deepswe_51" / "alpha__x"
+                (trial / "verifier").mkdir(parents=True)
+                (trial / "verifier" / "reward.json").write_text('{"reward": 1}', encoding="utf-8")
+                (trial / "result.json").write_text(json.dumps(result), encoding="utf-8")
+                if config is not None:
+                    (trial / "config.json").write_text(json.dumps(config), encoding="utf-8")
+                self.assertIn("alpha", trial_task_ids(trial))
+                self.assertEqual(harbor_task_trials(harness, "alpha"), [trial])
+
+    def test_a_task_id_does_not_match_a_longer_one(self):
+        from score_results import harbor_task_trials
+
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "harness"
+            self._trial(harness / "harbor_runs" / "jenkins-51" / "job" / "alphabet__x", "alphabet", 1.0)
+            self.assertEqual(harbor_task_trials(harness, "alpha"), [])
+            self.assertEqual(len(harbor_task_trials(harness, "alphabet")), 1)
+
+    def test_the_report_scores_a_trial_named_org_slash_id(self):
+        """The 2026-10-06 local run: Harbor scored 1, the report said 0% with the trial infra-excluded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "harness"
+            job = harness / "harbor_runs" / "jenkins-local" / "icode_deepswe_local"
+            self._trial(job / "abs-module-cache-flags__4TUicFK", "abs-module-cache-flags", 1.0)
+            for pointer in (False, True):
+                with self.subTest(harbor_jobs_dir=pointer):
+                    if pointer:
+                        (harness / "harbor_jobs_dir.txt").write_text(f"{job.parent}\n", encoding="utf-8")
+                    arm = self._artifact(harness, ["abs-module-cache-flags"])["icode"]
+                    self.assertEqual(arm["macro_pass@1"], 1.0)
+                    self.assertEqual(arm["infra_excluded"], 0)
+
+    def test_a_reused_jenkins_workspace_reports_only_this_build(self):
+        """Builds up to PF.1 left a jobs dir named <tid> that used to win over this build's trial."""
+        from score_results import harbor_task_trials
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness = root / "harness"
+            runs = harness / "harbor_runs"
+            self._trial(
+                runs / "jenkins-40" / "alpha" / "job" / "alpha_icode_40_a01" / "trial",
+                "alpha",
+                0.0,
+                {"f2p": 0.25, "p2p": 0.5},
+            )
+            current = self._trial(
+                runs / "jenkins-52" / "icode_deepswe_52" / "alpha__x", "alpha", 1.0, {"f2p": 1.0, "p2p": 1.0}
+            )
+            (harness / "harbor_jobs_dir.txt").write_text(f"{runs / 'jenkins-52'}\n", encoding="utf-8")
+
+            self.assertEqual(harbor_task_trials(harness, "alpha"), [current])
+            arm = self._artifact(harness, ["alpha"])["icode"]
+            self.assertEqual(arm["macro_pass@1"], 1.0)
+            self.assertEqual(arm["infra_excluded"], 0)
+            row = self._score_temp(root, harness, ["alpha"])["tasks"][0]
+            self.assertEqual((row["reward"], row["f2p"], row["p2p"]), (1.0, 1.0, 1.0))
+
+            # This build lost its trial: unscored, never build #40's result.
+            shutil.rmtree(current)
+            self.assertEqual(harbor_task_trials(harness, "alpha"), [])
+            row = self._score_temp(root, harness, ["alpha"])["tasks"][0]
+            self.assertEqual((row["reward"], row["f2p"], row["p2p"]), (None, None, None))
+
+    def test_a_copied_harness_still_finds_its_build(self):
+        from score_results import current_jobs_dir
+
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "copy" / "harness"
+            (harness / "harbor_runs" / "jenkins-52").mkdir(parents=True)
+            pointer = harness / "harbor_jobs_dir.txt"
+            pointer.write_text("/home/toby/jenkins-agent/workspace/x/eval-runs/harness/harbor_runs/jenkins-52\n")
+            self.assertEqual(current_jobs_dir(harness), (harness / "harbor_runs" / "jenkins-52").resolve())
+            pointer.write_text(f"{Path(tmp) / 'elsewhere'}\n")
+            self.assertIsNone(current_jobs_dir(harness))
+            pointer.write_text(f"{harness / 'harbor_runs'}\n")
+            self.assertIsNone(current_jobs_dir(harness))
 
     def test_trials_are_found_in_both_the_old_and_the_one_run_layout(self):
         """Builds up to PF.1 gave every task its own jobs dir; one harbor run does not."""
