@@ -22,7 +22,7 @@ mac-k3d eval                        # interactive → Jenkins job deepswe_one_ta
 
 Default workdir: `./eval-runs` (override with `MAC_K3D_EVAL_WORKDIR`).  
 Default iCode for CI: `ICODE_MODE=release` (alias `binary`) and `~/.local/share/mac-k3d/icode` or `icode-*-full-*`, or `ICODE_MODE=git` (clone URL + ref). See [icode-harness-inputs.md](../icode-harness-inputs.md). `ICODE_MODE=git` clones an allow-listed `https://` URL at `ICODE_GIT_REF` using `ICODE_GIT_REF_KIND` (`branch` / `tag` / `commit`, including a PR SHA, or `pr` for a pull-request number) then bind-mounts a wrapper at `/opt/icode-host`. The eval JSON records `icode_git` (url, kind, ref, resolved sha, subject). Private clones need `GITCODE_TOKEN` / `GITHUB_TOKEN` in gitignored `.env` (TTY PAT prompt) or Jenkins `gitcode-pat` / `github-pat`.  
-Default model: `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`). Catalog also allows `deepseek-flash` (`mac-k3d eval --model deepseek-flash`, Jenkins **DEEPSEEK_MODEL** choice, or `mac-k3d set --model`). API `model` in the response is stored as `model_served`.
+Default model: `deepseek-flash` (`DEEPSEEK_MODEL` or `--model`). Catalog also allows `deepseek-v4-pro` (`mac-k3d eval --model deepseek-v4-pro`, Jenkins **DEEPSEEK_MODEL** choice, or `mac-k3d set --model`). API `model` in the response is stored as `model_served`.
 
 ---
 
@@ -34,7 +34,7 @@ Jobs must **not** run inside the controller’s k3d nodes. Jenkins on the cloud 
 Cloud VM: k3d + Jenkins :17070
     └── queue deepswe_one_task (label lolbench)
 This PC: Jenkins agent + Docker + iCode
-    ├── api.deepseek.com  (catalog: deepseek-v4-pro default, or deepseek-flash)
+    ├── api.deepseek.com  (catalog: deepseek-flash default, or deepseek-v4-pro)
     └── archive JSON back to cloud Jenkins
 ```
 
@@ -61,7 +61,7 @@ Whatever changed (job XML, `pipeline/`, agent registration), `bash scripts/redep
 | Credential `deepseek-api-key` | Stored on the **cloud** controller |
 | iCode on this PC | Downloaded `*-full-*` drop under `~/.local/share/mac-k3d/`, or `ICODE_MODE=git` |
 | mac-k3d redeployed | Jenkins runs the pipeline inside each worker's `mac-k3d`; run `scripts/redeploy.sh` after each commit and push so every host prints the same `mac-k3d --version` |
-| API model string | Catalog `deepseek-v4-pro` (default) or `deepseek-flash` (`DEEPSEEK_MODEL` / `--model` / Jenkins choice) |
+| API model string | Catalog `deepseek-flash` (default) or `deepseek-v4-pro` (`DEEPSEEK_MODEL` / `--model` / Jenkins choice) |
 | N for smoke | **1**; larger N later (E8) |
 
 Do not commit API keys. Do not commit leftover Harbor-named `launch-agent.sh` directories.
@@ -168,7 +168,7 @@ Written by [`pipeline/lib/score_results.py`](../../pipeline/lib/score_results.py
 | Field | Meaning |
 |-------|---------|
 | `suite`, `harness`, `n_tasks`, `n_rollouts` | `deepswe`, `lolbench`, or `swebenchpro`; `icode`; N questions; **1** attempt per question |
-| `model` / `model_served` / `api_base` | Requested catalog id (default `deepseek-v4-pro`), API-served id, endpoint |
+| `model` / `model_served` / `api_base` | Requested catalog id (default `deepseek-flash`), API-served id, endpoint |
 | `access_date_utc` | When the run was recorded (UTC) |
 | `wall_seconds` / `wall_minutes` | Harbor wall clock on the `score` scratch JSON |
 | `pass_at_1` | Mean of `c_t/n_t` (resolved attempts; n=1 → 0 or 1 per task) |
@@ -279,6 +279,7 @@ mac-k3d eval --n-tasks 1 --icode-mode release --model deepseek-v4-pro
 |---------|------------|
 | harbor not found | Re-run `--stage env` (installs the pinned Harbor) |
 | DeepSWE clone fails | Network / git; retry `--stage tasks` |
+| `uv sync failed: iCode pins a git dependency over SSH`, or `Host key verification failed` / `Permission denied (publickey)` in `tasks/icode` | iCode pins a dependency as `ssh://git@gitcode.com/…`. Store the GitCode PAT as `gitcode-pat` on the controller (`mac-k3d config --update-secrets`) or `GITCODE_TOKEN` in `.env`; `uv sync` then fetches it over https. A worker without a PAT needs its own GitCode SSH key ([icode-harness-inputs.md](../icode-harness-inputs.md#2-git-clone-icode_modegit)) |
 | DEEPSEEK_API_KEY missing | Copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller ([secrets.md](../secrets.md)) |
 | No such option: --agent-dir | Old Pier flags. This tree runs `harbor run -a icode_harbor_agent:ICodeAgent`. |
 | Docker OOM / disk | DeepSWE images are large; free disk; lower N |

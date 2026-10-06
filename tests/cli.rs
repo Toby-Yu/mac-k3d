@@ -254,7 +254,7 @@ fn set_check_models_rejects_unknown_catalog_model_before_api() {
         ])
         .assert()
         .failure()
-        .stderr(predicates::str::contains("allowed: deepseek-v4-pro"));
+        .stderr(predicates::str::contains("allowed: deepseek-flash, deepseek-v4-pro"));
 }
 
 #[test]

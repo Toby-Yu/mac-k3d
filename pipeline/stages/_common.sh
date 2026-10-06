@@ -294,7 +294,7 @@ load_local_env() {
 }
 
 load_local_env
-export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}"
+export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-flash}"
 
 # What the agent talks to. tasks/isolation.sh checks this host against
 # pipeline/config/network-allowlist-v1.json; the report records it.

@@ -631,7 +631,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("allowed: deepseek-v4-pro, deepseek-flash"),
+            err.contains("allowed: deepseek-flash, deepseek-v4-pro"),
             "{err}"
         );
     }

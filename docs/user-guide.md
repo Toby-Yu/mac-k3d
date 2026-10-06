@@ -9,7 +9,7 @@ Two different downloads:
 
 Prefer **v0.5.2** Latest (or this checkout’s `cargo build --release`). **v0.5.1** DeepSWE Pier used the wrong iCode CLI and often exited in ~20s. **v0.5.0** still has the old iCode step: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1+.
 
-Eval jobs cover three benchmarks, all Harbor + iCode + DeepSeek catalog model (default `deepseek-v4-pro`; also `deepseek-flash`). `setup` installs the Harbor version pinned in `pipeline/config/toolchain.env` (0.22.0), and every build's `env` phase checks it again. How each Harbor flag is used: [pipeline.md](pipeline.md#how-harbor-is-called). Release and git mount that iCode the same way and run one `icode run` per rollout with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`. The Jenkins model choice stays the catalog id. The report labels it `openai/<id>` and records the real provider and reasoning effort under `eval_protocol`.
+Eval jobs cover three benchmarks, all Harbor + iCode + DeepSeek catalog model (default `deepseek-flash`; also `deepseek-v4-pro`). `setup` installs the Harbor version pinned in `pipeline/config/toolchain.env` (0.22.0), and every build's `env` phase checks it again. How each Harbor flag is used: [pipeline.md](pipeline.md#how-harbor-is-called). Release and git mount that iCode the same way and run one `icode run` per rollout with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`. The Jenkins model choice stays the catalog id. The report labels it `openai/<id>` and records the real provider and reasoning effort under `eval_protocol`.
 
 - **DeepSWE** via **Harbor** (`icode_harbor_agent:ICodeAgent`). Same worker `icode-*-full-*` bind-mount and the same iCode CLI (`run -t … -C … -a code --json`).
 - **LoLBench** via **Harbor** (same agent; bind-mounts the same worker drop). Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, the `tasks` phase builds or retags a local image (do not use Harbor `--force-build`).
@@ -181,7 +181,7 @@ Extract the pipeline on the worker (`mac-k3d config -c worker.yaml`, or any `mac
 | ICODE_GIT_URL | all | **git:** https URL on github.com or gitcode.com. **release:** leave it as it is. |
 | ICODE_GIT_REF | all | **git:** branch name, tag, commit SHA, or pull-request number when KIND is `pr`. **release:** leave it as it is. |
 | ICODE_GIT_REF_KIND | all | **git:** pick `branch`, `tag`, `commit`, or `pr` (no auto). **release:** leave it as it is. |
-| DEEPSEEK_MODEL | all | `deepseek-v4-pro` (catalog default; or `deepseek-flash`). iCode sends this id to `https://api.deepseek.com/v1` with provider `DeepSeek` and reasoning effort `high` |
+| DEEPSEEK_MODEL | all | `deepseek-flash` (catalog default; or `deepseek-v4-pro`). iCode sends this id to `https://api.deepseek.com/v1` with provider `DeepSeek` and reasoning effort `high` |
 
 A build locks every core of the worker it lands on, and Harbor sizes its slots from them ([optimization.md](optimization.md)). `AGENT_LABEL`, pins, canary and `SHARD_SIZE` are developer parameters: they show only when the controller has `jenkins_job.ui_profile: developer`, and otherwise keep their config defaults. The pipeline itself is not a parameter: each worker runs the one built into its installed `mac-k3d`, and `artifact.json` names that commit. See [workflow.md](workflow.md#development-loop-commit-push-redeploy) and [commands.md](commands.md#jenkins-job-parameters).
 

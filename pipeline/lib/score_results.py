@@ -952,7 +952,7 @@ def main() -> int:
         os.environ.get("DEEPSEEK_MODEL")
         or harness_meta.get("llm_model_id")
         or baseline_meta.get("llm_model_id")
-        or "deepseek-v4-pro"
+        or "deepseek-flash"
     )
     served = baseline_meta.get("llm_model_served") or harness_meta.get("llm_model_served")
     access = (

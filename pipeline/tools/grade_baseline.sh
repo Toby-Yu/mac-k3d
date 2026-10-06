@@ -42,7 +42,7 @@ PY
     harbor run \
       -p "$task_path" \
       -a "patch_harbor_agent:PatchAgent" \
-      -m "${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
+      -m "${DEEPSEEK_MODEL:-deepseek-flash}" \
       --job-name "$(basename "$dest")" \
       --jobs-dir "$jobs" \
       --no-delete \

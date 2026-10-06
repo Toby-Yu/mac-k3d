@@ -143,8 +143,8 @@ def run_icode_docker(
     env = {
         **os.environ,
         "DEEPSEEK_API_KEY": os.environ.get("DEEPSEEK_API_KEY", ""),
-        "DEEPSEEK_MODEL": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
-        "ICODE_MODEL": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+        "DEEPSEEK_MODEL": os.environ.get("DEEPSEEK_MODEL", "deepseek-flash"),
+        "ICODE_MODEL": os.environ.get("DEEPSEEK_MODEL", "deepseek-flash"),
         "ICODE_API_BASE": "https://api.deepseek.com/v1",
         "ICODE_PROVIDER": os.environ.get("ICODE_PROVIDER") or "DeepSeek",
         "ICODE_REASONING_EFFORT": os.environ.get("ICODE_REASONING_EFFORT") or "high",

@@ -1,6 +1,6 @@
 # LoLBench Jenkins Job Design
 
-**What `config` writes today:** nine jobs — three shapes for each of three benchmarks. All are iCode + DeepSeek catalog model (Jenkins **DEEPSEEK_MODEL** choice: `deepseek-v4-pro` default, or `deepseek-flash`).
+**What `config` writes today:** nine jobs — three shapes for each of three benchmarks. All are iCode + DeepSeek catalog model (Jenkins **DEEPSEEK_MODEL** choice: `deepseek-flash` default, or `deepseek-v4-pro`).
 
 Per benchmark, `<benchmark>_one_task` (one `TASK`, 1 rollout by default) runs the evaluation; `<benchmark>_some_task` (a `TASKS` list or the first `N_TASKS`, 4 rollouts) and `<benchmark>_full_suite_task` (the whole suite, 4 rollouts) are dispatchers that run their shards as `_one_task` builds and merge them. Each job shows only the parameters its shape needs; see [commands.md](commands.md#jenkins-job-parameters). Which to pick: [evaluation.md](evaluation.md#which-job-to-run).
 

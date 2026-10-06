@@ -2,7 +2,7 @@
 
 ## Local eval keys (this machine only)
 
-**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. For **`ICODE_MODE=git`**, the same file may hold `GITCODE_TOKEN` or `GITHUB_TOKEN` (written by the TTY PAT prompt, mode 600). `DEEPSEEK_MODEL` must be a catalog id: `deepseek-v4-pro` (default) or `deepseek-flash` — copy `data[].id` from `GET /models`, never a product name. `mac-k3d set --check-models` and the `env` phase (when the key is set) enforce that before the paid `evaluate` phase. A full eval does not run the LLM-only baseline. This is the correct way to store keys for `mac-k3d eval --stage evaluate` and private git clones on this PC.
+**Supported local method:** a gitignored `.env` in the mac-k3d checkout (or `~/.config/mac-k3d/.env`). Eval scripts load `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` from that file when the process env is empty. For **`ICODE_MODE=git`**, the same file may hold `GITCODE_TOKEN` or `GITHUB_TOKEN` (written by the TTY PAT prompt, mode 600). `DEEPSEEK_MODEL` must be a catalog id: `deepseek-flash` (default) or `deepseek-v4-pro` — copy `data[].id` from `GET /models`, never a product name. `mac-k3d set --check-models` and the `env` phase (when the key is set) enforce that before the paid `evaluate` phase. A full eval does not run the LLM-only baseline. This is the correct way to store keys for `mac-k3d eval --stage evaluate` and private git clones on this PC.
 
 ```bash
 cp .env.example .env
@@ -81,6 +81,8 @@ Stable IDs so jobs and docs stay aligned:
 | `github-pat` | Secret text or Username/password | `GITHUB_TOKEN` / git HTTPS |
 | `gitcode-pat` | Secret text or Username/password | `GITCODE_TOKEN` / git HTTPS |
 
+`gitcode-pat` / `github-pat` cover both the iCode clone and `uv sync` of iCode's git dependencies on the same host, including ones iCode pins as `ssh://` ([icode-harness-inputs.md](icode-harness-inputs.md#2-git-clone-icode_modegit)). A worker needs no SSH key for them. Every token is unset before Harbor.
+
 Add providers as needed; keep **one credential per provider**, not one mega-token.
 
 ### Binding in jobs
@@ -122,7 +124,7 @@ Possible later enhancements (not required for the model above):
 
 - Default `HARNESS` (`icode`)
 - Default `TASK`
-- Default `DEEPSEEK_MODEL` catalog id (`deepseek-v4-pro` or `deepseek-flash`)
+- Default `DEEPSEEK_MODEL` catalog id (`deepseek-flash` or `deepseek-v4-pro`)
 
 **Secrets** (never in `config.yaml`):
 

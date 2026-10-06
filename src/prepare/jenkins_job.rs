@@ -2529,18 +2529,27 @@ mod tests {
         assert!(xml.contains("<string>deepseek-v4-pro</string>"));
         assert!(xml.contains("<string>deepseek-flash</string>"));
         assert!(xml.contains("ChoiceParameterDefinition"));
+        assert!(!xml.contains("<defaultValue>deepseek-flash</defaultValue>"));
         assert!(!xml.contains("<defaultValue>deepseek-v4-pro</defaultValue>"));
 
-        let mut opts = sample_opts();
-        opts.default_deepseek_model = "deepseek-flash".into();
-        let jf = jenkinsfile(&opts);
+        let jf = jenkinsfile(&sample_opts());
         assert!(
             jf.contains(
                 "choice(name: 'DEEPSEEK_MODEL', choices: ['deepseek-flash', 'deepseek-v4-pro']"
             ),
             "{jf}"
         );
-        assert!(jf.contains("export DEEPSEEK_MODEL=\"${DEEPSEEK_MODEL:-deepseek-v4-pro}\""));
+        assert!(jf.contains("export DEEPSEEK_MODEL=\"${DEEPSEEK_MODEL:-deepseek-flash}\""));
+
+        let mut opts = sample_opts();
+        opts.default_deepseek_model = "deepseek-v4-pro".into();
+        let jf = jenkinsfile(&opts);
+        assert!(
+            jf.contains(
+                "choice(name: 'DEEPSEEK_MODEL', choices: ['deepseek-v4-pro', 'deepseek-flash']"
+            ),
+            "a controller that pins v4-pro still lists it first: {jf}"
+        );
     }
 
     #[test]

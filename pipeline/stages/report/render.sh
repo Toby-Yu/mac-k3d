@@ -52,7 +52,7 @@ python3 "$PIPELINE_LIB/render_report.py" \
   --baseline-dir "$BASELINE_DIR" \
   --task-file "$WORKDIR/selected_tasks.txt" \
   --suite "$BENCHMARK" \
-  --model "${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
+  --model "${DEEPSEEK_MODEL:-deepseek-flash}" \
   --api-base "$API_BASE" \
   --run-id "$RUN_ID" \
   --n-rollouts "${N_ROLLOUTS:-1}" \

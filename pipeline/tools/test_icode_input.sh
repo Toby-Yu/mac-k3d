@@ -149,6 +149,80 @@ PTH="$PTH_TREE/.venv/sandbox-cpython/lib/python3.13/site-packages/icode-host.pth
 [ "$(cat "$PTH")" = "$(printf '%s\n%s' /opt/icode-host /opt/icode-host/.venv/lib/python3.13/site-packages)" ] \
   || fail "icode-host.pth must list exactly the clone root and its venv site-packages"
 ok "launcher exports nothing; icode-host.pth lists the two iCode paths"
+
+# icode_uv_sync: a fake uv records the git env it was given and fails on the
+# call numbers listed in FAKE_UV_FAIL.
+FAKE_UV_DIR="$KIND_TMP/fake-uv"
+mkdir -p "$FAKE_UV_DIR/bin"
+cat >"$FAKE_UV_DIR/bin/uv" <<'UV'
+#!/usr/bin/env bash
+n=$(( $(cat "$FAKE_UV_DIR/calls" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"$FAKE_UV_DIR/calls"
+{
+  env | grep -E '^(GIT_CONFIG_(COUNT|KEY_|VALUE_)|GIT_ASKPASS=|GIT_SSH_COMMAND=)' | sort
+  [ -n "${MAC_K3D_GIT_TOKEN:-}" ] && echo token_set=1
+} >"$FAKE_UV_DIR/env.$n"
+echo "fake uv stdout"
+case " ${FAKE_UV_FAIL:-} " in *" $n "*) exit 1 ;; esac
+exit 0
+UV
+chmod 755 "$FAKE_UV_DIR/bin/uv"
+export FAKE_UV_DIR
+UV_TREE="$KIND_TMP/uv-tree"
+mkdir -p "$UV_TREE"
+SENTINEL="gc-sentinel-not-for-logs"
+run_uv_sync() {
+  rm -f "$FAKE_UV_DIR"/calls "$FAKE_UV_DIR"/env.*
+  # get_bin_icode unsets these after the clone; an editor's git askpass must not leak in.
+  ( unset GIT_ASKPASS MAC_K3D_GIT_TOKEN; export PATH="$FAKE_UV_DIR/bin:$PATH" FAKE_UV_FAIL="$1"
+    icode_uv_sync "$UV_TREE" gitcode.com "$2" ) \
+    >"$FAKE_UV_DIR/out" 2>"$FAKE_UV_DIR/err"
+}
+uv_env() { printf '%s\n' "$FAKE_UV_DIR/env.$1"; }
+token_leaked() { grep -qF "$SENTINEL" "$FAKE_UV_DIR/out" "$FAKE_UV_DIR/err"; }
+
+run_uv_sync "" "$SENTINEL" || fail "uv sync with a PAT should pass"
+[ ! -s "$FAKE_UV_DIR/out" ] || fail "icode_uv_sync stdout must stay empty: the caller captures ICODE_BIN"
+[ "$(cat "$FAKE_UV_DIR/calls")" = 1 ] || fail "PAT success: expected one uv call"
+grep -qx 'GIT_CONFIG_KEY_0=url.https://gitcode.com/.insteadOf' "$(uv_env 1)" || fail "PAT: insteadOf key"
+grep -qx 'GIT_CONFIG_VALUE_0=ssh://git@gitcode.com/' "$(uv_env 1)" || fail "PAT: ssh:// rewritten"
+grep -qx 'GIT_CONFIG_VALUE_1=git@gitcode.com:' "$(uv_env 1)" || fail "PAT: scp-style rewritten"
+grep -q '^GIT_ASKPASS=' "$(uv_env 1)" || fail "PAT: askpass set"
+grep -qx 'token_set=1' "$(uv_env 1)" || fail "PAT: token reaches askpass"
+token_leaked && fail "PAT printed by icode_uv_sync"
+grep -q 'OK icode dependencies fetched over https with the gitcode.com PAT' "$FAKE_UV_DIR/err" \
+  || fail "PAT: OK line"
+ok "uv sync rewrites ssh:// deps to https with the iCode host PAT"
+
+run_uv_sync "1" "$SENTINEL" || fail "SSH retry should pass"
+[ "$(cat "$FAKE_UV_DIR/calls")" = 2 ] || fail "PAT failure: expected an SSH retry"
+grep -q '^GIT_CONFIG_' "$(uv_env 2)" && fail "SSH retry must not rewrite to https"
+grep -q 'token_set=1' "$(uv_env 2)" && fail "SSH retry must not carry the PAT"
+grep -qx 'GIT_SSH_COMMAND=ssh -o BatchMode=yes' "$(uv_env 2)" || fail "SSH retry must not prompt"
+grep -q 'retrying with this machine.s SSH key' "$FAKE_UV_DIR/err" || fail "SSH retry warning"
+token_leaked && fail "PAT printed on retry"
+ok "uv sync falls back to this machine's SSH key when the PAT fails"
+
+run_uv_sync "" "" || fail "uv sync without a PAT should pass"
+[ "$(cat "$FAKE_UV_DIR/calls")" = 1 ] || fail "no PAT: expected one uv call"
+grep -q '^GIT_CONFIG_' "$(uv_env 1)" && fail "no PAT: nothing to rewrite with"
+grep -q '^GIT_ASKPASS=' "$(uv_env 1)" && fail "no PAT: no askpass"
+grep -qx 'GIT_SSH_COMMAND=ssh -o BatchMode=yes' "$(uv_env 1)" || fail "no PAT: SSH must not prompt"
+ok "uv sync without a PAT uses SSH only"
+
+printf '%s\n' 'source = { git = "ssh://git@gitcode.com/michaelling/agent-core.git?branch=icode#0f25d4d" }' >"$UV_TREE/uv.lock"
+if run_uv_sync "1 2" "$SENTINEL"; then
+  fail "both uv sync attempts failing must fail"
+fi
+grep -q 'iCode pins a git dependency over SSH' "$FAKE_UV_DIR/err" || fail "SSH-pinned dependency message"
+token_leaked && fail "PAT printed in the failure message"
+rm -f "$UV_TREE/uv.lock"
+if run_uv_sync "1" ""; then
+  fail "a failing uv sync must fail"
+fi
+grep -q "uv sync failed in $UV_TREE" "$FAKE_UV_DIR/err" || fail "plain uv sync failure message"
+grep -q 'over SSH' "$FAKE_UV_DIR/err" && fail "no SSH pin: do not blame SSH"
+ok "uv sync failure names the SSH-pinned dependency only when there is one"
 for bench in deepswe lolbench swebenchpro; do
   BENCHMARK="$bench" icode_sourceless_enabled || fail "sourceless must default on for $bench"
 done

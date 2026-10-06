@@ -17,7 +17,7 @@ python3 "$PIPELINE_LIB/baseline_deepseek.py" \
   --n-tasks "$N_TASKS" \
   --task-file "$WORKDIR/selected_tasks.txt" \
   --out-dir "$BASELINE_DIR" \
-  --model "${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
+  --model "${DEEPSEEK_MODEL:-deepseek-flash}" \
   | tee "$BASELINE_DIR/baseline.log"
 
 bash "$(cd "$(dirname "$0")" && pwd)/grade_baseline.sh"

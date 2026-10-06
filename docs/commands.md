@@ -79,12 +79,12 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 | `--icode-git-ref REF` | `git` mode: branch name, tag, commit SHA, or pull-request number when kind is `pr`. Default `main` |
 | `--icode-git-ref-kind KIND` | `branch` (default), `tag`, `commit` (PR SHA), or `pr` (pull-request number). Leftover `auto` still maps: 7–40 hex → commit, else branch |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
-| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-v4-pro` (default) or `deepseek-flash`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`; the HTTP model id stays this catalog id |
+| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-flash` (default) or `deepseek-v4-pro`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`; the HTTP model id stays this catalog id |
 | `--yes` | Skip prompts: Jenkins `<benchmark>_one_task` unless `--local`. Git `--yes` queues the job. Release `--yes` prints UI upload instructions (cannot attach `ICODE_RELEASE_FILE`). Also skips the git PAT prompt |
 
 Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.
 
-v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-v4-pro` (default) and `deepseek-flash`. Benchmark is `deepswe`, `lolbench`, or `swebenchpro`. Output: `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, with `summary.md` and `report.html` in that folder, and a backup at `output/<benchmark>/<same run folder>.tar.gz` under the pipeline root (`$WORKSPACE/mac-k3d-pipeline` on Jenkins, the checkout locally). Field glossary: [evaluation.md](evaluation.md). Slot packing: [optimization.md](optimization.md).
+v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-flash` (default) and `deepseek-v4-pro`. Benchmark is `deepswe`, `lolbench`, or `swebenchpro`. Output: `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, with `summary.md` and `report.html` in that folder, and a backup at `output/<benchmark>/<same run folder>.tar.gz` under the pipeline root (`$WORKSPACE/mac-k3d-pipeline` on Jenkins, the checkout locally). Field glossary: [evaluation.md](evaluation.md). Slot packing: [optimization.md](optimization.md).
 
 There is no `--sync-pipeline`. A Jenkins build runs the `pipeline/` embedded in its worker's installed binary (see [`pipeline`](#pipeline)), so the pipeline under test is always the commit that binary was built from — see the development loop in [workflow.md](workflow.md#development-loop-commit-push-redeploy). `--stage` and `--local` still run the working tree directly, which is the fast path for a fixture-level change.
 
@@ -344,7 +344,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--list` | Print allowed harness / LLM / model / benchmark values and exit |
 | `--harness <ID>` | Catalog harness (v1: `icode`) |
 | `--llm <ID>` | Catalog LLM family (v1: `deepseek`) |
-| `--model <ID>` | DeepSeek Chat Completions id (`deepseek-v4-pro` default, or `deepseek-flash`) |
+| `--model <ID>` | DeepSeek Chat Completions id (`deepseek-flash` default, or `deepseek-v4-pro`) |
 | `--check-models` | Optional live `GET /models` against `.env` key; fail if YAML/`--model` id is not a provider id |
 | `--benchmark <ID>` | `deepswe`, `lolbench`, or `swebenchpro` (which job receives TASK / N_TASKS / TASKS defaults) |
 | `--task <ID>` | One question id |

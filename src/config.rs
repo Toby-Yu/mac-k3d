@@ -254,7 +254,7 @@ pub struct JenkinsJobConfig {
     /// Eval LLM family (`mac-k3d set --llm`). Catalog: `deepseek`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_llm: String,
-    /// DeepSeek Chat Completions id (`mac-k3d set --model`). Catalog: `deepseek-v4-pro`, `deepseek-flash`.
+    /// DeepSeek Chat Completions id (`mac-k3d set --model`). Catalog: `deepseek-flash` (default), `deepseek-v4-pro`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_deepseek_model: String,
     /// Which Jenkins job receives TASK / N_TASKS / TASKS defaults (`deepswe` | `lolbench` | `swebenchpro`).

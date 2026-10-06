@@ -173,6 +173,29 @@ class ToolchainAlignmentTests(unittest.TestCase):
         for key, value in pins.items():
             self.assertIn(f"`{key}={value}`", doc, f"docs/dependencies.md must list {key}={value}")
 
+    def test_every_model_fallback_matches_common(self):
+        """An unset DEEPSEEK_MODEL means the catalog default (eval_catalog::MODELS[0]) everywhere."""
+        common = COMMON.read_text(encoding="utf-8")
+        match = re.search(r'^export DEEPSEEK_MODEL="\$\{DEEPSEEK_MODEL:-([a-z0-9.-]+)\}"', common, re.M)
+        self.assertIsNotNone(match, "DEEPSEEK_MODEL default not found in _common.sh")
+        want = match.group(1)
+        fallback = re.compile(
+            r'DEEPSEEK_MODEL:-([a-z0-9.-]+)\}'
+            r'|get\("DEEPSEEK_MODEL",\s*"([a-z0-9.-]+)"\)'
+            r'|DEFAULT_MODEL\s*=\s*"([a-z0-9.-]+)"'
+            r'|or\s+"(deepseek-[a-z0-9.-]+)"'
+        )
+        seen = 0
+        for path in sorted((ROOT / "pipeline").rglob("*")):
+            if path.suffix not in {".sh", ".py"} or path.name.startswith("test_") or "testdata" in path.parts:
+                continue
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for m in fallback.finditer(line):
+                    seen += 1
+                    got = next(g for g in m.groups() if g)
+                    self.assertEqual(got, want, f"{path.relative_to(ROOT)}:{lineno} falls back to {got}, not {want}")
+        self.assertGreaterEqual(seen, 10, "the fallback scan found too few defaults; did the patterns go stale?")
+
 
 class MacPortabilityTests(unittest.TestCase):
     """macOS /bin/bash is 3.2: the guard must run before anything that needs 4.4."""

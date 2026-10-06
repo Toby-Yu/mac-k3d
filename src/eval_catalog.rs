@@ -12,7 +12,7 @@ pub const BENCHMARKS: &[&str] = &["deepswe", "lolbench", "swebenchpro"];
 /// DeepSeek Chat Completions ids (`DEEPSEEK_MODEL` / `--model`). First is the default.
 /// Append only `data[].id` values from `GET https://api.deepseek.com/models`.
 /// Product name "V4.1 Flash" is API id `deepseek-flash` (not `deepseek-v4.1-flash`).
-pub const MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-flash"];
+pub const MODELS: &[&str] = &["deepseek-flash", "deepseek-v4-pro"];
 /// Jenkins / CLI iCode inputs (`ICODE_MODE`). `binary` is a pipeline alias of `release`.
 pub const ICODE_CI_MODES: &[&str] = &["release", "git"];
 /// https hosts allowed for `ICODE_GIT_URL` / `get_bin_icode`.
@@ -265,15 +265,27 @@ mod tests {
     fn reject_unknown_model() {
         let err = require_model("gpt-4").unwrap_err().to_string();
         assert!(
-            err.contains("allowed: deepseek-v4-pro, deepseek-flash"),
+            err.contains("allowed: deepseek-flash, deepseek-v4-pro"),
             "{err}"
         );
     }
 
     #[test]
-    fn require_model_accepts_flash() {
+    fn require_model_accepts_both_and_defaults_to_flash() {
         assert_eq!(require_model("deepseek-flash").unwrap(), "deepseek-flash");
-        assert_eq!(default_model(), "deepseek-v4-pro");
+        assert_eq!(require_model("deepseek-v4-pro").unwrap(), "deepseek-v4-pro");
+        assert_eq!(default_model(), "deepseek-flash");
+    }
+
+    #[test]
+    fn pipeline_fallback_model_is_the_catalog_default() {
+        let common = include_str!("../pipeline/stages/_common.sh");
+        let want = format!("export DEEPSEEK_MODEL=\"${{DEEPSEEK_MODEL:-{}}}\"", default_model());
+        assert!(
+            common.contains(&want),
+            "pipeline/stages/_common.sh must default DEEPSEEK_MODEL to {} (eval_catalog::MODELS[0])",
+            default_model()
+        );
     }
 
     #[test]

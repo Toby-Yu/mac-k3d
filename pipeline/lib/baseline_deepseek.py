@@ -143,7 +143,7 @@ def main() -> int:
     ap.add_argument("--tasks-dir", required=True)
     ap.add_argument("--n-tasks", type=int, default=1)
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--model", default=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))
+    ap.add_argument("--model", default=os.environ.get("DEEPSEEK_MODEL", "deepseek-flash"))
     ap.add_argument("--task-file", default="", help="newline-separated task dir names")
     args = ap.parse_args()
 

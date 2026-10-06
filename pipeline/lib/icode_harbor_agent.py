@@ -15,7 +15,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_MODEL = "deepseek-flash"
 ICODE_HOST = "/opt/icode-host"
 CAPTURE_SRC = Path(__file__).with_name("icode_capture.sh")
 CAPTURE = "/installed-agent/icode_capture.sh"

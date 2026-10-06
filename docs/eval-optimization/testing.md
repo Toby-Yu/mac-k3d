@@ -20,7 +20,7 @@ The cases that cover this branch:
 
 1. Worker already has this CLI. The job’s Prepare stage runs `mac-k3d eval --sync-pipeline` once. Do not rebuild or sync again while the build is inside P5. Bash reads `p5_harness.sh` as it runs; replacing that file mid-build exits 127.
 2. Open `deepswe_some_task` (or `lolbench_some_task`) → **Build with Parameters**.
-3. Paste the next TASKS line from [question-coverage](../testing/question-coverage.md) into **TASKS**. Set **N_ROLLOUTS=4**. Leave model at the catalog default (`deepseek-v4-pro` or `deepseek-flash`).
+3. Paste the next TASKS line from [question-coverage](../testing/question-coverage.md) into **TASKS**. Set **N_ROLLOUTS=4**. Leave model at the catalog default (`deepseek-flash`).
 
 Console / artifact signals for this branch:
 

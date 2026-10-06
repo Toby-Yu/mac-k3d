@@ -681,6 +681,34 @@ get_release_icode() {
   printf '%s\n' "$bin"
 }
 
+# iCode's lock may pin a git dependency as ssh://git@<host>/… (PR 2 pins
+# agent-core that way). With a PAT for the iCode host, fetch it over https with
+# the askpass the clone used, so a worker needs no SSH key. Without one, or when
+# the PAT cannot read it, use this machine's SSH key, never prompting.
+# Everything goes to stderr: the caller captures stdout as ICODE_BIN.
+icode_uv_sync() {
+  local dest="$1" host="$2" token="$3" askpass
+  if [ -n "$token" ]; then
+    askpass="$(icode_write_askpass)"
+    if (cd "$dest" && MAC_K3D_GIT_TOKEN="$token" GIT_ASKPASS="$askpass" \
+      GIT_CONFIG_COUNT=2 \
+      GIT_CONFIG_KEY_0="url.https://${host}/.insteadOf" GIT_CONFIG_VALUE_0="ssh://git@${host}/" \
+      GIT_CONFIG_KEY_1="url.https://${host}/.insteadOf" GIT_CONFIG_VALUE_1="git@${host}:" \
+      uv sync --no-editable >&2); then
+      echo "OK icode dependencies fetched over https with the ${host} PAT" >&2
+      return 0
+    fi
+    echo "WARNING: uv sync over https with the ${host} PAT failed; retrying with this machine's SSH key" >&2
+  fi
+  if (cd "$dest" && GIT_SSH_COMMAND="ssh -o BatchMode=yes" uv sync --no-editable >&2); then
+    return 0
+  fi
+  if grep -qsF -e "ssh://git@${host}/" -e "git@${host}:" "$dest/pyproject.toml" "$dest/uv.lock"; then
+    die "uv sync failed: iCode pins a git dependency over SSH (ssh://git@${host}/…). Give the account behind the ${host} PAT (Jenkins gitcode-pat / github-pat, or GITCODE_TOKEN / GITHUB_TOKEN in .env) read access to it, or add an SSH key for ${host} on this worker. Token not printed."
+  fi
+  die "uv sync failed in ${dest}"
+}
+
 # Clone allow-listed URL at tag/commit/branch, uv sync, wrapper. Prints ICODE_BIN path.
 # Tests: MAC_K3D_ICODE_FETCH_DIR skips clone (must already contain .venv/bin/icode or pyproject).
 get_bin_icode() {
@@ -716,7 +744,7 @@ get_bin_icode() {
   [ -d "$dest" ] || die "icode git checkout missing: $dest"
   if [ ! -x "$dest/.venv/bin/icode" ]; then
     have uv || die "need uv or $dest/.venv/bin/icode"
-    (cd "$dest" && uv sync --no-editable)
+    icode_uv_sync "$dest" "${host:-}" "${token:-}"
   fi
   [ -x "$dest/.venv/bin/icode" ] || die "uv sync did not produce $dest/.venv/bin/icode"
   icode_embed_sandbox_cpython "$dest"

@@ -99,7 +99,7 @@ Workers must **not** run `mac-k3d start -c worker.yaml` (rejected on purpose).
 
 | Stage | What | Why |
 |-------|------|-----|
-| Choose harness / LLM / model / benchmark | v1: **icode** / **deepseek** / **deepseek-v4-pro** (or **deepseek-flash**) / **deepswe**, **lolbench**, or **swebenchpro** | Catalog ids; unknown `--model` is rejected |
+| Choose harness / LLM / model / benchmark | v1: **icode** / **deepseek** / **deepseek-flash** (or **deepseek-v4-pro**) / **deepswe**, **lolbench**, or **swebenchpro** | Catalog ids; unknown `--model` is rejected |
 | Choose N and iCode binary vs source | Limit cost; users drop a binary at `~/.local/share/mac-k3d/icode` | The worker that runs Harbor must see iCode |
 | Install Harbor | `uv tool install harbor==<HARBOR_VERSION>` from `pipeline/config/toolchain.env`, at setup and again by the `env` phase when the version differs | One runner for all three benchmarks, at one version |
 | Clone the suite | DeepSWE, LoLBench-Preview, or SWE-bench_Pro-os | Not vendored in this repo. For SWE-bench Pro, `tasks/benchmark` writes a Harbor `task.toml` whose image is `jefzda/sweap-images:…` |

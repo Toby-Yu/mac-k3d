@@ -193,7 +193,7 @@ CHAT_API_BASE = "https://api.deepseek.com/v1"
 
 def eval_model_label(model: str) -> str:
     """Artifact label. The HTTP model id stays the catalog id without this prefix."""
-    raw = (model or "").strip() or "deepseek-v4-pro"
+    raw = (model or "").strip() or "deepseek-flash"
     if raw.startswith("openai/"):
         return raw
     return f"openai/{raw}"
@@ -804,7 +804,7 @@ def main() -> int:
     ap.add_argument("--baseline-dir", default="")
     ap.add_argument("--task-file", default="")
     ap.add_argument("--suite", default=os.environ.get("BENCHMARK", "deepswe"))
-    ap.add_argument("--model", default=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))
+    ap.add_argument("--model", default=os.environ.get("DEEPSEEK_MODEL", "deepseek-flash"))
     ap.add_argument("--api-base", default=os.environ.get("DEEPSEEK_API_BASE", CHAT_API_BASE))
     ap.add_argument("--run-id", default=os.environ.get("BUILD_NUMBER", "local"))
     ap.add_argument("--n-rollouts", type=int, default=0)

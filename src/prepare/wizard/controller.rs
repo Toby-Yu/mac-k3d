@@ -74,9 +74,10 @@ where
 fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
     println!(
         "\nJenkins one-task eval jobs: `deepswe_one_task`, `lolbench_one_task`, and `swebenchpro_one_task`.\n\
-         All use iCode + DeepSeek catalog model (default deepseek-v4-pro). Default TASK for LoLBench is ruff_1.\n\
+         All use iCode + DeepSeek catalog model (default {}). Default TASK for LoLBench is ruff_1.\n\
          See docs/user-guide.md.\n\
-         Secrets (DeepSeek, GitCode PAT) go to Jenkins Credentials.\n"
+         Secrets (DeepSeek, GitCode PAT) go to Jenkins Credentials.\n",
+        crate::eval_catalog::default_model()
     );
 
     let mode_options = [

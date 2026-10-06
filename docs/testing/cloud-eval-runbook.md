@@ -20,7 +20,7 @@ Jobs must **not** run inside the controller’s k3d nodes. Cloud Jenkins only qu
 Cloud VM (SSH as root): k3d + Jenkins :17070
     └── queue deepswe_one_task (label lolbench)
 This PC (Toby): Jenkins agent + Docker + iCode
-    ├── api.deepseek.com  (catalog: deepseek-v4-pro default, or deepseek-flash)
+    ├── api.deepseek.com  (catalog: deepseek-flash default, or deepseek-v4-pro)
     └── archive JSON back to cloud Jenkins
 ```
 
@@ -81,7 +81,7 @@ flowchart TD
 | Cloud checkout | `/root/src/mac-k3d` branch `feat/icode-tag-commit-release` (or `main` after merge) |
 | This PC checkout | `/home/Toby/Documents/Toby/mac-k3d` |
 | iCode on this PC | `/home/Toby/Documents/Toby/iCode-main` |
-| Model | `deepseek-v4-pro` (catalog default) or `deepseek-flash` (`DEEPSEEK_MODEL` or `--model`) |
+| Model | `deepseek-flash` (catalog default) or `deepseek-v4-pro` (`DEEPSEEK_MODEL` or `--model`) |
 | N | **1** until E7 is green |
 | Credential on controller | `deepseek-api-key` |
 
