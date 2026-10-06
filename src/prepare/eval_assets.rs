@@ -3,12 +3,29 @@
 use std::path::{Path, PathBuf};
 
 use include_dir::{include_dir, Dir};
+use serde::Serialize;
 
+use crate::build_info::BuildInfo;
 use crate::error::{Error, Result};
 
 static PIPELINE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/pipeline");
 
 const RUN_ALL: &str = "pipeline/stages/run_all.sh";
+/// Written next to the extracted scripts; `provenance.py` reads it into the artifact.
+const BUILD_JSON: &str = "pipeline/BUILD.json";
+
+#[derive(Serialize)]
+struct BuildRecord<'a> {
+    #[serde(flatten)]
+    info: &'a BuildInfo,
+    binary: String,
+}
+
+fn current_binary() -> String {
+    std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "unknown".into())
+}
 
 pub fn run_all_rel() -> &'static str {
     RUN_ALL
@@ -124,6 +141,10 @@ pub fn discover_icode_release() -> Option<PathBuf> {
 
 /// Extract embedded pipeline/ into `root/pipeline/` without touching `root/icode`.
 pub fn extract_pipeline(root: &Path) -> Result<()> {
+    extract_pipeline_with(root, &BuildInfo::current())
+}
+
+fn extract_pipeline_with(root: &Path, info: &BuildInfo) -> Result<()> {
     let dest = root.join("pipeline");
     std::fs::create_dir_all(&dest)
         .map_err(|e| Error::Config(format!("cannot create {}: {e}", dest.display())))?;
@@ -133,7 +154,56 @@ pub fn extract_pipeline(root: &Path) -> Result<()> {
             dest.display()
         ))
     })?;
+    let record = BuildRecord {
+        info,
+        binary: current_binary(),
+    };
+    let path = root.join(BUILD_JSON);
+    let body = serde_json::to_string_pretty(&record)
+        .map_err(|e| Error::Config(format!("cannot encode {}: {e}", path.display())))?;
+    std::fs::write(&path, body + "\n")
+        .map_err(|e| Error::Config(format!("cannot write {}: {e}", path.display())))?;
     Ok(())
+}
+
+/// `mac-k3d pipeline --extract-to DIR`: a Jenkins build's own copy of the
+/// scripts this binary was built with.
+pub fn extract_to(root: &Path, require_clean: bool) -> Result<BuildInfo> {
+    let info = BuildInfo::current();
+    extract_to_with(root, require_clean, &info)?;
+    Ok(info)
+}
+
+fn extract_to_with(root: &Path, require_clean: bool, info: &BuildInfo) -> Result<()> {
+    if require_clean && !info.is_clean() {
+        return Err(Error::Config(format!(
+            "this mac-k3d binary was built from {} and an official run needs one clean commit. \
+             Commit, push and run scripts/redeploy.sh, then rebuild.",
+            describe_commit(info)
+        )));
+    }
+    extract_pipeline_with(root, info)?;
+    if !looks_like_root(root) {
+        return Err(Error::Config(format!(
+            "pipeline extract missing {RUN_ALL} under {}",
+            root.display()
+        )));
+    }
+    println!(
+        "mac-k3d pipeline {} (mac-k3d {}, {})",
+        describe_commit(info),
+        info.version,
+        current_binary()
+    );
+    Ok(())
+}
+
+fn describe_commit(info: &BuildInfo) -> String {
+    match info.dirty {
+        Some(false) => info.commit.clone(),
+        Some(true) => format!("{} plus uncommitted changes", info.commit),
+        None => format!("{} (dirty state unknown)", info.commit),
+    }
 }
 
 pub fn ensure_share_pipeline() -> Result<PathBuf> {
@@ -239,6 +309,46 @@ print('ok')\n",
         assert_eq!(std::fs::read(&icode).unwrap(), b"keep-me");
         assert!(looks_like_root(&root));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn fake_build(dirty: Option<bool>, commit: &str) -> BuildInfo {
+        BuildInfo {
+            version: "9.9.9".into(),
+            commit: commit.into(),
+            dirty,
+            pipeline_hash: "00000000deadbeef".into(),
+        }
+    }
+
+    #[test]
+    fn extract_writes_build_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let info = fake_build(Some(false), "abc123");
+        extract_to_with(tmp.path(), true, &info).unwrap();
+        assert!(looks_like_root(tmp.path()));
+        let raw = std::fs::read_to_string(tmp.path().join(BUILD_JSON)).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["version"], "9.9.9");
+        assert_eq!(doc["commit"], "abc123");
+        assert_eq!(doc["dirty"], false);
+        assert_eq!(doc["pipeline_hash"], "00000000deadbeef");
+        assert!(!doc["binary"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn require_clean_refuses_dirty_build() {
+        for info in [
+            fake_build(Some(true), "abc123"),
+            fake_build(None, "abc123"),
+            fake_build(Some(false), "unknown"),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let err = extract_to_with(tmp.path(), true, &info).unwrap_err();
+            assert!(err.to_string().contains("clean commit"), "{err}");
+            assert!(!tmp.path().join(BUILD_JSON).exists());
+            extract_to_with(tmp.path(), false, &info).unwrap();
+            assert!(tmp.path().join(BUILD_JSON).is_file());
+        }
     }
 
     #[test]

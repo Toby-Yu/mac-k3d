@@ -13,7 +13,7 @@ LIB = Path(__file__).resolve().parent
 ROOT = LIB.parent.parent
 sys.path.insert(0, str(LIB))
 
-from aggregate_runs import main, merge_anticheat, merge_harness, shard_dirs  # noqa: E402
+from aggregate_runs import main, merge_anticheat, merge_harness, pipeline_status, shard_dirs  # noqa: E402
 
 
 def write_trial(job: Path, task: str, attempt: int, reward: float, patch_bytes: int = 120) -> None:
@@ -40,7 +40,9 @@ def write_trial(job: Path, task: str, attempt: int, reward: float, patch_bytes: 
     )
 
 
-def make_shard(root: Path, build: str, tasks: dict[str, list[float]]) -> Path:
+def make_shard(
+    root: Path, build: str, tasks: dict[str, list[float]], commit: str = "84c66ededd24"
+) -> Path:
     """One shard's archived ``eval-runs`` tree, as copyArtifacts would leave it."""
     shard = root / build / "eval-runs"
     job = shard / "harness" / "harbor_runs" / build / "icode_deepswe"
@@ -49,8 +51,11 @@ def make_shard(root: Path, build: str, tasks: dict[str, list[float]]) -> Path:
             write_trial(job, task, attempt, reward)
     shard.mkdir(parents=True, exist_ok=True)
     (shard / "selected_tasks.txt").write_text("\n".join(tasks) + "\n", encoding="utf-8")
+    pipeline = {"source": "binary", "commit": commit, "dirty": False, "pipeline_hash": f"hash-{commit}"}
     (shard / "eval_protocol_inputs.json").write_text(
-        json.dumps({"model": "deepseek-flash", "api_base": "https://api.deepseek.com/v1"}),
+        json.dumps(
+            {"model": "deepseek-flash", "api_base": "https://api.deepseek.com/v1", "pipeline": pipeline}
+        ),
         encoding="utf-8",
     )
     (shard / "eval_resources.json").write_text(
@@ -150,6 +155,15 @@ class MergeTests(unittest.TestCase):
     def test_no_summaries_means_no_merged_verdict(self):
         self.assertIsNone(merge_anticheat([]))
 
+    def test_pipeline_status_compares_commit_and_hash(self):
+        self.assertIsNone(pipeline_status([]))
+        same = {"commit": "a", "pipeline_hash": "h"}
+        self.assertEqual(pipeline_status([same, dict(same)]), {"pipeline_status": "same"})
+        # Same commit, different embedded scripts: a dirty build on one worker.
+        got = pipeline_status([same, {"commit": "a", "pipeline_hash": "other"}])
+        self.assertEqual(got["pipeline_status"], "mixed")
+        self.assertEqual(len(got["pipelines"]), 2)
+
 
 class CliTests(unittest.TestCase):
     def run_main(self, shards: Path, out: Path, rollouts: int = 2) -> int:
@@ -194,8 +208,40 @@ class CliTests(unittest.TestCase):
             self.assertEqual(tasks["alpha"]["c"], 1)
             self.assertEqual(doc["concurrency"], 2)
             self.assertEqual(doc["cpus_each"], 2)
+            self.assertEqual(doc["pipeline_status"], "same")
+            self.assertNotIn("pipelines", doc)
             self.assertTrue((out / "summary.md").is_file())
             self.assertTrue((out / "report.html").is_file())
+
+    def test_shards_from_different_pipeline_builds_are_marked_mixed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_shard(root, "101", {"alpha": [1.0]}, commit="aaaa")
+            make_shard(root, "102", {"beta": [1.0]}, commit="bbbb")
+            out = root / "aggregate"
+            self.assertEqual(self.run_main(root, out, rollouts=1), 0)
+            doc = json.loads((out / "artifact.json").read_text(encoding="utf-8"))
+            self.assertEqual(doc["pipeline_status"], "mixed")
+            self.assertEqual(
+                doc["pipelines"],
+                [
+                    {"commit": "aaaa", "pipeline_hash": "hash-aaaa"},
+                    {"commit": "bbbb", "pipeline_hash": "hash-bbbb"},
+                ],
+            )
+
+    def test_float_cpus_each_from_an_old_plan_is_whole(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shard = make_shard(root, "101", {"alpha": [1.0]})
+            (shard / "eval_resources.json").write_text(
+                json.dumps({"applied": {"slots": 1, "cpus_each": 2.0}}), encoding="utf-8"
+            )
+            out = root / "aggregate"
+            self.assertEqual(self.run_main(root, out, rollouts=1), 0)
+            doc = json.loads((out / "artifact.json").read_text(encoding="utf-8"))
+            self.assertEqual(doc["cpus_each"], 2)
+            self.assertIsInstance(doc["cpus_each"], int)
 
     def test_an_empty_collection_says_why(self):
         with tempfile.TemporaryDirectory() as tmp:

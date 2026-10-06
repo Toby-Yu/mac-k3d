@@ -83,9 +83,9 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 
 Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.
 
-v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-v4-pro` (default) and `deepseek-flash`. Benchmark is `deepswe`, `lolbench`, or `swebenchpro`. Output: `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, with `summary.md` and `report.html` in that folder, and a checkout backup at `output/<benchmark>/<same run folder>.tar.gz`. Field glossary: [evaluation.md](evaluation.md). Slot packing: [optimization.md](optimization.md).
+v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-v4-pro` (default) and `deepseek-flash`. Benchmark is `deepswe`, `lolbench`, or `swebenchpro`. Output: `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, with `summary.md` and `report.html` in that folder, and a backup at `output/<benchmark>/<same run folder>.tar.gz` under the pipeline root (`$WORKSPACE/mac-k3d-pipeline` on Jenkins, the checkout locally). Field glossary: [evaluation.md](evaluation.md). Slot packing: [optimization.md](optimization.md).
 
-There is no `--sync-pipeline`. A Jenkins build clones mac-k3d at `MAC_K3D_GIT_REF` and runs `pipeline/` from that clone, so the pipeline under test is always a named commit — see the development loop in [workflow.md](workflow.md#development-loop-test-a-commit-not-a-path). `--stage` and `--local` still run the working tree directly, which is the fast path for a fixture-level change.
+There is no `--sync-pipeline`. A Jenkins build runs the `pipeline/` embedded in its worker's installed binary (see [`pipeline`](#pipeline)), so the pipeline under test is always the commit that binary was built from — see the development loop in [workflow.md](workflow.md#development-loop-commit-push-redeploy). `--stage` and `--local` still run the working tree directly, which is the fast path for a fixture-level change.
 
 ### Jenkins job parameters
 
@@ -105,9 +105,6 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `MAC_K3D_GIT_URL` | `https://github.com/Toby-Yu/mac-k3d.git` | repo the worker clones to get `pipeline/` |
-| `MAC_K3D_GIT_REF` | `main` | branch, tag, commit SHA, or PR number |
-| `MAC_K3D_GIT_REF_KIND` | `branch` | `branch` \| `tag` \| `commit` \| `pr`. `OFFICIAL=1` requires `commit` |
 | `AGENT_LABEL` | `lolbench` | label a worker must carry |
 | `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF`, `ICODE_EXPECT_SHA` | pinned | P1 / P2 / P3 pins |
 | `OFFICIAL`, `CANARY`, `CANARY_ALLOW_HOST` | `0`, `official`, empty | provenance gate and isolation canary |
@@ -116,7 +113,26 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 
 **Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`. A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API.
 
-There is no `CPU_LOCK_QTY`, `SHARDS` or `RESUME` parameter. A build locks every core of its worker (one executor per worker), and the dispatcher picks the shard count from `SHARD_SIZE` and the number of online workers.
+There is no `CPU_LOCK_QTY`, `SHARDS` or `RESUME` parameter. A build locks every core of its worker (one executor per worker), and the dispatcher picks the shard count from `SHARD_SIZE` and the number of online workers. There is no pipeline URL or ref parameter either: the pipeline is the worker binary's, and `scripts/redeploy.sh` is how a commit reaches it.
+
+---
+
+## `pipeline`
+
+Extract the `pipeline/` this binary was built with. Every Jenkins eval build runs it in `Prepare`; no config file is read.
+
+```bash
+mac-k3d pipeline --extract-to "$WORKSPACE/mac-k3d-pipeline"
+mac-k3d pipeline --extract-to "$WORKSPACE/mac-k3d-pipeline" --require-clean   # OFFICIAL=1
+mac-k3d --version     # mac-k3d 0.5.2 (<commit>[, dirty])
+```
+
+| Flag | Description |
+|------|-------------|
+| `--extract-to DIR` | Write `DIR/pipeline/` plus `DIR/pipeline/BUILD.json` (`version`, `commit`, `dirty`, `pipeline_hash`, `binary`), then print `mac-k3d pipeline <commit> (mac-k3d <version>, <binary>)` |
+| `--require-clean` | Exit non-zero, before writing anything, when the binary was built with uncommitted changes in `src/` or `pipeline/`, or outside a git checkout |
+
+`provenance.py` copies `BUILD.json` into `artifact.json` as `eval_protocol.pipeline` with `source: binary`. A local run from a checkout has no `BUILD.json` and records `source: checkout` with the commit and dirty flag from git.
 
 ---
 
@@ -250,9 +266,9 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
 4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline jobs `deepswe_one_task` / `lolbench_one_task` with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md) and [icode-harness-inputs.md](icode-harness-inputs.md).
-5. **Worker:** extract `~/.local/share/mac-k3d/pipeline` (does not overwrite `icode`); using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
+5. **Worker:** extract `~/.local/share/mac-k3d/pipeline` (does not overwrite `icode`); using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start the agent daemon** (systemd user unit `mac-k3d-jenkins-agent.service` on Linux, LaunchAgent `com.mac-k3d.jenkins-agent` on macOS) unless `--skip-agent`.
 
-The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
+`agent.jar` is downloaded beside the running one and swapped in by rename only when its bytes differ. A running agent is restarted only when `agent.jar`, `launch-agent.sh` or the unit/plist changed; otherwise `config` prints `Jenkins agent unchanged, left running` and a build on that worker keeps its connection. The daemon survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
 
 ---
 

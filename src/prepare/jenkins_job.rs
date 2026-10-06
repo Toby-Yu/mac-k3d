@@ -18,9 +18,6 @@ const DESC_DISPATCH_ICODE_GIT_URL: &str = "iCode git URL (https on github.com or
 const DESC_TASKS: &str = "Comma-separated question ids. This field wins over N_TASKS. Example: ruff_1,fastapi_1. Leave empty to run the first N_TASKS sorted ids.";
 const DESC_CANARY: &str = "Isolation canary (P0.6). official: on when OFFICIAL=1, off otherwise. on: canary on the first task, then the rollouts. only: canary on every selected task and no rollouts (no tokens). off: smoke runs only; OFFICIAL=1 refuses it. A canary failure stops the build.";
 const DESC_CANARY_ALLOW_HOST: &str = "Test only: open this host (for example github.com) for the canary alone, to prove the canary fails when isolation is broken. Leave empty. OFFICIAL=1 refuses it.";
-const DESC_MAC_K3D_GIT_URL: &str = "Git URL of the mac-k3d repo whose pipeline/ runs this build. The build clones it and records the resolved commit in artifact.json, so every result names the pipeline version that produced it.";
-const DESC_MAC_K3D_GIT_REF: &str = "Branch name, tag, commit SHA, or pull-request number for MAC_K3D_GIT_URL. Push a fix to a branch and enter it here; to revert a bad commit, enter the previous SHA.";
-const DESC_MAC_K3D_GIT_REF_KIND: &str = "Pick branch, tag, commit, or pr to match MAC_K3D_GIT_REF. OFFICIAL=1 requires commit, so an official number always names an exact pipeline revision.";
 const DESC_SHARD_SIZE: &str = "Questions per shard. All shards are queued at once and each worker takes the next one when it finishes, so a faster worker runs more of them. There is always at least one shard per online worker.";
 const DESC_RUN_GROUP: &str = "Set by some_task or full_suite_task on a shard build: ties the shards of one run together. Empty on a direct build.";
 const DESC_SHARD: &str = "Set by some_task or full_suite_task on a shard build: which shard this is. Shown as the build description.";
@@ -39,9 +36,6 @@ const FORWARDED_PARAMS: &[&str] = &[
     "ICODE_GIT_URL",
     "ICODE_GIT_REF",
     "ICODE_GIT_REF_KIND",
-    "MAC_K3D_GIT_URL",
-    "MAC_K3D_GIT_REF",
-    "MAC_K3D_GIT_REF_KIND",
     "HARBOR_VERSION",
     "DEEPSWE_REF",
     "LOLBENCH_REF",
@@ -79,7 +73,7 @@ impl JobShape {
 }
 
 /// Who reads the job page. `User` sees each shape's short parameter list;
-/// `Developer` also sees the pipeline ref, pins, canary and scheduling knobs.
+/// `Developer` also sees the pins, canary and scheduling knobs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiProfile {
     User,
@@ -201,10 +195,6 @@ pub struct JobOpts {
     pub default_icode_git_url: String,
     pub default_icode_git_ref: String,
     pub default_icode_git_ref_kind: String,
-    /// mac-k3d repo the build clones to get `pipeline/`, and the ref to pin it at.
-    pub default_mac_k3d_git_url: String,
-    pub default_mac_k3d_git_ref: String,
-    pub default_mac_k3d_git_ref_kind: String,
     pub default_icode_args: String,
     pub default_harness: String,
     pub default_llm: String,
@@ -274,25 +264,6 @@ impl JobOpts {
             default_icode_git_ref_kind: match git_ref_kind.to_ascii_lowercase().as_str() {
                 "tag" | "commit" | "pr" | "branch" => git_ref_kind.to_ascii_lowercase(),
                 _ => "pr".into(),
-            },
-            default_mac_k3d_git_url: config.jenkins_job.default_mac_k3d_git_url.trim().to_string(),
-            default_mac_k3d_git_ref: {
-                let r = config.jenkins_job.default_mac_k3d_git_ref.trim();
-                if r.is_empty() { "main".into() } else { r.to_string() }
-            },
-            default_mac_k3d_git_ref_kind: match config
-                .jenkins_job
-                .default_mac_k3d_git_ref_kind
-                .trim()
-                .to_ascii_lowercase()
-                .as_str()
-            {
-                "tag" | "commit" | "pr" | "branch" => config
-                    .jenkins_job
-                    .default_mac_k3d_git_ref_kind
-                    .trim()
-                    .to_ascii_lowercase(),
-                _ => "branch".into(),
             },
             default_icode_args: config.jenkins_job.default_icode_args.clone(),
             default_harness: harness,
@@ -803,11 +774,6 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
         eval_catalog::ICODE_GIT_REF_KINDS,
         &opts.default_icode_git_ref_kind,
     );
-    let mac_k3d_kind_choices = eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_mac_k3d_git_ref_kind,
-    );
-
     let mut p = vec![
         choice_param("HARNESS", &[opts.default_harness.as_str()], harness_param_description(), Always),
         choice_param("LLM", &[opts.default_llm.as_str()], llm_param_description(), Always),
@@ -872,9 +838,6 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
         p.push(text_param("SHARD_SIZE", opts.default_shard_size.max(1), DESC_SHARD_SIZE, Developer));
     }
     p.extend([
-        text_param("MAC_K3D_GIT_URL", opts.default_mac_k3d_git_url.trim(), DESC_MAC_K3D_GIT_URL, Developer),
-        text_param("MAC_K3D_GIT_REF", &opts.default_mac_k3d_git_ref, DESC_MAC_K3D_GIT_REF, Developer),
-        choice_param("MAC_K3D_GIT_REF_KIND", &mac_k3d_kind_choices, DESC_MAC_K3D_GIT_REF_KIND, Developer),
         text_param("AGENT_LABEL", "lolbench", DESC_AGENT_LABEL, Developer),
         text_param("HARBOR_VERSION", "0.22.0", "Harbor version installed in P1. A mismatch fails the stage.", Developer),
         text_param("DEEPSWE_REF", "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea", "DeepSWE commit pinned by P2.", Developer),
@@ -1020,6 +983,7 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
             }}
           }}
           sh '''
+            rm -rf "${{WORKSPACE}}/mac-k3d-pipeline/pipeline"
 {bootstrap}
             echo "PROGRESS 10% P0-P4 prepare (no CPU lock held)"
             MAC_K3D_PHASE=prepare bash "$MAC_K3D_ROOT/pipeline/stages/run_all.sh"
@@ -1212,20 +1176,9 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
         sh '''
           set -euo pipefail
           export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
-          MAC_K3D_SRC="${{WORKSPACE}}/mac-k3d-src"
-          case "${{MAC_K3D_GIT_REF_KIND:-branch}}" in
-            commit) FETCH="${{MAC_K3D_GIT_REF}}" ;;
-            tag) FETCH="refs/tags/${{MAC_K3D_GIT_REF}}" ;;
-            pr) FETCH="refs/pull/${{MAC_K3D_GIT_REF}}/head" ;;
-            *) FETCH="refs/heads/${{MAC_K3D_GIT_REF}}" ;;
-          esac
-          rm -rf "$MAC_K3D_SRC"
-          git -c init.defaultBranch=main -c advice.defaultBranchName=false init -q "$MAC_K3D_SRC"
-          git -C "$MAC_K3D_SRC" remote add origin "$MAC_K3D_GIT_URL"
-          GIT_TERMINAL_PROMPT=0 git -C "$MAC_K3D_SRC" fetch --depth 1 --force origin "$FETCH"
-          git -c advice.detachedHead=false -C "$MAC_K3D_SRC" checkout --force --detach FETCH_HEAD
-          echo "mac-k3d pipeline: $(git -C "$MAC_K3D_SRC" rev-parse HEAD)"
-          python3 "$MAC_K3D_SRC/pipeline/lib/aggregate_runs.py" \
+          MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
+          mac-k3d pipeline --extract-to "$MAC_K3D_ROOT"
+          python3 "$MAC_K3D_ROOT/pipeline/lib/aggregate_runs.py" \
             --shards "${{WORKSPACE}}/shards" \
             --benchmark "$BENCHMARK" \
             --run-group "$RUN_GROUP" \
@@ -1246,9 +1199,9 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
     )
 }
 
-/// The shell prelude every phase runs: clone the pinned mac-k3d, export the
-/// parameters, validate them. Idempotent, so each phase re-derives the same env
-/// without the phases having to share a shell.
+/// The shell prelude every phase runs: extract this worker's pipeline once per
+/// build, export the parameters, validate them. Idempotent, so each phase
+/// re-derives the same env without the phases having to share a shell.
 fn eval_bootstrap_sh(job_benchmark: &str, opts: &JobOpts, indent: usize) -> String {
     let pad = " ".repeat(indent);
     let body = format!(
@@ -1259,37 +1212,18 @@ docker info >/dev/null
 export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
 export OFFICIAL="${{OFFICIAL:-0}}"
 
-# The pipeline under test is a git checkout, not whatever binary happens to be
-# on this worker. Every build records the commit it ran.
-MAC_K3D_SRC="${{WORKSPACE}}/mac-k3d-src"
-[ -n "${{MAC_K3D_GIT_URL:-}}" ] || {{ echo "MAC_K3D_GIT_URL is required: the build has to name the pipeline it runs." >&2; exit 1; }}
-case "${{MAC_K3D_GIT_REF_KIND:-branch}}" in
-  commit) MAC_K3D_FETCH="${{MAC_K3D_GIT_REF}}" ;;
-  tag) MAC_K3D_FETCH="refs/tags/${{MAC_K3D_GIT_REF}}" ;;
-  pr) MAC_K3D_FETCH="refs/pull/${{MAC_K3D_GIT_REF}}/head" ;;
-  branch | "") MAC_K3D_FETCH="refs/heads/${{MAC_K3D_GIT_REF}}" ;;
-  *) echo "MAC_K3D_GIT_REF_KIND must be branch, tag, commit or pr (got ${{MAC_K3D_GIT_REF_KIND}})" >&2; exit 1 ;;
-esac
-if [ "$OFFICIAL" = "1" ] && [ "${{MAC_K3D_GIT_REF_KIND:-branch}}" != "commit" ]; then
-  echo "OFFICIAL=1 needs MAC_K3D_GIT_REF_KIND=commit so the result names an exact pipeline revision." >&2
-  exit 1
+# The pipeline is the one embedded in this worker's mac-k3d binary, extracted
+# once per build (Prepare clears it), so a redeploy mid-build cannot change the
+# scripts under a running build. BUILD.json names the commit for the artifact.
+export MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
+if [ ! -f "$MAC_K3D_ROOT/pipeline/BUILD.json" ]; then
+  command -v mac-k3d >/dev/null || {{ echo "mac-k3d is not on PATH on ${{NODE_NAME:-this worker}}. Run scripts/redeploy.sh." >&2; exit 1; }}
+  if [ "$OFFICIAL" = "1" ]; then
+    mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean
+  else
+    mac-k3d pipeline --extract-to "$MAC_K3D_ROOT"
+  fi
 fi
-if [ ! -d "$MAC_K3D_SRC/.git" ]; then
-  rm -rf "$MAC_K3D_SRC"
-  git -c init.defaultBranch=main -c advice.defaultBranchName=false init -q "$MAC_K3D_SRC"
-  git -C "$MAC_K3D_SRC" remote add origin "$MAC_K3D_GIT_URL"
-else
-  git -C "$MAC_K3D_SRC" remote set-url origin "$MAC_K3D_GIT_URL"
-fi
-GIT_TERMINAL_PROMPT=0 git -C "$MAC_K3D_SRC" fetch --depth 1 --force origin "$MAC_K3D_FETCH"
-git -c advice.detachedHead=false -C "$MAC_K3D_SRC" checkout --force --detach FETCH_HEAD
-export MAC_K3D_ROOT="$MAC_K3D_SRC"
-MAC_K3D_SHA="$(git -C "$MAC_K3D_SRC" rev-parse HEAD)"
-export MAC_K3D_SHA
-export MAC_K3D_GIT_URL MAC_K3D_GIT_REF
-export MAC_K3D_GIT_REF_KIND="${{MAC_K3D_GIT_REF_KIND:-branch}}"
-echo "mac-k3d pipeline: $MAC_K3D_GIT_URL ${{MAC_K3D_GIT_REF_KIND}}=${{MAC_K3D_GIT_REF}} -> $MAC_K3D_SHA"
-[ -f "$MAC_K3D_ROOT/pipeline/stages/run_all.sh" ] || {{ echo "$MAC_K3D_GIT_URL at $MAC_K3D_SHA has no pipeline/stages/run_all.sh" >&2; exit 1; }}
 
 export N_TASKS="${{N_TASKS:-1}}"
 export N_ROLLOUTS="${{N_ROLLOUTS:-4}}"
@@ -1330,7 +1264,6 @@ export HARNESS="${{HARNESS:-{harness_fb}}}"
 export LLM="${{LLM:-{llm_fb}}}"
 export BENCHMARK="${{BENCHMARK:-{bench}}}"
 export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-{model_fb}}}"
-export LLM_NAME="${{LLM_NAME:-DeepSeek V4 Pro}}"
 if [ -z "${{DEEPSEEK_API_KEY:-}}" ]; then
   echo "DEEPSEEK_API_KEY missing. Store credential deepseek-api-key on the Jenkins controller." >&2
   exit 1
@@ -1806,9 +1739,6 @@ mod tests {
             default_icode_git_url: "https://gitcode.com/example/icode.git".into(),
             default_icode_git_ref: "main".into(),
             default_icode_git_ref_kind: "branch".into(),
-            default_mac_k3d_git_url: "https://github.com/Toby-Yu/mac-k3d.git".into(),
-            default_mac_k3d_git_ref: "main".into(),
-            default_mac_k3d_git_ref_kind: "branch".into(),
             default_icode_args: "--help".into(),
             default_harness: "icode".into(),
             default_llm: "deepseek".into(),
@@ -1831,9 +1761,6 @@ mod tests {
             default_icode_git_url: String::new(),
             default_icode_git_ref: "main".into(),
             default_icode_git_ref_kind: "branch".into(),
-            default_mac_k3d_git_url: "https://github.com/Toby-Yu/mac-k3d.git".into(),
-            default_mac_k3d_git_ref: "main".into(),
-            default_mac_k3d_git_ref_kind: "branch".into(),
             default_icode_args: String::new(),
             default_harness: "icode".into(),
             default_llm: "deepseek".into(),
@@ -1905,17 +1832,10 @@ mod tests {
         assert!(!jf.contains("string(name: 'ICODE_RELEASE'"));
         assert!(jf.contains("ICODE_RELEASE_FILE"));
         assert!(jf.contains("ICODE_RELEASE_UPLOADED"));
-        // The pipeline under test is a clone at a named ref, not whatever
-        // binary happens to be installed on the worker.
         assert!(!jf.contains("--sync-pipeline"));
         assert!(!jf.contains("MAC_K3D_ROOT:-"));
         assert!(!jf.contains(".local/share"));
-        assert!(jf.contains("MAC_K3D_GIT_URL"));
-        assert!(jf.contains("MAC_K3D_GIT_REF"));
-        assert!(jf.contains("choice(name: 'MAC_K3D_GIT_REF_KIND'"));
-        assert!(jf.contains("MAC_K3D_SHA"));
-        assert!(jf.contains("refs/pull/${MAC_K3D_GIT_REF}/head"));
-        assert!(jf.contains("OFFICIAL=1 needs MAC_K3D_GIT_REF_KIND=commit"));
+        assert!(!jf.contains("LLM_NAME"));
         assert!(jf.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"));
         assert!(jf.contains("unstash 'ICODE_RELEASE_FILE'"));
         assert!(jf.contains("--force-rm"));
@@ -2068,9 +1988,7 @@ mod tests {
         for shape in EVAL_SHAPES {
             let jf = eval_jenkinsfile("deepswe", *shape, &opts);
             let block = params_block(&jf);
-            assert!(block.contains("hidden(name: 'MAC_K3D_GIT_REF', defaultValue: 'main'"), "{shape:?}");
-            assert!(block.contains("hidden(name: 'MAC_K3D_GIT_REF_KIND', defaultValue: 'branch'"));
-            assert!(block.contains("hidden(name: 'OFFICIAL', defaultValue: '0'"));
+            assert!(block.contains("hidden(name: 'OFFICIAL', defaultValue: '0'"), "{shape:?}");
             assert!(block.contains("hidden(name: 'CANARY', defaultValue: 'official'"));
             assert!(block.contains("hidden(name: 'AGENT_LABEL', defaultValue: 'lolbench'"));
             assert!(block.contains("string(name: 'N_ROLLOUTS'"));
@@ -2092,7 +2010,6 @@ mod tests {
         opts.ui_profile = UiProfile::Developer;
         let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
         let block = params_block(&one);
-        assert!(block.contains("string(name: 'MAC_K3D_GIT_REF', defaultValue: 'main'"));
         assert!(block.contains("choice(name: 'CANARY', choices: ['official', 'only', 'on', 'off']"));
         assert!(block.contains("string(name: 'HARBOR_VERSION', defaultValue: '0.22.0'"));
         // Shard plumbing stays hidden for developers too: the dispatcher owns it.
@@ -2126,6 +2043,51 @@ mod tests {
         for name in ["HARNESS", "LLM", "BENCHMARK"] {
             assert!(some.contains(&format!("string(name: '{name}', value: params.{name})")));
         }
+    }
+
+    #[test]
+    fn no_mac_k3d_git_params() {
+        for profile in [UiProfile::User, UiProfile::Developer] {
+            let mut opts = deepswe_opts(Vec::new());
+            opts.ui_profile = profile;
+            for bench in EVAL_BENCHMARKS {
+                for shape in EVAL_SHAPES {
+                    let xml = eval_job_xml(bench, *shape, "d", &opts);
+                    assert!(!xml.contains("MAC_K3D_GIT"), "{bench} {shape:?} {profile:?}");
+                    assert!(!xml.contains("MAC_K3D_SHA"));
+                    assert!(!xml.contains("mac-k3d-src"));
+                    assert!(!xml.contains("git fetch"));
+                }
+            }
+        }
+        assert!(!FORWARDED_PARAMS.iter().any(|p| p.starts_with("MAC_K3D")));
+    }
+
+    #[test]
+    fn bootstrap_extracts_pipeline_from_installed_binary() {
+        let opts = deepswe_opts(vec!["deepseek-api-key".into()]);
+        let jf = eval_jenkinsfile("deepswe", JobShape::One, &opts);
+        assert!(jf.contains(r#"export MAC_K3D_ROOT="${WORKSPACE}/mac-k3d-pipeline""#));
+        assert!(jf.contains(r#"if [ ! -f "$MAC_K3D_ROOT/pipeline/BUILD.json" ]; then"#));
+        assert!(jf.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean"#));
+        assert!(jf.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT""#));
+        assert!(!jf.contains("git fetch"));
+        assert!(!jf.contains("MAC_K3D_GIT"));
+        // Prepare starts from a fresh extract; Evaluate and Report reuse it.
+        // Only pipeline/ goes: output/ under the same root keeps P8's backups.
+        let clear = r#"rm -rf "${WORKSPACE}/mac-k3d-pipeline/pipeline""#;
+        assert_eq!(jf.matches(clear).count(), 1);
+        let prepare = jf.find("stage('Prepare')").unwrap();
+        let evaluate = jf.find("stage('Evaluate')").unwrap();
+        let at = jf.find(clear).unwrap();
+        assert!(prepare < at && at < evaluate);
+        assert_eq!(jf.matches("mac-k3d pipeline --extract-to").count(), 6);
+
+        let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
+        assert!(some.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT""#));
+        assert!(some.contains(r#"python3 "$MAC_K3D_ROOT/pipeline/lib/aggregate_runs.py""#));
+        assert!(!some.contains("--require-clean"));
+        assert!(!some.contains("git fetch"));
     }
 
     #[test]
@@ -2366,11 +2328,11 @@ mod tests {
         assert!(xml.contains("<name>N_ROLLOUTS</name>"));
         assert!(xml.contains("<defaultValue>1</defaultValue>"));
         assert!(xml.contains("<name>TASK</name>"));
-        // A worker no longer needs a pre-extracted pipeline, so the old "run
-        // mac-k3d config on the worker" hints are gone; the clone is the fix.
+        // The build extracts its own pipeline from the installed binary, so
+        // there is no share-dir hint to run mac-k3d config first.
         assert!(!xml.contains("mac-k3d config -c worker.yaml"));
         assert!(!xml.contains("eval --stage p0"));
-        assert!(xml.contains("has no pipeline/stages/run_all.sh"));
+        assert!(xml.contains("Run scripts/redeploy.sh."));
         assert!(xml.contains("user-guide"));
         assert!(!xml.contains("harbor run"));
         assert!(

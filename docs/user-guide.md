@@ -177,7 +177,7 @@ Rebuild/extract pipeline on the worker (`mac-k3d eval --stage p0` or `config`) s
 | ICODE_GIT_REF_KIND | all | **git:** pick `branch`, `tag`, `commit`, or `pr` (no auto). **release:** leave it as it is. |
 | DEEPSEEK_MODEL | all | `deepseek-v4-pro` (catalog default; or `deepseek-flash`). iCode sends this id to `https://api.deepseek.com/v1` with provider `DeepSeek` and reasoning effort `high` |
 
-A build locks every core of the worker it lands on, and Harbor sizes its slots from them ([optimization.md](optimization.md)). Pipeline ref (`MAC_K3D_GIT_*`), `AGENT_LABEL`, pins, canary and `SHARD_SIZE` are developer parameters: they show only when the controller has `jenkins_job.ui_profile: developer`, and otherwise keep their config defaults. See [workflow.md](workflow.md#development-loop-test-a-commit-not-a-path) and [commands.md](commands.md#jenkins-job-parameters).
+A build locks every core of the worker it lands on, and Harbor sizes its slots from them ([optimization.md](optimization.md)). `AGENT_LABEL`, pins, canary and `SHARD_SIZE` are developer parameters: they show only when the controller has `jenkins_job.ui_profile: developer`, and otherwise keep their config defaults. The pipeline itself is not a parameter: each worker runs the one built into its installed `mac-k3d`, and `artifact.json` names that commit. See [workflow.md](workflow.md#development-loop-commit-push-redeploy) and [commands.md](commands.md#jenkins-job-parameters).
 
 Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND`. The archived JSON includes `icode_git` (resolved SHA + subject). Full split: [icode-harness-inputs.md](icode-harness-inputs.md).
 

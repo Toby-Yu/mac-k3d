@@ -17,6 +17,7 @@ from anticheat_verdict import adjust_attempt
 from eval_metrics import mean_ci, summarize_arm
 from score_results import load_json, parse_reward_value, rates_for_trial
 from icode_usage import find_icode_usage
+from task_resources import cpu_count
 
 _TRIAL_FILES = {
     "result.json",
@@ -247,7 +248,7 @@ def build_eval_protocol(
     api_base: str,
     n_rollouts: int,
     concurrency: int,
-    cpus_each: int,
+    cpus_each: int | float,
 ) -> dict:
     """Record the iCode drop and model knobs used for this run."""
     inputs: dict = {}
@@ -317,7 +318,7 @@ def build_eval_protocol(
         "resources": {
             "cpu_lock_qty": cpu_lock,
             "concurrency": int(inputs.get("concurrency") or concurrency),
-            "cpus_each": int(inputs.get("cpus_each") or cpus_each),
+            "cpus_each": cpu_count(inputs.get("cpus_each")) or cpus_each,
             "harbor_agent_timeout_note": HARBOR_TIMEOUT_NOTE,
         },
     }
@@ -346,7 +347,7 @@ def build_artifact(
     baseline_dir: Path,
     n_rollouts: int,
     concurrency: int,
-    cpus_each: int,
+    cpus_each: int | float,
     run_id: str,
     eval_protocol: dict | None = None,
 ) -> dict:
@@ -929,7 +930,7 @@ def main() -> int:
     ap.add_argument("--run-id", default=os.environ.get("BUILD_NUMBER", "local"))
     ap.add_argument("--n-rollouts", type=int, default=0)
     ap.add_argument("--concurrency", type=int, default=0)
-    ap.add_argument("--cpus-each", type=int, default=0)
+    ap.add_argument("--cpus-each", type=float, default=0)
     ap.add_argument("--workdir", default=os.environ.get("WORKDIR", ""))
     ap.add_argument("--utc", default="")
     ap.add_argument("--run-folder", default="")
@@ -943,7 +944,7 @@ def main() -> int:
         return 0
     n_rollouts = args.n_rollouts or int(os.environ.get("N_ROLLOUTS") or "1")
     concurrency = args.concurrency or int(os.environ.get("EVAL_SLOTS") or "1")
-    cpus_each = args.cpus_each or int(os.environ.get("EVAL_CPUS_EACH") or "1")
+    cpus_each = cpu_count(args.cpus_each) or cpu_count(os.environ.get("EVAL_CPUS_EACH")) or 1
     ids = [ln.strip() for ln in Path(args.task_file).read_text(encoding="utf-8").splitlines() if ln.strip()]
     run_id = args.run_id
     if run_id not in ("local",) and not str(run_id).startswith(("jenkins-", "local-")):

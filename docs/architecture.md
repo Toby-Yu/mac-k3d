@@ -222,19 +222,18 @@ With no quantity, lockable-resources locks **every** matching resource, so the b
 
 Scale workers, not controllers. Lockable-resources state is per-controller, so a second controller would hand out tokens for cores the first one already lent out.
 
-### The pipeline under test is a git ref
+### The pipeline under test ships in the binary
 
-The worker clones mac-k3d itself rather than running whatever is installed locally:
+`include_dir!` embeds `pipeline/` in `mac-k3d`, and `build.rs` bakes in the commit, a dirty flag (uncommitted changes under `src/` or `pipeline/`) and an FNV-64 hash of the embedded files. A build's `Prepare` stage runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`; `Evaluate` and `Report` reuse that extract, so a redeploy during a build cannot change the scripts under it.
 
-| Parameter | Meaning |
+| Where | What records the pipeline |
 |---|---|
-| `MAC_K3D_GIT_URL` | repo to clone (default `https://github.com/Toby-Yu/mac-k3d.git`) |
-| `MAC_K3D_GIT_REF` | branch, tag, commit, or PR number |
-| `MAC_K3D_GIT_REF_KIND` | `branch` \| `tag` \| `commit` \| `pr` |
+| Worker binary | `mac-k3d --version` → `mac-k3d 0.5.2 (<commit>[, dirty])` |
+| The build's extract | `pipeline/BUILD.json` → `version`, `commit`, `dirty`, `pipeline_hash`, `binary` |
+| `artifact.json` | `eval_protocol.pipeline` → `source: binary` plus the same four fields |
+| Aggregate of shards | `pipeline_status: same`, or `mixed` with each commit/hash when a worker missed a redeploy |
 
-The resolved SHA lands in `artifact.json` under `pipeline.commit`, so any result names the code that produced it and a bad commit is revertible. `OFFICIAL=1` requires `MAC_K3D_GIT_REF_KIND=commit` so an official number can never come from a moving branch. This mirrors how the iCode inputs are already pinned — see [workflow.md](workflow.md).
-
-`include_dir!` still embeds `pipeline/` in the binary, but only so `setup` and `config` can bootstrap a bare machine offline. The evaluation path always uses the clone.
+`OFFICIAL=1` extracts with `--require-clean`, which refuses a dirty build or an unknown commit, and `check_report.py` rejects a dirty or mixed pipeline. A commit reaches every host through `scripts/redeploy.sh` — see [workflow.md](workflow.md#development-loop-commit-push-redeploy). There is no GitHub clone on the worker and no pipeline URL or ref parameter.
 
 ## Cross-network operation (not necessarily LAN)
 

@@ -328,17 +328,17 @@ mac-k3d eval --stage p8 --n-tasks 1
 
 **Where:** this PC (or cloud) with the **controller** URL. **No** `--local`. Build must run on **this** node.
 
-Product path: Jenkins UI, job `deepswe_one_task` → **Build with Parameters** (`ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`). Leave `MAC_K3D_GIT_URL` / `MAC_K3D_GIT_REF` / `MAC_K3D_GIT_REF_KIND` at their defaults; the build clones mac-k3d itself and prints the SHA it is running. `mac-k3d eval --icode-mode release --yes` cannot attach a file.
+Product path: Jenkins UI, job `deepswe_one_task` → **Build with Parameters** (`ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro` or `deepseek-flash`, `AGENT_LABEL=lolbench`). There is no pipeline field: the build runs the pipeline inside this worker's installed `mac-k3d` and prints `mac-k3d pipeline <sha>` in `Prepare`. `mac-k3d eval --icode-mode release --yes` cannot attach a file.
 
 Git (optional): same UI with `ICODE_MODE=git`, or `mac-k3d eval --n-tasks 1 --icode-mode git --icode-git-url … --icode-git-ref … --icode-git-ref-kind branch --model deepseek-v4-pro --yes` (no `--local`).
 
-**Expected:** build on this worker; archived JSON; same schema as E6. The console shows one `harbor run`, a `PROGRESS 40% … holding N cores on <this node>` line, and `pipeline.commit` in the artifact. Confirm with `check_report.sh` on the downloaded artifact if needed.
+**Expected:** build on this worker; archived JSON; same schema as E6. The console shows one `harbor run`, a `PROGRESS 40% … holding N cores on <this node>` line, and `eval_protocol.pipeline.commit` in the artifact equal to the SHA `mac-k3d --version` prints on this worker. Confirm with `check_report.sh` on the downloaded artifact if needed.
 
 ### Phase 5b — multi-worker (needs a second worker)
 
 Only after Phase 5 passes on one node. Register the second worker (`mac-k3d setup -c worker.yaml` on it; nothing to change on the controller), then run `deepswe_full_suite_task` with `N_TASKS=10` and `SHARD_SIZE=2` (`SHARD_SIZE` shows when the controller has `ui_profile: developer`).
 
-**Expected:** five `deepswe_one_task` shard builds, one running on each worker at a time and the rest queued until a worker frees up; **Lockable Resources** shows each build holding all of `<its own node>-core-*` and nothing else; the five `selected_tasks.txt` files are disjoint; and the dispatcher build's `Aggregate` stage archives one `aggregate/artifact.json` with `shards: 5`, `n_tasks: 10` and `10 x N_ROLLOUTS` rollout records. Checklist: [../harbor-delegation-multiworker/testing.md](../harbor-delegation-multiworker/testing.md).
+**Expected:** five `deepswe_one_task` shard builds, one running on each worker at a time and the rest queued until a worker frees up; **Lockable Resources** shows each build holding all of `<its own node>-core-*` and nothing else; the five `selected_tasks.txt` files are disjoint; and the dispatcher build's `Aggregate` stage archives one `aggregate/artifact.json` with `shards: 5`, `n_tasks: 10`, `pipeline_status: same` and `10 x N_ROLLOUTS` rollout records. `pipeline_status: mixed` means a worker missed the last redeploy. Checklist: [../harbor-delegation-multiworker/testing.md](../harbor-delegation-multiworker/testing.md).
 
 If the job still uses `deepseek-chat`, on the **cloud root** session after `git pull`:
 
@@ -355,7 +355,7 @@ E8 (N>1) is optional after E7.
 
 ## LoLBench (optional, not this DeepSWE checklist)
 
-LoLBench and SWE-bench Pro use the same Harbor stages as DeepSWE, with their own jobs. Copy-paste L2–L7 or S2–S7: [testing-eval-pipeline.md](testing-eval-pipeline.md). Jenkins SUCCESS with Harbor F2P 0.368 and Resolved 0.0 is a **score**, not a pipeline fail. To test `pipeline/` changes, push the branch and set job `MAC_K3D_GIT_REF` to it — the build clones mac-k3d itself, so nothing needs copying onto the worker. A change to the **Rust** side (job XML, agent registration, the Harbor agent wrapper) still needs `cargo build --release`, `cp -f target/release/mac-k3d ~/.local/bin/mac-k3d` and a controller `config` refresh.
+LoLBench and SWE-bench Pro use the same Harbor stages as DeepSWE, with their own jobs. Copy-paste L2–L7 or S2–S7: [testing-eval-pipeline.md](testing-eval-pipeline.md). Jenkins SUCCESS with Harbor F2P 0.368 and Resolved 0.0 is a **score**, not a pipeline fail. To test any change (`pipeline/` or the Rust side: job XML, agent registration, the Harbor agent wrapper), commit, push and run `bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worker>`; it builds once, installs the binary on every host and refreshes the controller jobs and each worker's registration.
 
 ---
 

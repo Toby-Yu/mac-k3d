@@ -1721,6 +1721,119 @@ class EvalReportTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(proc.stdout.strip(), "3 2")
 
+    def test_parallel_degree_prints_a_float_cpu_count_as_a_whole_number(self):
+        """A plan written before the fix holds ``cpus_each: 2.0``; P8 must still get ``2``."""
+        script = ROOT / "pipeline" / "lib" / "parallel_degree.sh"
+        for cpus_each, want in ((2.0, "3 2"), (0.5, "3 0.5")):
+            with tempfile.TemporaryDirectory() as tmp:
+                work = Path(tmp)
+                (work / "eval_resources.json").write_text(
+                    json.dumps(
+                        {
+                            "declared": {"peak": {"cpus": cpus_each}},
+                            "applied": {"slots": 3, "cpus_each": cpus_each},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                proc = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        f'source "{script}" && eval_parallel_degree && echo "$EVAL_SLOTS $EVAL_CPUS_EACH"',
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "N_ROLLOUTS": "1", "CPU_LOCK_QTY": "16", "WORKDIR": str(work)},
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(proc.stdout.strip(), want)
+
+    def test_p8_renders_when_the_task_declares_float_cpus(self):
+        """Build #51: ``render_report.py: error: argument --cpus-each: invalid int value: '2.0'``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = root / "eval-runs"
+            trial = work / "harness" / "harbor_runs" / "jenkins-51" / "alpha" / "alpha__trial"
+            (trial / "verifier").mkdir(parents=True)
+            (trial / "verifier" / "reward.json").write_text('{"reward": 1}\n', encoding="utf-8")
+            (trial / "result.json").write_text("{}\n", encoding="utf-8")
+            (work / "selected_tasks.txt").write_text("alpha\n", encoding="utf-8")
+            (work / "eval_resources.json").write_text(
+                json.dumps(
+                    {
+                        "declared": {"peak": {"cpus": 2.0, "memory_mb": 8192}},
+                        "applied": {"slots": 1, "cpus_each": 2.0, "cpu_lock_qty": 16},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            for key in ("BUILD_NUMBER", "ICODE_API_BASE", "OFFICIAL", "EVAL_CPUS_EACH", "EVAL_SLOTS"):
+                env.pop(key, None)
+            env.update(
+                {
+                    "MAC_K3D_EVAL_WORKDIR": str(work),
+                    "MAC_K3D_OUTPUT_ROOT": str(root / "backup"),
+                    "HOME": str(root / "home"),
+                    "BENCHMARK": "deepswe",
+                    "N_TASKS": "1",
+                    "N_ROLLOUTS": "1",
+                    "CPU_LOCK_QTY": "16",
+                    "HARNESS": "icode",
+                    "LLM": "deepseek",
+                    "DEEPSEEK_MODEL": "deepseek-flash",
+                }
+            )
+            proc = subprocess.run(
+                ["bash", str(ROOT / "pipeline" / "stages" / "p8_output.sh")],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            artifacts = list((work / "output" / "deepswe").glob("*/artifact.json"))
+            self.assertEqual(len(artifacts), 1)
+            written = json.loads(artifacts[0].read_text(encoding="utf-8"))
+            self.assertEqual(written["cpus_each"], 2)
+
+    def test_render_report_accepts_a_float_cpus_each(self):
+        for value, want in (("2.0", 2), ("0.5", 0.5)):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                harness = root / "harness"
+                trial = harness / "harbor_runs" / "jenkins-1" / "alpha" / "alpha__trial"
+                (trial / "verifier").mkdir(parents=True)
+                (trial / "verifier" / "reward.json").write_text('{"reward": 1}\n', encoding="utf-8")
+                (trial / "result.json").write_text("{}\n", encoding="utf-8")
+                tasks = root / "selected_tasks.txt"
+                tasks.write_text("alpha\n", encoding="utf-8")
+                out = root / "out"
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "pipeline" / "lib" / "render_report.py"),
+                        "--harness-dir", str(harness),
+                        "--baseline-dir", str(root / "baseline"),
+                        "--task-file", str(tasks),
+                        "--suite", "deepswe",
+                        "--run-id", "local",
+                        "--cpus-each", value,
+                        "--run-folder", "run",
+                        "--out-dir", str(out),
+                        "--backup-root", str(root / "backup"),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "HOME": str(root)},
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                written = json.loads((out / "run" / "artifact.json").read_text(encoding="utf-8"))
+                self.assertEqual(written["cpus_each"], want)
+
     def test_parallel_degree_does_not_guess_when_p5_never_ran(self):
         """A report-only replay of a tree with no plan reports 1x1, not a probe of this host."""
         script = ROOT / "pipeline" / "lib" / "parallel_degree.sh"
@@ -1790,6 +1903,25 @@ class EvalReportTests(unittest.TestCase):
             self.assertEqual(protocol["resources"]["concurrency"], 4)
             # Declared, not CPU_LOCK_QTY / slots.
             self.assertEqual(protocol["resources"]["cpus_each"], 2)
+
+    def test_eval_protocol_keeps_a_float_cpu_count_whole(self):
+        from render_report import build_eval_protocol
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "eval_protocol_inputs.json").write_text(
+                json.dumps({"cpus_each": 2.0}), encoding="utf-8"
+            )
+            protocol = build_eval_protocol(
+                workdir=work,
+                model="deepseek-flash",
+                api_base="https://api.deepseek.com/v1",
+                n_rollouts=1,
+                concurrency=1,
+                cpus_each=1,
+            )
+            self.assertEqual(protocol["resources"]["cpus_each"], 2)
+            self.assertIsInstance(protocol["resources"]["cpus_each"], int)
 
     def test_docker_stats_peak_ignores_sidecars(self):
         from eval_slots import max_icode_mem_gb
@@ -2611,6 +2743,95 @@ class ProvenanceTests(unittest.TestCase):
             self.assertIn("harbor==0.22.0", log.read_text(encoding="utf-8"))
             recorded = (Path(tmp) / "work" / "harbor_version.txt").read_text(encoding="utf-8").strip()
             self.assertEqual(recorded, "0.22.0")
+
+    def test_pipeline_facts_reads_build_json(self):
+        from provenance import pipeline_facts, provenance_markdown
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pipeline").mkdir()
+            (root / "pipeline" / "BUILD.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.5.2",
+                        "commit": "84c66ededd24aa",
+                        "dirty": False,
+                        "pipeline_hash": "00000000deadbeef",
+                        "binary": "/home/u/.local/bin/mac-k3d",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            got = pipeline_facts(root)
+            self.assertEqual(
+                got,
+                {
+                    "source": "binary",
+                    "version": "0.5.2",
+                    "commit": "84c66ededd24aa",
+                    "dirty": False,
+                    "pipeline_hash": "00000000deadbeef",
+                },
+            )
+            self.assertNotIn("url", got)
+            lines = provenance_markdown({"pipeline": got})
+            self.assertIn(
+                "- Pipeline: `84c66ededd24aa` dirty `false` from `binary` hash `00000000deadbeef`", lines
+            )
+
+    def test_pipeline_facts_without_a_known_commit_leaves_it_empty(self):
+        from provenance import pipeline_facts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pipeline").mkdir()
+            (root / "pipeline" / "BUILD.json").write_text(
+                json.dumps({"version": "0.5.2", "commit": "unknown", "dirty": None, "pipeline_hash": "ab"}),
+                encoding="utf-8",
+            )
+            got = pipeline_facts(root)
+            self.assertEqual(got["commit"], "")
+            self.assertIsNone(got["dirty"])
+            # Neither BUILD.json nor git: say so instead of guessing.
+            (root / "pipeline" / "BUILD.json").unlink()
+            self.assertEqual(pipeline_facts(root), {"source": "unknown", "commit": "", "dirty": None})
+
+    def test_pipeline_facts_falls_back_to_a_git_checkout(self):
+        from provenance import pipeline_facts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+            subprocess.run(["git", "init", "-q", str(root)], check=True, env=env)
+            (root / "a.txt").write_text("a\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True, env=env)
+            subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "a"], check=True, env=env)
+            head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(pipeline_facts(root), {"source": "checkout", "commit": head, "dirty": False})
+            (root / "a.txt").write_text("b\n", encoding="utf-8")
+            self.assertTrue(pipeline_facts(root)["dirty"])
+
+    def test_official_check_refuses_a_dirty_or_mixed_pipeline(self):
+        from check_report import official_provenance_errors
+
+        old = os.environ.get("OFFICIAL")
+        os.environ["OFFICIAL"] = "1"
+        try:
+            dirty = official_provenance_errors({"eval_protocol": {"pipeline": {"commit": "abc", "dirty": True}}})
+            clean = official_provenance_errors({"eval_protocol": {"pipeline": {"commit": "abc", "dirty": False}}})
+            mixed = official_provenance_errors(
+                {"pipeline_status": "mixed", "eval_protocol": {"pipeline": {"commit": "abc", "dirty": False}}}
+            )
+        finally:
+            if old is None:
+                os.environ.pop("OFFICIAL", None)
+            else:
+                os.environ["OFFICIAL"] = old
+        self.assertTrue(any("clean pipeline commit" in e for e in dirty))
+        self.assertFalse(any("clean pipeline commit" in e or "pipeline_status" in e for e in clean))
+        self.assertTrue(any("pipeline_status mixed" in e for e in mixed))
 
     def test_task_count_helper(self):
         from provenance import assert_task_count, count_task_dirs

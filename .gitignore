@@ -26,6 +26,9 @@ iCode/
 .cursor/debug-*.log
 .tmp-eval-slots/
 
+# Written by `mac-k3d pipeline --extract-to`; never part of the source tree
+pipeline/BUILD.json
+
 # Copied iCode drops inside a workdir
 **/icode-bin/
 

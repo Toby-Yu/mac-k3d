@@ -26,7 +26,7 @@ if run_phase prepare; then
   case "${BENCHMARK:-deepswe}" in
     swebenchpro)
       if [ ! -f "$PIPELINE_LIB/swebenchpro_tasks.py" ]; then
-        die "pipeline at $MAC_K3D_ROOT is too old for swebenchpro (missing pipeline/lib/swebenchpro_tasks.py). On the worker install this CLI then: mac-k3d config -c ~/.config/mac-k3d/worker.yaml. Or set Jenkins MAC_K3D_ROOT to a checkout that contains those files."
+        die "pipeline at $MAC_K3D_ROOT is too old for swebenchpro (missing pipeline/lib/swebenchpro_tasks.py). This worker's mac-k3d binary predates it: redeploy the binary (bash scripts/redeploy.sh from your checkout) and rebuild."
       fi
       ;;
   esac

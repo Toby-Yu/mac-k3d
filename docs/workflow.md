@@ -29,12 +29,12 @@ New Mac/Linux
   → setup: controller (k3d+Jenkins :17070) or worker (agent.jar)
   → mac-k3d eval (harness=icode, llm=deepseek, benchmark=deepswe|lolbench|swebenchpro, N)
   → Jenkins job <benchmark>_one_task | _some_task | _full_suite_task (all Harbor)
-       clone mac-k3d at MAC_K3D_GIT_REF; run pipeline/ from that clone
+       mac-k3d pipeline --extract-to: the worker binary's pipeline/, commit recorded
        install harbor; bind-mount the worker iCode drop at /opt/icode-host
        one harbor run + icode_harbor_agent:ICodeAgent (DeepSeek allowlist)
        grade Harbor reward.json
   → eval-runs/output/{benchmark}/jenkins-<build>-<UTC>/{artifact.json,summary.md,report.html}
-  → output/{benchmark}/jenkins-<build>-<UTC>.tar.gz in the git checkout
+  → output/{benchmark}/jenkins-<build>-<UTC>.tar.gz under the pipeline root
 ```
 
 Several questions add one hop: `_some_task` or `_full_suite_task` splits them into shards of `SHARD_SIZE`, queues each as a `_one_task` build (each worker takes the next shard when it frees up), then merges the shards into one report in its own `Aggregate` stage.
@@ -119,55 +119,44 @@ Nine Jenkins jobs — `one_task`, `some_task` and `full_suite_task` for each of 
 
 ---
 
-## Development loop: test a commit, not a path
+## Development loop: commit, push, redeploy
 
-Every Jenkins build clones mac-k3d itself and runs `pipeline/` from that clone, so a result always names the code that produced it. There is no `--sync-pipeline` and no local-path fallback: copying a working tree onto a worker left no record of what ran and could not be reverted.
+A Jenkins build runs the `pipeline/` embedded in the `mac-k3d` binary installed on its worker. `build.rs` bakes the commit the binary was built from into it, so every result still names the code that produced it, and one command moves a change everywhere:
 
 ```bash
-# 1. change code, 2. commit, 3. push the branch
 git commit -am "fix: <what>"
-git push origin <branch>
+git push
+bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worker>
 ```
 
-These parameters are developer-only. While developing, set the controller's profile so they show up, and switch back before handing Jenkins to users:
+`redeploy.sh` builds `target/release/mac-k3d` once, then:
+
+| Host | What it does |
+|---|---|
+| Controller | installs `~/.local/bin/mac-k3d`, then `config --skip-secrets` (rewrites the nine jobs). With `--start` it runs `start` instead, which is only needed when the Jenkins plugin list changed |
+| Each `--worker` | installs `~/.local/bin/mac-k3d`, then `config -c worker.yaml` (node, core locks, agent) |
+| This PC | the same as a worker, unless `--no-local-worker` |
+
+It asks each host's SSH password once and copies the binary to every remote host as `mac-k3d.new` first. If the copy fails `--version` on any host (another OS, or an older glibc than the build machine's), it stops before switching any host. It ends by comparing `mac-k3d --version` everywhere. The command is the same whatever changed (pipeline script, job XML, agent registration), so there is no table of which binary has to move.
+
+`--version` prints `mac-k3d 0.5.2 (<commit>)`, plus `, dirty` when `src/` or `pipeline/` had uncommitted changes at build time. The `Prepare` stage runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`, prints `mac-k3d pipeline <commit> (mac-k3d <version>, <binary>)`, and `artifact.json` records `eval_protocol.pipeline` as `{source: binary, version, commit, dirty, pipeline_hash}`. `Evaluate` and `Report` reuse that extract, so a redeploy during a build does not change the scripts under it. That gives the loop:
+
+- **Did my fix work?** Redeploy, rebuild, compare `pipeline.commit` with the previous build's.
+- **Did that commit break it?** Check out the known-good commit, redeploy, rebuild.
+- **Reproduce an old number?** Redeploy its `pipeline.commit`. An `OFFICIAL=1` build runs `mac-k3d pipeline --require-clean`, which refuses a dirty build or an unknown commit, so an official number always names one commit.
+
+A sharded run merges builds from several workers. If they report different `pipeline.commit` or `pipeline_hash` (a worker missed a redeploy), the aggregate `artifact.json` says `pipeline_status: mixed` and lists each one; `OFFICIAL=1` rejects it.
+
+Worker `config` downloads `agent.jar` next to the running one and swaps it in only when the bytes differ. The agent is restarted only when the jar, `launch-agent.sh` or the systemd unit / LaunchAgent changed; otherwise it prints `Jenkins agent unchanged, left running`, so a redeploy does not drop a connected worker.
+
+Developer parameters (pins, canary, `AGENT_LABEL`, `SHARD_SIZE`) show only in the `developer` profile. Switch while developing and back for handover:
 
 ```bash
 mac-k3d set --ui-profile developer && mac-k3d config --skip-secrets   # on the controller
 mac-k3d set --ui-profile user && mac-k3d config --skip-secrets        # handover
 ```
 
-In `user` profile the same parameters are hidden but keep their config defaults (`default_mac_k3d_git_*`), so users run the pinned pipeline without seeing it. Then in the Jenkins UI, **Build with Parameters**:
-
-| Parameter | Value while developing |
-|---|---|
-| `MAC_K3D_GIT_URL` | `https://github.com/Toby-Yu/mac-k3d.git` (the default) |
-| `MAC_K3D_GIT_REF` | your branch name |
-| `MAC_K3D_GIT_REF_KIND` | `branch` |
-
-The `Prepare` stage prints the resolved SHA and `artifact.json` records it under `pipeline.commit`. That gives you the loop you want:
-
-- **Did my fix work?** Push, build the branch, compare against the previous build's `pipeline.commit`.
-- **Did that commit break it?** Set `MAC_K3D_GIT_REF_KIND=commit` and build the known-good SHA. Nothing on the worker needs touching.
-- **Reproduce an old number?** Build its `pipeline.commit`. An `OFFICIAL=1` run *requires* `kind=commit`, so an official number can never come from a branch that has since moved.
-
-`MAC_K3D_GIT_REF_KIND=pr` fetches `refs/pull/<n>/head`, which is how the iCode inputs are already pinned — the two halves of a run are now traceable the same way.
-
-The binary still embeds `pipeline/` via `include_dir!`, but only so `setup` and `config` can bootstrap a bare machine with no network. Evaluation always runs the clone.
-
-### When the binary still has to move
-
-URL + branch does **not** replace the `mac-k3d` binary on the controller or on workers. Use `MAC_K3D_GIT_*` for anything under `pipeline/`. Rebuild and copy the binary only when the change is not in that clone:
-
-| What changed | What to update |
-|---|---|
-| `pipeline/stages/**`, `pipeline/lib/**` | Commit, push, set `MAC_K3D_GIT_REF`. Every worker clones that ref. No `scp`. |
-| Job XML, parameters, Jenkinsfile, `ui_profile` | New binary on the **controller** (not needed for a `ui_profile` flip), then `mac-k3d config --skip-secrets` |
-| Jenkins plugins (`ADDITIONAL_PLUGINS` in Helm) | New binary on the controller, then **`mac-k3d start`** (`config` does not install plugins) |
-| `setup`, Jenkins agent registration (executors, labels), `eval` CLI | New binary on each **worker** (`$(which mac-k3d)`), then `mac-k3d config -c worker.yaml`; an existing node is rewritten in place. Never `start` with `worker.yaml` |
-
-On a machine that already has Jenkins, `which mac-k3d` is the path that must receive the new file. Copying only to `/usr/local/bin` is not enough if `PATH` prefers `~/.local/bin`.
-
-Lab copy-paste for this controller and worker (IPs, `scp`) lives in the gitignored `LOCAL_DEPLOY_CHEATSHEET.md` in the checkout, not in this repo.
+Lab copy-paste with this lab's hosts filled in lives in the gitignored `LOCAL_DEPLOY_CHEATSHEET.md` in the checkout, not in this repo.
 
 ---
 
@@ -179,7 +168,7 @@ Workdir is **`eval-runs/`** (`MAC_K3D_EVAL_WORKDIR`). Jenkins sets it to `$WORKS
 |------|------|
 | Official report (P8) | `eval-runs/output/deepswe/jenkins-<build>-<UTC>/artifact.json` |
 | Summary and HTML | `summary.md` and `report.html` in that same run folder |
-| Checkout backup | `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` (`MAC_K3D_OUTPUT_ROOT` overrides the checkout `output/` directory) |
+| Backup | `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` under the pipeline root: `$WORKSPACE/mac-k3d-pipeline/output/` on Jenkins (kept across builds; `Prepare` clears only `pipeline/`), the checkout's `output/` for a local run. `MAC_K3D_OUTPUT_ROOT` overrides it |
 | On the worker (Jenkins workspace) | `$HOME/jenkins-agent/workspace/deepswe_one_task/eval-runs/output/` |
 | Jenkins artifact | that run folder only (`eval-runs/last_output.txt`) |
 | P7 scratch | `eval-runs/results/score-temp.json` |
@@ -188,7 +177,7 @@ Workdir is **`eval-runs/`** (`MAC_K3D_EVAL_WORKDIR`). Jenkins sets it to `$WORKS
 | DeepSWE clone | `eval-runs/deep-swe/` |
 | Copied iCode for the run | `eval-runs/icode-bin/icode` |
 
-If `jenkins_agent.remote_fs` in `worker.yaml` is not the default, the workspace copy is at `{remote_fs}/workspace/deepswe_one_task/eval-runs/output/`. The copy to keep for investigation is the git checkout `output/` directory. Share `~/.local/share/mac-k3d/eval-runs` is not the Jenkins report dir.
+If `jenkins_agent.remote_fs` in `worker.yaml` is not the default, the workspace copy is at `{remote_fs}/workspace/deepswe_one_task/eval-runs/output/`. The copy to keep for investigation is the backup under `mac-k3d-pipeline/output/`. Share `~/.local/share/mac-k3d/eval-runs` is not the Jenkins report dir.
 
 ---
 

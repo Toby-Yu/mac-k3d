@@ -25,6 +25,7 @@ sys.path.insert(0, str(LIB))
 
 from render_report import build_artifact, write_report  # noqa: E402
 from score_results import load_json  # noqa: E402
+from task_resources import cpu_count  # noqa: E402
 
 VERDICTS = ("clean", "flagged", "rejected")
 
@@ -54,6 +55,7 @@ def merge_harness(shards: list[Path], dest: Path) -> dict:
     (harness / "anticheat").mkdir(parents=True, exist_ok=True)
     tasks: list[str] = []
     summaries: list[dict] = []
+    pipelines: list[dict] = []
     protocol: dict | None = None
     resources: dict | None = None
     for index, shard in enumerate(shards, start=1):
@@ -81,10 +83,12 @@ def merge_harness(shards: list[Path], dest: Path) -> dict:
                 tid = line.strip()
                 if tid and tid not in tasks:
                     tasks.append(tid)
-        if protocol is None:
-            got = load_json(shard / "eval_protocol_inputs.json")
-            if isinstance(got, dict):
+        got = load_json(shard / "eval_protocol_inputs.json")
+        if isinstance(got, dict):
+            if protocol is None:
                 protocol = got
+            if isinstance(got.get("pipeline"), dict):
+                pipelines.append(got["pipeline"])
         if resources is None:
             got = load_json(shard / "eval_resources.json")
             if isinstance(got, dict):
@@ -100,7 +104,27 @@ def merge_harness(shards: list[Path], dest: Path) -> dict:
         "protocol": protocol,
         "resources": resources,
         "anticheat": merged,
+        "pipelines": pipelines,
         "shards": len(shards),
+    }
+
+
+def pipeline_status(pipelines: list[dict]) -> dict | None:
+    """Whether every shard ran the same pipeline build.
+
+    Each worker runs the pipeline embedded in its own mac-k3d binary, so a worker
+    that missed a redeploy shows up here as a second commit or pipeline hash.
+    """
+    found = sorted(
+        {(str(p.get("commit") or ""), str(p.get("pipeline_hash") or "")) for p in pipelines}
+    )
+    if not found:
+        return None
+    if len(found) == 1:
+        return {"pipeline_status": "same"}
+    return {
+        "pipeline_status": "mixed",
+        "pipelines": [{"commit": commit, "pipeline_hash": digest} for commit, digest in found],
     }
 
 
@@ -181,7 +205,7 @@ def main() -> int:
         baseline_dir=out / "baseline",
         n_rollouts=max(1, args.n_rollouts),
         concurrency=int(applied.get("slots") or 0),
-        cpus_each=int(applied.get("cpus_each") or 0),
+        cpus_each=cpu_count(applied.get("cpus_each")) or 0,
         run_id=args.run_group,
         eval_protocol=protocol or None,
     )
@@ -189,6 +213,16 @@ def main() -> int:
     doc["shards"] = merged["shards"]
     if merged["resources"]:
         doc["resources"] = merged["resources"]
+    status = pipeline_status(merged["pipelines"])
+    if status:
+        doc.update(status)
+        if status["pipeline_status"] == "mixed":
+            names = ", ".join(p["commit"][:12] or "unknown" for p in status["pipelines"])
+            print(
+                f"WARNING: shards ran different pipelines ({names}). "
+                "A worker missed a redeploy; this report is not one run of one pipeline.",
+                file=sys.stderr,
+            )
     write_report(doc, out)
     print(
         f"aggregate: {merged['shards']} shards, {len(tasks)} tasks, "

@@ -51,6 +51,21 @@ def mem_total_kb() -> int | None:
     return _meminfo_kb("MemTotal")
 
 
+def cpu_count(value) -> int | float | None:
+    """A CPU count as task.toml means it: ``cpus = 2.0`` is 2, ``0.5`` stays fractional.
+
+    task.toml writes whole counts as floats, and ``2.0`` is not an int to argparse
+    or to a shell ``case`` pattern.
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num <= 0:
+        return None
+    return int(num) if num.is_integer() else num
+
+
 def disk_free_gb(path: str | Path) -> float | None:
     try:
         return shutil.disk_usage(str(path)).free / (1024**3)
@@ -150,7 +165,7 @@ def plan_slots(
         "slots": slots,
         "fits": not blockers,
         "blockers": blockers,
-        "cpus_each": cpus or None,
+        "cpus_each": cpu_count(cpus),
         "memory_mb_each": mem_mb or None,
         "per_trial_gb": per_trial_gb or None,
         "reasons": reasons,

@@ -25,8 +25,9 @@ import json, sys
 doc = json.load(open(sys.argv[1], encoding="utf-8"))
 applied = doc.get("applied") or {}
 declared = (doc.get("declared") or {}).get("peak") or {}
+cpus = float(applied.get("cpus_each") or declared.get("cpus") or 1)
 print(f"EVAL_SLOTS={applied.get('slots') or 1}")
-print(f"EVAL_CPUS_EACH={applied.get('cpus_each') or declared.get('cpus') or 1}")
+print(f"EVAL_CPUS_EACH={int(cpus) if cpus.is_integer() else cpus}")
 PY
     )" || out=""
   fi

@@ -7,7 +7,7 @@ use crate::commands;
 #[derive(Debug, Parser)]
 #[command(
     name = "mac-k3d",
-    version,
+    version = crate::build_info::VERSION_LINE,
     about = "Manage k3d + Docker on macOS and Linux (optional Jenkins)",
     long_about = None
 )]
@@ -49,6 +49,9 @@ pub enum Command {
 
     /// Run iCode / DeepSeek eval (DeepSWE or LoLBench) locally or via Jenkins *_one_task jobs
     Eval(commands::EvalArgs),
+
+    /// Extract the pipeline scripts this binary was built with (Jenkins builds use this)
+    Pipeline(commands::PipelineArgs),
 
     /// Stop cluster and services without removing data
     Teardown(commands::TeardownArgs),

@@ -12,9 +12,10 @@ pub fn agent_path() -> String {
 }
 
 /// Install and start the OS-specific agent daemon (LaunchAgent or systemd --user).
-pub fn install_and_start(launch_script: &Path, working_dir: &Path) -> Result<()> {
+/// A running agent is restarted only when `changed` (new agent.jar or launch script).
+pub fn install_and_start(launch_script: &Path, working_dir: &Path, changed: bool) -> Result<()> {
     let path = agent_path();
-    platform::install_agent_daemon(launch_script, working_dir, &path)
+    platform::install_agent_daemon(launch_script, working_dir, &path, changed)
 }
 
 /// Stop and remove the OS-specific agent daemon (idempotent).

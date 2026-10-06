@@ -3,8 +3,12 @@ use std::process::Command;
 
 use crate::error::{Error, Result};
 
-/// Download Jenkins agent.jar from the controller.
-pub fn download_agent_jar(controller_url: &str, dest: &Path) -> Result<()> {
+/// Download Jenkins agent.jar from the controller. Returns whether the jar on
+/// disk changed.
+///
+/// The download goes to a side file first: writing over the jar a running agent
+/// JVM has open makes it fail later with `NoClassDefFoundError`.
+pub fn download_agent_jar(controller_url: &str, dest: &Path) -> Result<bool> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
@@ -14,30 +18,58 @@ pub fn download_agent_jar(controller_url: &str, dest: &Path) -> Result<()> {
         controller_url.trim_end_matches('/')
     );
     println!("Downloading agent.jar from {url}");
+    let part = dest.with_extension("jar.part");
     let status = Command::new("curl")
-        .args(["-fsSL", "-o", &dest.display().to_string(), &url])
+        .args(["-fsSL", "-o", &part.display().to_string(), &url])
         .status()
         .map_err(|e| Error::CommandFailed {
             cmd: format!("curl {url}"),
             source: e.into(),
         })?;
     if !status.success() {
+        let _ = std::fs::remove_file(&part);
         return Err(Error::CommandFailed {
             cmd: format!("curl {url}"),
             source: anyhow::anyhow!("exit {:?}", status.code()),
         });
     }
-    Ok(())
+    let changed = swap_in_if_different(&part, dest)?;
+    if changed {
+        println!("Updated {}", dest.display());
+    } else {
+        println!("agent.jar unchanged");
+    }
+    Ok(changed)
+}
+
+/// Rename `fresh` over `dest` unless the bytes already match. A rename gives
+/// the new jar a new inode, so a JVM still reading the old one is unaffected.
+fn swap_in_if_different(fresh: &Path, dest: &Path) -> Result<bool> {
+    let new = std::fs::read(fresh)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", fresh.display())))?;
+    if std::fs::read(dest).ok().as_deref() == Some(new.as_slice()) {
+        let _ = std::fs::remove_file(fresh);
+        return Ok(false);
+    }
+    std::fs::rename(fresh, dest).map_err(|e| {
+        Error::Config(format!(
+            "failed to move {} to {}: {e}",
+            fresh.display(),
+            dest.display()
+        ))
+    })?;
+    Ok(true)
 }
 
 /// Write a launch script for the inbound agent (secret filled after registration).
+/// Returns whether the file changed.
 pub fn write_launch_script(
     script_path: &Path,
     controller_url: &str,
     agent_name: &str,
     agent_jar: &Path,
     secret_placeholder: &str,
-) -> Result<()> {
+) -> Result<bool> {
     write_launch_script_with_java(
         script_path,
         controller_url,
@@ -55,7 +87,7 @@ pub fn write_launch_script_with_java(
     agent_jar: &Path,
     secret_placeholder: &str,
     java_bin: &str,
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(parent) = script_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
@@ -80,8 +112,12 @@ exec "{java}" -jar "{jar}" \
         secret = secret_placeholder,
         name = agent_name,
     );
-    std::fs::write(script_path, body)
-        .map_err(|e| Error::Config(format!("failed to write {}: {e}", script_path.display())))?;
+    let changed = std::fs::read_to_string(script_path).ok().as_deref() != Some(body.as_str());
+    if changed {
+        std::fs::write(script_path, body).map_err(|e| {
+            Error::Config(format!("failed to write {}: {e}", script_path.display()))
+        })?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -91,7 +127,7 @@ exec "{java}" -jar "{jar}" \
         perms.set_mode(0o755);
         std::fs::set_permissions(script_path, perms).map_err(|e| Error::Config(e.to_string()))?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 /// Register node via Jenkins REST API when token is available.
@@ -483,8 +519,12 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         .unwrap_or_else(default_remote_fs);
 
     // Controller may not be up yet during first prepare — do not abort the whole wizard.
+    let mut jar_changed = false;
     let jar_ok = match download_agent_jar(&url, &jar) {
-        Ok(()) => true,
+        Ok(changed) => {
+            jar_changed = changed;
+            true
+        }
         Err(e) => {
             println!(
                 "Note: could not download agent.jar from {url} ({e}).\n\
@@ -532,11 +572,16 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         .unwrap_or_else(|| "java".into());
 
     let script = remote_fs.join("launch-agent.sh");
-    write_launch_script_with_java(&script, &url, &name, &jar, &secret_placeholder, &java_bin)?;
-    println!(
-        "Wrote agent launch script: {} (java: {java_bin})",
-        script.display()
-    );
+    let script_changed =
+        write_launch_script_with_java(&script, &url, &name, &jar, &secret_placeholder, &java_bin)?;
+    if script_changed {
+        println!(
+            "Wrote agent launch script: {} (java: {java_bin})",
+            script.display()
+        );
+    } else {
+        println!("Agent launch script unchanged: {}", script.display());
+    }
 
     if jar_ok {
         resources::register_agent_cpu_cores(
@@ -547,7 +592,11 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
             config.jenkins_agent.api_user.as_deref(),
             config.jenkins_agent.api_token.as_deref(),
         )?;
-        crate::prepare::agent_service::install_and_start(&script, &remote_fs)?;
+        crate::prepare::agent_service::install_and_start(
+            &script,
+            &remote_fs,
+            jar_changed || script_changed,
+        )?;
     } else {
         println!("Skipped agent daemon start until agent.jar is available from the controller.");
     }
@@ -672,6 +721,37 @@ pub fn delete_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_restart_only_when_jar_or_script_changed() {
+        use crate::platform::{agent_action, AgentAction};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let jar = tmp.path().join("agent.jar");
+        let part = tmp.path().join("agent.jar.part");
+        std::fs::write(&part, b"remoting-3386").unwrap();
+        assert!(swap_in_if_different(&part, &jar).unwrap(), "first download installs the jar");
+        std::fs::write(&part, b"remoting-3386").unwrap();
+        assert!(!swap_in_if_different(&part, &jar).unwrap(), "same bytes leave it alone");
+        assert!(!part.exists());
+        std::fs::write(&part, b"remoting-3401").unwrap();
+        assert!(swap_in_if_different(&part, &jar).unwrap());
+        assert_eq!(std::fs::read(&jar).unwrap(), b"remoting-3401");
+
+        let script = tmp.path().join("launch-agent.sh");
+        let write = |name: &str| {
+            write_launch_script_with_java(&script, "http://c:8080", name, &jar, "s3cr3t", "java")
+                .unwrap()
+        };
+        assert!(write("node-a"));
+        assert!(!write("node-a"));
+        assert!(write("node-b"));
+
+        assert_eq!(agent_action(true, false), AgentAction::LeaveRunning);
+        assert_eq!(agent_action(true, true), AgentAction::Restart);
+        assert_eq!(agent_action(false, false), AgentAction::Start);
+        assert_eq!(agent_action(false, true), AgentAction::Start);
+    }
 
     #[test]
     fn parse_modern_jnlp_secret() {

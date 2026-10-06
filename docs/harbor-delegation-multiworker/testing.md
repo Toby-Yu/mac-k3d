@@ -7,7 +7,7 @@ Not a second user guide. Field meanings: [evaluation](../evaluation.md). Job par
 ```bash
 cargo test
 python3 -m unittest discover -s pipeline/lib -p 'test_*.py'
-bash -n pipeline/stages/run_all.sh pipeline/stages/p5_harness.sh pipeline/stages/_common.sh
+bash -n pipeline/stages/run_all.sh pipeline/stages/p5_harness.sh pipeline/stages/_common.sh scripts/redeploy.sh
 scripts/check_docs.sh
 ```
 
@@ -17,7 +17,11 @@ The cases that cover this branch:
 - `some_task_dispatches_to_one_task` / `full_suite_dispatches_shards_then_aggregates` — the dispatchers take no executor, no lock and no Docker until the merge; they queue `<suite>_one_task` shards (`SHARD_SIZE`, at least one per online worker) and merge them in their own `Aggregate` stage by child build number
 - `each_shape_shows_only_its_params` / `user_profile_hides_dev_params` / `developer_profile_shows_dev_params` / `harness_llm_benchmark_always_visible` / `groovy_and_xml_param_sets_match` — the per-shape parameter lists, the `ui_profile` switch, and Groovy and XML rendering from one table
 - `agent_registers_with_one_executor` — one eval build per worker
-- `lolbench_one_task_uses_shared_pipeline` — the pipeline is a clone at `MAC_K3D_GIT_REF`; no `--sync-pipeline`, no `MAC_K3D_ROOT`, no `~/.local/share`; `OFFICIAL=1` requires `kind=commit`
+- `bootstrap_extracts_pipeline_from_installed_binary` / `no_mac_k3d_git_params` — every phase uses `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline` (`--require-clean` when `OFFICIAL=1`), only `Prepare` clears it, and no job carries a `MAC_K3D_GIT_*` parameter, a `git fetch` or a `mac-k3d-src` clone
+- `extract_writes_build_json` / `require_clean_refuses_dirty_build` / `version_string_has_commit` / `pipeline_extract_needs_no_config` — `BUILD.json` carries the baked commit, dirty flag and pipeline hash; a dirty or unknown build is refused for official runs; `--version` names the commit
+- `agent_restart_only_when_jar_or_script_changed` — `agent.jar` is swapped by rename only when its bytes differ, and the agent restarts only when the jar or launch script changed
+- `test_pipeline_facts_reads_build_json` / `test_pipeline_facts_falls_back_to_a_git_checkout` / `test_shards_from_different_pipeline_builds_are_marked_mixed` — `eval_protocol.pipeline` comes from `BUILD.json` (`source: binary`) or git (`source: checkout`); an aggregate of two different builds says `pipeline_status: mixed`
+- `test_p8_renders_when_the_task_declares_float_cpus` / `test_render_report_accepts_a_float_cpus_each` / `test_a_whole_float_cpu_count_is_an_int` — build #51's P8 crash: `cpus = 2.0` becomes `cpus_each: 2`
 - in `lolbench_one_task_uses_shared_pipeline` — `lock(label: env.NODE_NAME, variable: 'HELD_CORES')` with no quantity sits inside `Evaluate`, between `Prepare` and `Report`
 - `test_p5_uses_import_path_not_bare_agent_icode` / `test_shared_harbor_command_for_every_benchmark` — exactly one `harbor run` per build, carrying `-k $N_ROLLOUTS` and `-n $EVAL_SLOTS`
 - `pipeline/lib/test_task_resources.py` (17 cases) — declared cpus/memory/storage are read from `task.toml`, slots are planned from them, and a worker that cannot fit one task fails early
@@ -25,44 +29,45 @@ The cases that cover this branch:
 - `test_a_trial_that_started_off_the_declared_base_is_flagged` — P7 compares each receipt's base SHA against `task.toml` on the host, since the agent env no longer carries it
 - `test_parallel_degree_does_not_guess_when_p5_never_ran` — the report stages read the plan P5 wrote instead of re-probing the machine
 
-## Live Jenkins: the URL + ref dev loop
+## Live Jenkins: the commit, push, redeploy loop
 
-This replaces the old "sync the pipeline from a local path" loop. Every test now names a commit, so a bad change is revertible and a good result is reproducible.
+Every test names a commit, so a bad change is revertible and a good result is reproducible.
 
-1. Commit and push to the branch:
+1. Commit, push, and put that build on every host:
 
    ```bash
    git commit -am "fix: <what>"
-   git push origin int/PF-harbor-delegation
+   git push
+   bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worker>
    ```
 
-2. Open `deepswe_one_task` -> **Build with Parameters**. The `MAC_K3D_GIT_*` fields only show when the controller has `ui_profile: developer` (`mac-k3d set --ui-profile developer && mac-k3d config --skip-secrets`).
-3. Leave `MAC_K3D_GIT_URL` at `https://github.com/Toby-Yu/mac-k3d.git`. Set `MAC_K3D_GIT_REF` to `int/PF-harbor-delegation` and `MAC_K3D_GIT_REF_KIND` to `branch`. The build clones that ref and prints the resolved SHA.
-4. To re-run an exact past build, set `MAC_K3D_GIT_REF_KIND=commit` and paste the SHA from that build's `artifact.json` (`pipeline.commit`). An `OFFICIAL=1` run *requires* `kind=commit`, so an official number can never come from a moving branch.
+   It must end with `All hosts run mac-k3d 0.5.2 (<sha>).` and each worker's `config` should say `Jenkins agent unchanged, left running` unless the controller's `agent.jar` changed.
+2. Open `deepswe_one_task` -> **Build with Parameters**. There is no pipeline field: the build runs the worker's binary.
+3. To re-run an exact past build, check out the `pipeline.commit` from that build's `artifact.json`, redeploy, and rebuild. An `OFFICIAL=1` build refuses a dirty binary (`--require-clean`).
 
 Console signals, in order:
 
-- `mac-k3d pipeline <sha>` in the Prepare stage — the SHA actually under test
+- `mac-k3d pipeline <sha> (mac-k3d 0.5.2, /home/<user>/.local/bin/mac-k3d)` in the Prepare stage — the SHA actually under test
 - `PROGRESS 40% P5 canary + the Harbor run (holding $CPU_LOCK_QTY cores on $NODE_NAME)` — the lock is per node
 - one `harbor run` line, with `-k` equal to `N_ROLLOUTS` and `-n` equal to the planned slots
 - `declared cpus=2 memory_mb=8192` (DeepSWE) or `cpus=4` (LoLBench) and **no** `--override-cpus`
-- after P8, `artifact.json` has `pipeline.url` / `pipeline.ref` / `pipeline.commit` and `resources.declared` vs `resources.applied`
+- after P8, `artifact.json` has `eval_protocol.pipeline` = `{source: binary, version, commit, dirty, pipeline_hash}`, `cpus_each: 2` on DeepSWE, and `resources.declared` vs `resources.applied`
 
 ## Live Jenkins: the two-worker proof
 
 The run that has to pass before anyone else uses this.
 
-1. On the **controller** only: put this binary on the machine, run `mac-k3d set --ui-profile developer`, then `mac-k3d start -c ~/.config/mac-k3d/config.yaml`. That Helm-upgrades Jenkins (`copyartifact`, `pipeline-utility-steps`, `hidden-parameter`), rewrites the nine jobs and deletes `eval_aggregate`. Do not install plugins in the UI. Workers stay on `config` only — never `start -c worker.yaml`.
-2. Both workers on the new binary and re-registered (`mac-k3d config -c worker.yaml` on each), online in **Manage Jenkins -> Nodes** with **1 executor** each.
+1. `bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worker> --start` (`--start` once, for the plugins: it Helm-upgrades Jenkins with `copyartifact`, `pipeline-utility-steps` and `hidden-parameter`, rewrites the nine jobs and deletes `eval_aggregate`). Do not install plugins in the UI. Workers stay on `config` only — never `start -c worker.yaml`.
+2. Both workers on the same binary (the script's version table) and online in **Manage Jenkins -> Nodes** with **1 executor** each.
 3. Open `deepswe_full_suite_task` -> **Build with Parameters**. Set `N_TASKS=10` and `SHARD_SIZE=2` (five shards).
 4. While it runs, check:
    - two `deepswe_one_task` builds run at once, one per worker, and the other three wait in the queue; as each finishes, its worker takes the next
    - each shard build's description reads `shard i/5 of deepswe_full_suite_task #<n>`
    - **Lockable Resources** shows every `<agent>-core-N` of a busy worker held by that worker's build, and no build holding a token whose prefix is not its own node
    - each shard's console prints a different `TASK_OFFSET`, and the five `selected_tasks.txt` files are disjoint
-5. When the dispatcher's `Aggregate` stage finishes, open `aggregate/artifact.json` on the `deepswe_full_suite_task` build and confirm `shards: 5`, `n_tasks: 10`, and that the rollout records total `10 x N_ROLLOUTS`.
+5. When the dispatcher's `Aggregate` stage finishes, open `aggregate/artifact.json` on the `deepswe_full_suite_task` build and confirm `shards: 5`, `n_tasks: 10`, `pipeline_status: same`, and that the rollout records total `10 x N_ROLLOUTS`.
 6. Record the build numbers and the outcome as a new row in [../integration-log.md](../integration-log.md).
 
 ## Status
 
-Fixtures: **green** (117 Rust unit + 16 CLI, 217 Python). Live two-worker proof: **not yet run** — it needs the second worker online, so it is the one item on this branch I have not verified myself.
+Fixtures: **green** (124 Rust unit + 18 CLI, 230 Python). Live two-worker proof: **not yet run** — it needs the second worker (`toby@47.84.16.18`) online, so it is the one item on this branch I have not verified myself. `scripts/redeploy.sh` was exercised only against a fake `ssh`/`scp`.

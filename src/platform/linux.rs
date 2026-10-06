@@ -307,6 +307,7 @@ pub fn install_agent_daemon(
     launch_script: &Path,
     working_dir: &Path,
     path_env: &str,
+    changed: bool,
 ) -> Result<()> {
     if !launch_script.exists() {
         return Err(Error::Config(format!(
@@ -356,19 +357,43 @@ WantedBy=default.target
         stdout = log_out.display(),
     );
 
-    std::fs::write(&unit, content)
-        .map_err(|e| Error::Config(format!("failed to write {}: {e}", unit.display())))?;
+    let unit_changed = std::fs::read_to_string(&unit).ok().as_deref() != Some(content.as_str());
+    if unit_changed {
+        std::fs::write(&unit, content)
+            .map_err(|e| Error::Config(format!("failed to write {}: {e}", unit.display())))?;
+    }
 
     run_cmd("systemctl", &["--user", "daemon-reload"])?;
-    run_cmd("systemctl", &["--user", "enable", "--now", SYSTEMD_UNIT])?;
-
-    println!(
-        "Jenkins agent systemd user unit started ({SYSTEMD_UNIT}).\n\
-         Logs: {}\n\
-         Tip: run `loginctl enable-linger \"$USER\"` so the agent survives logout.\n\
-         Stop with teardown/clean.",
-        log_out.display()
-    );
+    let running = Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", SYSTEMD_UNIT])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    match super::agent_action(running, changed || unit_changed) {
+        super::AgentAction::Start => {
+            run_cmd("systemctl", &["--user", "enable", "--now", SYSTEMD_UNIT])?;
+            println!(
+                "Jenkins agent systemd user unit started ({SYSTEMD_UNIT}).\n\
+                 Logs: {}\n\
+                 Tip: run `loginctl enable-linger \"$USER\"` so the agent survives logout.\n\
+                 Stop with teardown/clean.",
+                log_out.display()
+            );
+        }
+        super::AgentAction::Restart => {
+            run_cmd("systemctl", &["--user", "enable", SYSTEMD_UNIT])?;
+            run_cmd("systemctl", &["--user", "restart", SYSTEMD_UNIT])?;
+            println!(
+                "Jenkins agent restarted ({SYSTEMD_UNIT}): agent.jar, launch-agent.sh or the unit changed.\n\
+                 Logs: {}",
+                log_out.display()
+            );
+        }
+        super::AgentAction::LeaveRunning => {
+            run_cmd("systemctl", &["--user", "enable", SYSTEMD_UNIT])?;
+            println!("Jenkins agent unchanged, left running ({SYSTEMD_UNIT}).");
+        }
+    }
     Ok(())
 }
 

@@ -14,7 +14,7 @@ Paste into **TASKS** on `deepswe_some_task`, **N_ROLLOUTS=4**. `TASKS` replaces 
 eicrud-keyset-pagination-cursor,scc-bounded-memory-spilling,meriyah-explicit-resource-declarations
 ```
 
-These three are not in jenkins-21 through jenkins-30. A build clones its own pipeline at `MAC_K3D_GIT_REF`, so pushing to the branch mid-build is safe; rebuilding the worker binary while that job is in P5 is still not.
+These three are not in jenkins-21 through jenkins-30. A build extracts its own copy of the pipeline in `Prepare`, so redeploying the worker binary mid-build does not change the scripts it runs. The one exception is a redeploy that changes `agent.jar`: worker `config` then restarts the agent, which drops the running build.
 
 ## DeepSWE
 

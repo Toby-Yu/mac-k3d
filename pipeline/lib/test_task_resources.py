@@ -17,6 +17,7 @@ sys.path.insert(0, str(LIB))
 from task_resources import (  # noqa: E402
     HOST_RESERVE_GB,
     MIN_DISK_GB,
+    cpu_count,
     declared_for_task,
     declared_for_tasks,
     plan_slots,
@@ -164,6 +165,20 @@ class PlanTests(unittest.TestCase):
     def test_host_reserve_is_held_back(self):
         self.assertGreater(HOST_RESERVE_GB, 0)
 
+    def test_a_whole_float_cpu_count_is_an_int(self):
+        """task.toml says ``cpus = 2.0``; build #51's P8 died on ``--cpus-each 2.0``."""
+        got = self.plan(peak={"cpus": 2.0, "memory_mb": 8192})["cpus_each"]
+        self.assertEqual(got, 2)
+        self.assertIsInstance(got, int)
+        self.assertEqual(self.plan(peak={"cpus": 0.5, "memory_mb": 1024})["cpus_each"], 0.5)
+
+    def test_cpu_count_reads_strings_and_rejects_nonsense(self):
+        self.assertEqual(cpu_count("2.0"), 2)
+        self.assertEqual(cpu_count("1.5"), 1.5)
+        self.assertIsNone(cpu_count(""))
+        self.assertIsNone(cpu_count(None))
+        self.assertIsNone(cpu_count("0"))
+
 
 class CliTests(unittest.TestCase):
     SCRIPT = ROOT / "pipeline" / "lib" / "task_resources.py"
@@ -211,6 +226,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(doc["applied"]["cpu_lock_qty"], 8)
             self.assertEqual(doc["trials"], 4)
             self.assertEqual(doc["declared"]["per_task"]["alpha"]["cpus"], 2.0)
+            self.assertIsInstance(doc["applied"]["cpus_each"], int)
+            self.assertEqual(doc["applied"]["cpus_each"], 2)
 
     def test_a_worker_that_cannot_honor_the_declaration_exits_nonzero(self):
         with tempfile.TemporaryDirectory() as tmp:

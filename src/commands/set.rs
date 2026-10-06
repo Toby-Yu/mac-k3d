@@ -51,7 +51,7 @@ pub struct SetArgs {
     #[arg(long)]
     pub icode_release: Option<String>,
 
-    /// Jenkins job UI: `user` (short parameter lists) or `developer` (also pins, canary, pipeline ref)
+    /// Jenkins job UI: `user` (short parameter lists) or `developer` (also pins, canary, scheduling)
     #[arg(long)]
     pub ui_profile: Option<String>,
 

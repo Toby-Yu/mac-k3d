@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from icode_sanitize import MANIFEST_NAME, runtime_sha256, tree_sha256
+from task_resources import cpu_count
 
 OVERLAY_MARKER = "mac-k3d-lolbench-fix-rewards-v1"
 PROVENANCE_KEYS = (
@@ -273,23 +274,32 @@ def requester_facts() -> dict:
 def pipeline_facts(root: Path) -> dict:
     """Which mac-k3d revision produced this result.
 
-    Jenkins clones the pipeline at MAC_K3D_GIT_URL + MAC_K3D_GIT_REF and exports
-    the resolved SHA, so the url/ref/kind are recorded too and a result can be
-    reproduced, or a bad commit reverted, from the artifact alone.
+    A Jenkins build runs the pipeline embedded in the worker's mac-k3d binary.
+    ``mac-k3d pipeline --extract-to`` writes ``pipeline/BUILD.json`` with the
+    commit that binary was built from. A local checkout has no BUILD.json, so
+    git answers instead.
     """
-    out_doc = {
-        "url": os.environ.get("MAC_K3D_GIT_URL") or "",
-        "ref": os.environ.get("MAC_K3D_GIT_REF") or "",
-        "ref_kind": os.environ.get("MAC_K3D_GIT_REF_KIND") or "",
-    }
+    try:
+        build = json.loads((root / "pipeline" / "BUILD.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        build = None
+    if isinstance(build, dict):
+        commit = str(build.get("commit") or "")
+        dirty = build.get("dirty")
+        return {
+            "source": "binary",
+            "version": str(build.get("version") or ""),
+            "commit": "" if commit == "unknown" else commit,
+            "dirty": dirty if isinstance(dirty, bool) else None,
+            "pipeline_hash": str(build.get("pipeline_hash") or ""),
+        }
     if not (root / ".git").exists():
-        return {**out_doc, "commit": os.environ.get("MAC_K3D_SHA") or "", "dirty": None}
+        return {"source": "unknown", "commit": "", "dirty": None}
     code, out = _git(root, "rev-parse", "HEAD")
-    commit = out.strip() if code == 0 else (os.environ.get("MAC_K3D_SHA") or "")
+    commit = out.strip() if code == 0 else ""
     code, out = _git(root, "status", "--porcelain")
-    if code != 0:
-        return {**out_doc, "commit": commit, "dirty": None}
-    return {**out_doc, "commit": commit, "dirty": bool(out.strip())}
+    dirty = bool(out.strip()) if code == 0 else None
+    return {"source": "checkout", "commit": commit, "dirty": dirty}
 
 
 def _env_int(*names: str) -> int:
@@ -308,7 +318,7 @@ def model_inputs() -> dict:
         "reasoning_effort": os.environ.get("ICODE_REASONING_EFFORT") or "high",
         "cpu_lock_qty": _env_int("CPU_LOCK_QTY"),
         "concurrency": _env_int("EVAL_SLOTS"),
-        "cpus_each": _env_int("EVAL_CPUS_EACH"),
+        "cpus_each": cpu_count(os.environ.get("EVAL_CPUS_EACH")) or 0,
         "n_rollouts": _env_int("N_ROLLOUTS"),
     }
 
@@ -596,6 +606,8 @@ def provenance_view(protocol: dict | None) -> dict | None:
         "overlay_applied": applied,
         "commit": str(pipe.get("commit") or ""),
         "dirty": pipe.get("dirty") if isinstance(pipe.get("dirty"), bool) else None,
+        "pipeline_source": str(pipe.get("source") or ""),
+        "pipeline_hash": str(pipe.get("pipeline_hash") or ""),
         "node": str(worker.get("node") or ""),
         "nproc": worker.get("nproc"),
         "memory_kb": worker.get("memory_kb"),
@@ -622,7 +634,12 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
     lines.append(
         f"- Grader overlay: `{_cell(view['overlay_marker'])}` `{_cell(view['overlay_sha256'])}` applied `{applied}`"
     )
-    lines.append(f"- Pipeline: `{_cell(view['commit'])}` dirty `{_cell(view['dirty'])}`")
+    pipeline = f"- Pipeline: `{_cell(view['commit'])}` dirty `{_cell(view['dirty'])}`"
+    if view["pipeline_source"]:
+        pipeline += f" from `{_cell(view['pipeline_source'])}`"
+    if view["pipeline_hash"]:
+        pipeline += f" hash `{_cell(view['pipeline_hash'])}`"
+    lines.append(pipeline)
     lines.append(
         "- Worker: "
         f"node `{_cell(view['node'])}` · "

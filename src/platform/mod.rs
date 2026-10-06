@@ -119,12 +119,35 @@ pub fn preferred_shell_rc_default(home: &Path) -> PathBuf {
     os::preferred_shell_rc_default(home)
 }
 
+/// Install the agent daemon and make sure it runs. `changed` says whether
+/// agent.jar or launch-agent.sh changed on disk; only then is a running agent
+/// restarted, so a routine `config` never drops a connected agent mid-build.
 pub fn install_agent_daemon(
     launch_script: &Path,
     working_dir: &Path,
     path_env: &str,
+    changed: bool,
 ) -> Result<()> {
-    os::install_agent_daemon(launch_script, working_dir, path_env)
+    os::install_agent_daemon(launch_script, working_dir, path_env, changed)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentAction {
+    /// Not running: start it.
+    Start,
+    /// Running an old jar, script or unit: restart it.
+    Restart,
+    /// Running and nothing changed: leave it connected.
+    LeaveRunning,
+}
+
+/// `changed` covers agent.jar, launch-agent.sh and the daemon's own unit/plist.
+pub fn agent_action(running: bool, changed: bool) -> AgentAction {
+    match (running, changed) {
+        (false, _) => AgentAction::Start,
+        (true, true) => AgentAction::Restart,
+        (true, false) => AgentAction::LeaveRunning,
+    }
 }
 
 pub fn stop_agent_daemon() -> Result<()> {

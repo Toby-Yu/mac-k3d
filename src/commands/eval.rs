@@ -705,7 +705,6 @@ fn run_stage(
         .env("LLM", "deepseek")
         .env("BENCHMARK", benchmark)
         .env("DEEPSEEK_MODEL", model)
-        .env("LLM_NAME", "DeepSeek V4 Pro")
         .status()
         .map_err(|e| Error::CommandFailed {
             cmd: format!("bash {}", path.display()),

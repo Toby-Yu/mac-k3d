@@ -33,6 +33,10 @@ async fn main() -> mac_k3d::Result<()> {
         mac_k3d::cli::Command::Set(args) => {
             mac_k3d::commands::run_set(args, cli.config.as_deref())?;
         }
+        mac_k3d::cli::Command::Pipeline(args) => {
+            // Runs inside Jenkins builds, where no mac-k3d config is needed.
+            mac_k3d::commands::run_pipeline(args)?;
+        }
         other => {
             let mut config = MacK3dConfig::load(cli.config.as_deref())?;
             match other {
@@ -65,8 +69,9 @@ async fn main() -> mac_k3d::Result<()> {
                 }
                 mac_k3d::cli::Command::Export(_)
                 | mac_k3d::cli::Command::Import(_)
-                | mac_k3d::cli::Command::Set(_) => {
-                    unreachable!("export/import/set handled above");
+                | mac_k3d::cli::Command::Set(_)
+                | mac_k3d::cli::Command::Pipeline(_) => {
+                    unreachable!("export/import/set/pipeline handled above");
                 }
             }
         }

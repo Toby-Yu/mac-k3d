@@ -136,6 +136,10 @@ def official_provenance_errors(doc: dict) -> list[str]:
         errors.append("missing eval_protocol.pipeline.commit")
     if not isinstance(pipe.get("dirty"), bool):
         errors.append("missing eval_protocol.pipeline.dirty")
+    elif pipe.get("dirty"):
+        errors.append("eval_protocol.pipeline.dirty: an official run needs a clean pipeline commit")
+    if doc.get("pipeline_status") == "mixed":
+        errors.append("pipeline_status mixed: the shards ran different pipeline builds")
     errors.extend(official_isolation_errors(protocol.get("isolation")))
     anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else {}
     if anticheat.get("status") != "ok" or not _nonempty_str(anticheat.get("version")):

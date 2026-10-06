@@ -212,6 +212,7 @@ pub fn install_agent_daemon(
     launch_script: &Path,
     working_dir: &Path,
     path_env: &str,
+    changed: bool,
 ) -> Result<()> {
     if !launch_script.exists() {
         return Err(Error::Config(format!(
@@ -276,17 +277,63 @@ pub fn install_agent_daemon(
         stderr = xml_escape(&log_err.display().to_string()),
     );
 
-    std::fs::write(&plist, xml)
-        .map_err(|e| Error::Config(format!("failed to write {}: {e}", plist.display())))?;
+    let plist_changed = std::fs::read_to_string(&plist).ok().as_deref() != Some(xml.as_str());
+    if plist_changed {
+        std::fs::write(&plist, xml)
+            .map_err(|e| Error::Config(format!("failed to write {}: {e}", plist.display())))?;
+    }
 
-    let _ = bootout();
-    bootstrap(&plist)?;
-    println!(
-        "Jenkins agent LaunchAgent started ({LAUNCH_AGENT_LABEL}).\n\
-         Logs: {}\n\
-         Survives this shell; restarts if the process exits. Stop with teardown/clean.",
-        log_out.display()
-    );
+    let service = format!("{}/{LAUNCH_AGENT_LABEL}", gui_domain());
+    let running = Command::new("launchctl")
+        .args(["print", &service])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    match super::agent_action(running, changed || plist_changed) {
+        super::AgentAction::Start => {
+            let _ = bootout();
+            bootstrap(&plist)?;
+            println!(
+                "Jenkins agent LaunchAgent started ({LAUNCH_AGENT_LABEL}).\n\
+                 Logs: {}\n\
+                 Survives this shell; restarts if the process exits. Stop with teardown/clean.",
+                log_out.display()
+            );
+        }
+        super::AgentAction::Restart => {
+            if plist_changed {
+                // A loaded job keeps its old plist until it is booted out.
+                let _ = bootout();
+                bootstrap(&plist)?;
+            } else {
+                let status = Command::new("launchctl")
+                    .args(["kickstart", "-k", &service])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map_err(|e| Error::CommandFailed {
+                        cmd: "launchctl kickstart -k".into(),
+                        source: e.into(),
+                    })?;
+                if !status.success() {
+                    return Err(Error::CommandFailed {
+                        cmd: format!("launchctl kickstart -k {service}"),
+                        source: anyhow::anyhow!("exit {:?}", status.code()),
+                    });
+                }
+            }
+            println!(
+                "Jenkins agent restarted ({LAUNCH_AGENT_LABEL}): agent.jar, launch-agent.sh or the plist changed.\n\
+                 Logs: {}",
+                log_out.display()
+            );
+        }
+        super::AgentAction::LeaveRunning => {
+            println!("Jenkins agent unchanged, left running ({LAUNCH_AGENT_LABEL}).");
+        }
+    }
     Ok(())
 }
 

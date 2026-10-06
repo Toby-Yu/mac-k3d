@@ -50,6 +50,39 @@ fn help_lists_setup_subcommand() {
 }
 
 #[test]
+fn version_names_the_commit_it_was_built_from() {
+    let assert = Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .arg("--version")
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    let short: String = mac_k3d::build_info::COMMIT.chars().take(12).collect();
+    assert!(out.starts_with(&format!("mac-k3d {} ({short}", env!("CARGO_PKG_VERSION"))), "{out}");
+}
+
+#[test]
+fn pipeline_extract_needs_no_config() {
+    let home = tempdir().unwrap();
+    let dest = home.path().join("ws/mac-k3d-pipeline");
+    let assert = Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .env("HOME", home.path())
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["pipeline", "--extract-to"])
+        .arg(&dest)
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    assert!(out.starts_with(&format!("mac-k3d pipeline {}", mac_k3d::build_info::COMMIT)), "{out}");
+    assert!(dest.join("pipeline/stages/run_all.sh").is_file());
+    let build: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dest.join("pipeline/BUILD.json")).unwrap()).unwrap();
+    assert_eq!(build["commit"], mac_k3d::build_info::COMMIT);
+    assert_eq!(build["pipeline_hash"], mac_k3d::build_info::PIPELINE_HASH);
+}
+
+#[test]
 fn setup_help_describes_wizard() {
     Command::cargo_bin("mac-k3d")
         .unwrap()
