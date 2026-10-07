@@ -17,7 +17,7 @@ const ADDITIONAL_PLUGINS: &[&str] = &[
     "plain-credentials",      // Secret text credentials for LLM / forge PATs
     "file-parameters",        // stashedFile: Pipeline-safe upload onto agent workspace
     "copyartifact",           // dispatcher Aggregate stage pulls each shard's trials
-    "pipeline-utility-steps", // nodesWithLabel: at least one shard per online worker
+    "pipeline-utility-steps", // nodesByLabel: at least one shard per online worker
     "hidden-parameter",       // ui_profile=user hides developer params, keeping defaults
 ];
 

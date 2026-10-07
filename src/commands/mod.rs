@@ -1,7 +1,9 @@
 mod clean;
 mod config;
 mod eval;
+mod eval_queue;
 mod eval_record;
+mod jenkins_api;
 mod pipeline;
 mod prepare;
 mod set;

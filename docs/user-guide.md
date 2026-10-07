@@ -183,33 +183,37 @@ Extract the pipeline on the worker (`mac-k3d config -c worker.yaml`, or any `mac
 | ICODE_GIT_REF_KIND | all | **git:** pick `branch`, `tag`, `commit`, or `pr` (no auto). **release:** leave it as it is. |
 | DEEPSEEK_MODEL | all | `deepseek-flash` (catalog default; or `deepseek-v4-pro`). iCode sends this id to `https://api.deepseek.com/v1` with provider `DeepSeek` and reasoning effort `high` |
 
-A build locks every core of the worker it lands on, and Harbor sizes its slots from them ([optimization.md](optimization.md)). `AGENT_LABEL`, pins, canary and `SHARD_SIZE` are developer parameters: they show only when the controller has `jenkins_job.ui_profile: developer`, and otherwise keep their config defaults. The pipeline itself is not a parameter: each worker runs the one built into its installed `mac-k3d`, and `artifact.json` names that commit. See [workflow.md](workflow.md#development-loop-commit-push-redeploy) and [commands.md](commands.md#jenkins-job-parameters).
+A build locks every core of the worker it lands on, and Harbor sizes its slots from them ([optimization.md](optimization.md)). `AGENT_LABEL`, pins, canary and `SHARD_SIZE` are developer parameters: they show only when the controller has `jenkins_job.ui_profile: developer`, and otherwise keep their config defaults. The developer page is this same table followed by those extras, each labelled `Developer (testing):`. The pipeline itself is not a parameter: each worker runs the one built into its installed `mac-k3d`, and `artifact.json` names that commit. See [workflow.md](workflow.md#development-loop-commit-push-redeploy) and [commands.md](commands.md#jenkins-job-parameters).
 
 Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND`. The archived JSON includes `icode_git` (resolved SHA + subject). Full split: [icode-harness-inputs.md](icode-harness-inputs.md).
 
-Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --yes` cannot attach a file (it uses GET `buildWithParameters`).
+Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --job` cannot attach a file.
 
 3. Click **Build**. Console must say `Running on <this-worker-name>`. The build is allowed **96 hours**. Re-run `mac-k3d config` on the controller so the Jenkins job picks up that limit; an already installed job still has the old cap.
 4. Download **Build Artifacts** → `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, plus `summary.md` and `report.html` in that same folder. Token totals are input, output, and the sum.
    The Archive stage adds `cost-token-report.md` to that folder and keeps a compressed copy at `$WORKSPACE/mac-k3d-pipeline/output/<benchmark>/jenkins-<build>-<UTC>.tar.gz`, kept across builds (override with `MAC_K3D_OUTPUT_ROOT`). The workspace copy Jenkins shows is still the loose folder at `$HOME/jenkins-agent/workspace/<job>/eval-runs/output/` (or `{remote_fs}/workspace/<job>/eval-runs/output/` if `jenkins_agent.remote_fs` was changed).
    The same `.tar.gz` is also under **Build Artifacts** as `mac-k3d-pipeline/output/<benchmark>/jenkins-<build>-<UTC>.tar.gz`, so anyone who can open the build can download the whole run: the report plus each attempt's patches, masked transcripts, `trial.log` and anti-cheat verdicts. `tar -xzf jenkins-<build>-<UTC>.tar.gz` recreates the run folder. A `some_task` or `full_suite_task` build offers one combined `backup/<benchmark>/<RUN_GROUP>.tar.gz` for all its shards instead.
 
-### CLI from the worker (queues Jenkins; no `--local`)
+### CLI from any machine with the API token (queues Jenkins; no `--local`)
+
+The same three jobs, with the same fields as the table above. Only the fields you pass are sent; the rest keep the job's defaults, as pressing **Build** with the form untouched does. Uses `jenkins_agent` from the loaded config, else `~/.config/mac-k3d/worker.yaml`. Harbor does not run in this shell: the command prints the build URL to watch.
 
 ```bash
-# Queue deepswe_one_task on the controller. Uses worker.yaml when config.yaml is absent.
-# A multi-question run goes through the UI: pick _some_task or _full_suite_task.
-# Does not run Harbor on this shell — watch Jenkins Console Output.
 export PATH="$HOME/.local/bin:$PATH"
-# Git mode still queues with --yes:
-mac-k3d eval --benchmark deepswe --n-tasks 1 --icode-mode git \
-  --icode-git-url https://github.com/ORG/icode.git --icode-git-ref main --yes
-# Release mode: do not use --yes. Open Jenkins UI, set ICODE_MODE=release, upload ICODE_RELEASE_FILE.
-# LoLBench git, one task through Harbor + iCode:
-# mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git --icode-git-url … --yes
+# Check what would be sent; nothing is queued:
+mac-k3d eval --job some --tasks ruff_1,fastapi_1 --benchmark lolbench --n-rollouts 1 --dry-run
+# One question, git mode:
+mac-k3d eval --job one --task abs-module-cache-flags --icode-mode git \
+  --icode-git-url https://github.com/ORG/icode.git --icode-git-ref main --icode-git-ref-kind branch
+# A list, or the whole suite:
+mac-k3d eval --job some --tasks a,b,c --n-rollouts 4
+mac-k3d eval --job full
+# Developer fields go through --param (or the developer page):
+mac-k3d eval --job some --tasks a,b --shard-size 1 --param CANARY=on
+# Release mode: open the job page and upload ICODE_RELEASE_FILE; the CLI cannot attach a file.
 ```
 
-`--yes` without `--local` means **Jenkins**. An old binary may run a local eval instead; replace `~/.local/bin/mac-k3d` with v0.5.2 or newer.
+All flags and what each job refuses: [commands.md](commands.md#queue-a-jenkins-job-from-the-cli). `--yes` without `--local` is the same as `--job one`.
 
 Expect: build **SUCCESS**, artifact present. `pass@1` may be `0.0` on N=1 — that is a task result, not a setup failure. Missing F2P/P2P rates are `null`, not empty test-name lists.
 

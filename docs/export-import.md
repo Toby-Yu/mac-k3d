@@ -217,13 +217,12 @@ Here `--force` on **controller** `config.yaml` is intended.
 
 `--skip-secrets` rewrites job XML only. It does **not** mean the YAML contained the DeepSeek key.
 
-CLI `eval --yes` **posts** `TASK` / `DEEPSEEK_MODEL` and can ignore the job default. To queue from this PC and still hit the imported values, pass them explicitly:
+CLI `eval --job` sends only the fields you pass, so a field you leave out keeps the imported job default, as it does in the UI. To queue from this PC with the imported values:
 
 ```bash
 export PATH="$HOME/Documents/Toby/mac-k3d/target/release:$PATH"
-mac-k3d eval -c ~/.config/mac-k3d/worker.yaml \
-  --benchmark deepswe --task "$EXISTING_TASK" --icode-mode git \
-  --n-tasks 1 --model deepseek-flash --yes
+mac-k3d eval -c ~/.config/mac-k3d/worker.yaml --job one --benchmark deepswe --dry-run   # shows nothing overridden
+mac-k3d eval -c ~/.config/mac-k3d/worker.yaml --job one --benchmark deepswe
 ```
 
 Product path for eval is still Jenkins **Build with Parameters**.

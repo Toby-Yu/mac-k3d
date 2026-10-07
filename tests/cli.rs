@@ -135,6 +135,52 @@ fn eval_help_mentions_model() {
 }
 
 #[test]
+fn eval_help_mentions_the_jenkins_queue_flags() {
+    let assert = Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["eval", "--help"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    for flag in ["--job", "--tasks", "--n-rollouts", "--shard-size", "--param", "--dry-run"] {
+        assert!(stdout.contains(flag), "{flag} missing:\n{stdout}");
+    }
+}
+
+#[test]
+fn eval_job_dry_run_prints_only_the_given_fields() {
+    let home = tempdir().unwrap();
+    let assert = Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .env("HOME", home.path())
+        .env_remove("XDG_CONFIG_HOME")
+        .args([
+            "eval", "--job", "some", "--tasks", "a, b", "--n-rollouts", "1", "--shard-size", "2", "--dry-run",
+        ])
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    assert!(out.starts_with("Queue deepswe_some_task with:\n  TASKS=a,b\n  N_ROLLOUTS=1\n  SHARD_SIZE=2\n"), "{out}");
+    assert!(out.contains("Dry run: nothing queued."), "{out}");
+}
+
+#[test]
+fn eval_job_refuses_local_and_lone_queue_flags() {
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["eval", "--local", "--job", "one"])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("cannot be used with"));
+    Command::cargo_bin("mac-k3d")
+        .unwrap()
+        .args(["eval", "--tasks", "a,b"])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("--job"));
+}
+
+#[test]
 fn eval_help_mentions_benchmark_and_task() {
     let assert = Command::cargo_bin("mac-k3d")
         .unwrap()

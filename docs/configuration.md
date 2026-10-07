@@ -134,7 +134,7 @@ controller:
     - plain-credentials       # Secret text for LLM keys and forge PATs
     - file-parameters         # ICODE_RELEASE_FILE upload
     - copyartifact            # dispatcher Aggregate stage pulls each shard's trials
-    - pipeline-utility-steps  # nodesWithLabel: at least one shard per online worker
+    - pipeline-utility-steps  # nodesByLabel: at least one shard per online worker
     - hidden-parameter        # ui_profile=user hides developer params
 ```
 

@@ -57,12 +57,33 @@ mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode git \
   --icode-git-url https://github.com/org/icode.git --icode-git-ref v0.1.41 \
   --icode-git-ref-kind tag
 mac-k3d eval --local --benchmark deepswe --n-tasks 1 --model deepseek-flash
-mac-k3d eval --benchmark lolbench --task ruff_1 --icode-mode git \
-  --icode-git-url https://github.com/org/icode.git --icode-git-ref main --yes
 mac-k3d eval --local --benchmark swebenchpro --n-tasks 1 --icode-mode release
+mac-k3d eval --job some --tasks ipython-session-bundle-replay,ytt-jsonpath-query-api --n-rollouts 1
+mac-k3d eval --job one --benchmark lolbench --task ruff_1 --icode-mode git
 mac-k3d eval                         # interactive → local or Jenkins *_one_task
-# Jenkins release: open UI and upload ICODE_RELEASE_FILE (--yes cannot attach a file)
+# Jenkins release: open the job page and upload ICODE_RELEASE_FILE (the CLI cannot attach a file)
 ```
+
+### Queue a Jenkins job from the CLI
+
+`--job one|some|full` queues `<benchmark>_one_task`, `_some_task` or `_full_suite_task` with the same fields as its Build with Parameters page. Only the fields given as flags are sent; every other field keeps the job's default, exactly as pressing **Build** with the form untouched does. Environment variables and `jenkins_job.*` are not read for this, so the CLI and the UI start the same build from the same inputs.
+
+```bash
+# what would be sent; nothing is queued
+mac-k3d eval --job some --tasks ipython-session-bundle-replay,ytt-jsonpath-query-api,\
+wazero-multi-module-snapshots,abs-module-cache-flags --n-rollouts 1 --shard-size 2 --dry-run
+
+# the same, queued; prints the build URL and the `eval record` line for when it ends
+mac-k3d eval --job some --tasks ipython-session-bundle-replay,ytt-jsonpath-query-api,\
+wazero-multi-module-snapshots,abs-module-cache-flags --n-rollouts 1 --shard-size 2
+
+mac-k3d eval --job full                                   # the whole suite, job defaults
+mac-k3d eval --job one --task abs-module-cache-flags --param AGENT_LABEL=mac-Michael-Ubuntu
+```
+
+Run it on any machine whose config (or `~/.config/mac-k3d/worker.yaml`) has `jenkins_agent.controller_url`, `api_user` and `api_token`. curl gets the credentials on stdin, never in its arguments or the URL. Before queueing, the CLI reads the live job's field names; a field the live job lacks means its jobs are older than this binary, and it stops and asks for a controller redeploy instead of letting Jenkins drop the value.
+
+A flag the job has no field for is refused rather than ignored: `--tasks` and `--shard-size` on `--job one`, `--task` on `--job some`, `--n-tasks` above 1 on `--job one` (use `--job some`), `--icode-mode release` anywhere (the release drop is a file upload; use the job page), and any `--param` that names a field with its own flag, a shard field (`TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD` on `one_task`) or a field the job does not have.
 
 ### Flags
 
@@ -70,17 +91,23 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 |------|-------------|
 | `--stage PHASE` | Run one phase: `env`, `tasks`, `evaluate`, `anticheat`, `score`, `report`, `archive`, or `all`; `baseline` runs the manual LLM-only arm (`pipeline/tools/baseline.sh`). An old `p0`…`p8` exits with the phase that replaced it, for example `--stage p5 is gone; … Use --stage evaluate` |
 | `--local` | Full local `run_all.sh` (no Jenkins). `--local` and `--stage` set `CPU_LOCK_QTY` to `jenkins_agent.cpu_cores` from `~/.config/mac-k3d/worker.yaml`, the count Jenkins locks on this node, unless `CPU_LOCK_QTY` is already set; with no worker.yaml it falls back to the loaded config, then the logical CPU count. See [optimization.md](optimization.md#how-many-fit) |
-| `--n-tasks N` | Number of tasks when `--task` is empty (default 1) |
+| `--job one\|some\|full` | Queue `<benchmark>_one_task`, `_some_task` or `_full_suite_task` with only the fields given ([above](#queue-a-jenkins-job-from-the-cli)). Not with `--local`, `--stage` or `--icode-release` |
+| `--tasks a,b,c` | With `--job some`: the question list (`TASKS`); wins over `--n-tasks` |
+| `--n-rollouts N` | With `--job`: attempts per question (`N_ROLLOUTS`) |
+| `--shard-size N` | With `--job some\|full`: questions per shard for the whole run (`SHARD_SIZE`). The dispatcher still plans at least one shard per online worker |
+| `--param NAME=VALUE` | With `--job`, repeatable: any other field of the job page, for example `CANARY=on` or `AGENT_LABEL=<node name>` |
+| `--dry-run` | With `--job`: print the job and the fields it would send; queue nothing and contact no controller |
+| `--n-tasks N` | Number of tasks when `--task` is empty (default 1 locally). With `--job some` or `full`: `N_TASKS` |
 | `--benchmark deepswe\|lolbench\|swebenchpro` | Suite (default `deepswe`; Jenkins job follows this) |
 | `--task ID` | One question id (empty DeepSWE/SWE-bench Pro = first alphabetical; LoLBench example `ruff_1`) |
-| `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref). See [icode-harness-inputs.md](icode-harness-inputs.md) |
-| `--icode-release PATH\|URL` | `release` mode for `--local` / `--stage`; empty = persist file then `~/.local/share/mac-k3d/icode-*-full-*` or `icode`. Jenkins release uses UI upload `ICODE_RELEASE_FILE` (`--yes` does not attach a file) |
+| `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref); default `release` locally. With `--job one` only `git` is accepted; dispatchers always clone git. See [icode-harness-inputs.md](icode-harness-inputs.md) |
+| `--icode-release PATH\|URL` | `release` mode for `--local` / `--stage`; empty = persist file then `~/.local/share/mac-k3d/icode-*-full-*` or `icode`. Jenkins release uses UI upload `ICODE_RELEASE_FILE` (the CLI does not attach a file) |
 | `--icode-git-url URL` | `git` mode: `https://` on github.com or gitcode.com (no tokens in the URL) |
 | `--icode-git-ref REF` | `git` mode: branch name, tag, commit SHA, or pull-request number when kind is `pr`. Default `main` |
 | `--icode-git-ref-kind KIND` | `branch` (default), `tag`, `commit` (PR SHA), or `pr` (pull-request number). Leftover `auto` still maps: 7–40 hex → commit, else branch |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
 | `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-flash` (default) or `deepseek-v4-pro`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`; the HTTP model id stays this catalog id |
-| `--yes` | Skip prompts: Jenkins `<benchmark>_one_task` unless `--local`. Git `--yes` queues the job. Release `--yes` prints UI upload instructions (cannot attach `ICODE_RELEASE_FILE`). Also skips the git PAT prompt |
+| `--yes` | Skip prompts. Without `--local` or `--stage` it queues `<benchmark>_one_task` exactly as `--job one` does. Also skips the git PAT prompt |
 
 Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.
 
@@ -92,7 +119,7 @@ There is no `--sync-pipeline`. A Jenkins build runs the `pipeline/` embedded in 
 
 Every job starts with `HARNESS`, `LLM` and `BENCHMARK`. Each is a one-option choice fixed by the job, so the page and every build name (`#12 icode/deepseek-v4-pro/deepswe`) say what is being evaluated. Change harness or LLM with `mac-k3d set --harness/--llm` on the controller, then `config --skip-secrets`; change the benchmark by running another suite's job.
 
-What else a job shows depends on its shape and on `jenkins_job.ui_profile` in the controller's config (`mac-k3d set --ui-profile user|developer`, default `user`).
+What else a job shows depends on its shape and on `jenkins_job.ui_profile` in the controller's config (`mac-k3d set --ui-profile user|developer`, default `user`). The developer page is the user page, field for field and with the same defaults, followed by extra testing fields; a test on the developer page is therefore a test of what a user gets. Each extra field's help text starts with `Developer (testing):`, so the page shows which ones a user never sees. A unit test (`developer_page_is_the_user_page_plus_extras`) keeps it that way.
 
 **Shown in both profiles:**
 
@@ -106,10 +133,10 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `AGENT_LABEL` | `lolbench` | label a worker must carry |
+| `AGENT_LABEL` | `lolbench` | label a worker must carry (every worker has `lolbench`). On a dispatcher, a label no online worker carries fails the build at once, naming the online workers |
 | `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF`, `ICODE_EXPECT_SHA` | pinned | `env` (Harbor, default from `pipeline/config/toolchain.env`) and `tasks` (benchmark and iCode) pins |
 | `OFFICIAL`, `CANARY`, `CANARY_ALLOW_HOST` | `0`, `official`, empty | provenance gate and isolation canary |
-| `SHARD_SIZE` | `default_shard_size` (10) | `some_task` / `full_suite_task`: questions per shard |
+| `SHARD_SIZE` | `default_shard_size` (10) | `some_task` / `full_suite_task`: questions per shard for the whole run, not per worker. Shards = ceil(questions / `SHARD_SIZE`), raised to at least the number of online workers |
 | `N_TASKS` | suite size | `full_suite_task` only: lower it for a rehearsal |
 
 **Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`. A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API.
@@ -369,7 +396,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |
 | `--tasks a,b` | Explicit comma-separated ids |
 | `--icode-release PATH` | Worker `*-full-*` drop; writes `~/.config/mac-k3d/icode-paths.yaml` |
-| `--ui-profile user\|developer` | Jenkins job pages: `user` shows each shape's short list; `developer` also shows the pipeline ref, pins, canary and `SHARD_SIZE`. Apply with `config --skip-secrets` on the controller |
+| `--ui-profile user\|developer` | Jenkins job pages: `user` shows each shape's short list; `developer` shows the same list followed by `AGENT_LABEL`, the pins, canary and `SHARD_SIZE`. Apply with `config --skip-secrets` on the controller |
 | `--shard-size N` | Questions per shard when `some_task` / `full_suite_task` split work across workers (default 10) |
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.

@@ -2,15 +2,14 @@
 //! docs/testing/question-log.md by pipeline/lib/question_log.py.
 //!
 //! A Jenkins build is read through the controller's REST API (build info,
-//! consoleText, the archived artifact.json). The API user and token go to curl
-//! on stdin (`--config -`), never in its arguments, a URL, a file or a log.
+//! consoleText, the archived artifact.json) with [`super::jenkins_api`].
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use clap::Args;
 
+use super::jenkins_api::{curl_get, jenkins_access, url_path};
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
 
@@ -143,115 +142,6 @@ fn run_question_log(repo: &Path, extra: &[String]) -> Result<()> {
     Ok(())
 }
 
-struct JenkinsAccess {
-    base: String,
-    user: String,
-    token: String,
-    source: String,
-}
-
-/// The loaded config's `jenkins_agent` API user/token, else worker.yaml's (a
-/// PC that is both a standalone controller and a worker keeps them there).
-fn jenkins_access(config: &MacK3dConfig) -> Result<JenkinsAccess> {
-    let worker_path = MacK3dConfig::default_worker_path();
-    let worker = MacK3dConfig::load_file(&worker_path).ok();
-    let candidates = [
-        Some((config, "the loaded config".to_string())),
-        worker.as_ref().map(|w| (w, worker_path.display().to_string())),
-    ];
-    for (cfg, source) in candidates.into_iter().flatten() {
-        let Some((user, token)) = cfg.jenkins_agent.api_credentials() else {
-            continue;
-        };
-        let base = cfg
-            .jenkins_agent
-            .controller_url
-            .clone()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| format!("http://localhost:{}", cfg.jenkins.host_port));
-        return Ok(JenkinsAccess {
-            base: base.trim_end_matches('/').to_string(),
-            user: user.to_string(),
-            token: token.to_string(),
-            source,
-        });
-    }
-    Err(Error::Config(format!(
-        "no Jenkins API user/token: set jenkins_agent.api_user and api_token in the config \
-         or in {}",
-        worker_path.display()
-    )))
-}
-
-/// curl's config text for `--config -`: the only place the credentials go.
-fn curl_auth_config(user: &str, token: &str) -> String {
-    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("user = \"{}:{}\"\n", esc(user), esc(token))
-}
-
-/// curl arguments for one GET; credentials come from stdin, never from here.
-fn curl_get_args(url: &str, out: &Path) -> Vec<String> {
-    vec![
-        "-fsS".into(),
-        "-g".into(),
-        "--max-time".into(),
-        "300".into(),
-        "--config".into(),
-        "-".into(),
-        "-o".into(),
-        out.display().to_string(),
-        url.into(),
-    ]
-}
-
-fn curl_get(access: &JenkinsAccess, url: &str, out: &Path) -> Result<()> {
-    let mut child = Command::new("curl")
-        .args(curl_get_args(url, out))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::CommandFailed {
-            cmd: "curl".into(),
-            source: e.into(),
-        })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(curl_auth_config(&access.user, &access.token).as_bytes())
-            .map_err(|e| Error::Config(format!("curl stdin: {e}")))?;
-    }
-    let done = child.wait_with_output().map_err(|e| Error::CommandFailed {
-        cmd: "curl".into(),
-        source: e.into(),
-    })?;
-    if !done.status.success() {
-        let err = String::from_utf8_lossy(&done.stderr);
-        let first = err.lines().next().unwrap_or("curl failed").trim();
-        let hint = if first.contains("error: 404") {
-            " (no such job or build on this controller)"
-        } else if first.contains("error: 401") || first.contains("error: 403") {
-            " (Jenkins rejected the API user/token)"
-        } else {
-            ""
-        };
-        return Err(Error::Config(format!("GET {url} failed: {first}{hint}")));
-    }
-    Ok(())
-}
-
-fn url_path(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
 fn build_url(base: &str, job: &str, build: u32, rest: &str) -> String {
     format!("{base}/job/{}/{build}/{rest}", url_path(job))
 }
@@ -370,26 +260,6 @@ fn record_jenkins(repo: &Path, config: &MacK3dConfig, job: &str, build: u32) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn credentials_go_to_the_curl_config_not_the_arguments() {
-        let token = "11abcdef0123456789abcdef0123456789";
-        let args = curl_get_args(
-            "http://ctl:17070/job/deepswe_one_task/54/consoleText",
-            Path::new("/tmp/x"),
-        );
-        assert!(args.iter().all(|a| !a.contains(token) && !a.contains("admin")));
-        assert!(args.windows(2).any(|w| w[0] == "--config" && w[1] == "-"));
-        assert!(args.contains(&"-g".to_string()), "brackets in ?tree= must not glob");
-        assert_eq!(
-            curl_auth_config("admin", token),
-            format!("user = \"admin:{token}\"\n")
-        );
-        assert_eq!(
-            curl_auth_config("a\"b", "c\\d"),
-            "user = \"a\\\"b:c\\\\d\"\n"
-        );
-    }
 
     #[test]
     fn build_urls_carry_no_credentials() {

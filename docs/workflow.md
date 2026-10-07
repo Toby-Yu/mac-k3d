@@ -115,8 +115,11 @@ Trigger:
 
 ```bash
 mac-k3d eval                  # interactive → Jenkins <benchmark>_one_task (or --local)
+mac-k3d eval --job some --tasks a,b,c --n-rollouts 1   # queue a job: same fields as its UI page
 mac-k3d eval --stage tasks --n-tasks 1   # one phase on its own (env, tasks, evaluate, …)
 ```
+
+`--job one|some|full` and the job's **Build with Parameters** page start the same build: the CLI sends only the fields you give and the job keeps its defaults for the rest ([commands.md](commands.md#queue-a-jenkins-job-from-the-cli)).
 
 Nine Jenkins jobs — `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**. Every evaluation runs as a `one_task` build from the same `run_all.sh`; each job pins `HARNESS`, `LLM` and `BENCHMARK` and shows them first. Logs print `PROGRESS n% …`. Agent label `lolbench`; a build locks every core of its own node for the `Evaluate` stage only. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor slots is in [optimization.md](optimization.md).
 

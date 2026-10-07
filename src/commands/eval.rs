@@ -5,10 +5,12 @@ use std::process::Command;
 use clap::{Args, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 
+use super::eval_queue::{self, QueueRequest};
 use super::eval_record::{self, LocalOutcome, RecordArgs};
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
 use crate::eval_catalog;
+use crate::prepare::jenkins_job::{self, JobShape};
 
 #[derive(Debug, Subcommand)]
 pub enum EvalAction {
@@ -31,9 +33,38 @@ pub struct EvalArgs {
     #[arg(long)]
     pub local: bool,
 
-    /// Number of tasks when TASK is empty (default 1; *_one_task jobs stay at 1)
-    #[arg(long, default_value_t = 1)]
-    pub n_tasks: u32,
+    /// Queue a Jenkins job: one (<benchmark>_one_task), some (_some_task) or full
+    /// (_full_suite_task). Sends only the fields given as flags; every other field
+    /// keeps the job's default, as pressing Build does
+    #[arg(long, value_name = "one|some|full", conflicts_with_all = ["local", "stage", "icode_release"])]
+    pub job: Option<String>,
+
+    /// With --job some: comma-separated question ids (TASKS); wins over --n-tasks
+    #[arg(long, requires = "job")]
+    pub tasks: Option<String>,
+
+    /// With --job: attempts per question (N_ROLLOUTS)
+    #[arg(long, requires = "job")]
+    pub n_rollouts: Option<u32>,
+
+    /// With --job some|full: questions per shard for the whole run (SHARD_SIZE, a
+    /// developer field). Shards are raised to at least one per online worker
+    #[arg(long, requires = "job")]
+    pub shard_size: Option<u32>,
+
+    /// With --job: any other field of the job page, e.g. --param CANARY=on or
+    /// --param AGENT_LABEL=mac-Michael-Ubuntu (repeatable)
+    #[arg(long = "param", value_name = "NAME=VALUE", requires = "job")]
+    pub param: Vec<String>,
+
+    /// With --job: print the job and the fields it would send; queue nothing
+    #[arg(long, requires = "job")]
+    pub dry_run: bool,
+
+    /// Number of tasks when TASK is empty (default 1 locally; with --job some or
+    /// full, N_TASKS)
+    #[arg(long)]
+    pub n_tasks: Option<u32>,
 
     /// Benchmark: deepswe | lolbench | swebenchpro
     #[arg(long)]
@@ -43,9 +74,10 @@ pub struct EvalArgs {
     #[arg(long)]
     pub task: Option<String>,
 
-    /// iCode delivery: release | git (`binary` is an alias of release)
-    #[arg(long, default_value = "release")]
-    pub icode_mode: String,
+    /// iCode delivery: release | git (`binary` is an alias of release). Default
+    /// release locally; with --job, the job's default
+    #[arg(long)]
+    pub icode_mode: Option<String>,
 
     /// Official iCode *-full-* path/URL for `--local` / `--stage` (empty = persist then ~/.local/share/mac-k3d/).
     /// Jenkins release mode uses UI upload `ICODE_RELEASE_FILE`, not this flag.
@@ -72,7 +104,8 @@ pub struct EvalArgs {
     #[arg(long)]
     pub model: Option<String>,
 
-    /// Skip interactive prompts (use flags / env only)
+    /// Skip interactive prompts (use flags / env only). Without --local or
+    /// --stage this queues <benchmark>_one_task, as --job one does
     #[arg(long)]
     pub yes: bool,
 }
@@ -82,11 +115,19 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
     if let Some(EvalAction::Record(record)) = args.action {
         return eval_record::run(record, config);
     }
+    if let Some(job) = args.job.as_deref() {
+        let req = QueueRequest::from_args(&args, eval_queue::parse_shape(job)?)?;
+        return eval_queue::queue(config, &req, args.dry_run);
+    }
+    if args.yes && !args.local && args.stage.is_none() {
+        let req = QueueRequest::from_args(&args, JobShape::One)?;
+        return eval_queue::queue(config, &req, false);
+    }
     if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
         println!("Warning: could not extract pipeline ({err}).");
     }
     let repo = discover_repo_root()?;
-    let mut n_tasks = args.n_tasks.max(1);
+    let mut n_tasks = args.n_tasks.unwrap_or(1).max(1);
     let env_bench = std::env::var("BENCHMARK").ok();
     let mut benchmark = normalize_benchmark(
         args.benchmark
@@ -99,7 +140,8 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
         args.benchmark.as_deref(),
         std::env::var("TASK").ok(),
     );
-    let mut icode_mode = eval_catalog::normalize_icode_mode(&args.icode_mode)?;
+    let mut icode_mode =
+        eval_catalog::normalize_icode_mode(args.icode_mode.as_deref().unwrap_or("release"))?;
     let stored_paths = crate::prepare::icode_paths::load();
     let mut icode_release = args
         .icode_release
@@ -310,7 +352,7 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
 
     if args.stage.is_none() && !args.yes && !atty::is(atty::Stream::Stdin) {
         return Err(Error::Config(
-            "not a TTY: pass --local, --stage <phase>, or --yes (Jenkins) / --yes --local".into(),
+            "not a TTY: pass --local, --stage <phase>, or --job one|some|full (Jenkins)".into(),
         ));
     }
 
@@ -346,38 +388,34 @@ pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
         return run_stage(&local_run, stage, config);
     }
 
-    let run_local = if local {
-        true
-    } else if args.yes {
-        false
-    } else if atty::is(atty::Stream::Stdin) {
-        Confirm::with_theme(&ColorfulTheme::default())
+    let run_local = local
+        || Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(format!(
-                "Run locally now (--local)? No = trigger Jenkins job {}",
-                eval_job_name(&benchmark)
+                "Run locally now (--local)? No = queue Jenkins job {}",
+                jenkins_job::eval_job_name(&benchmark, JobShape::One)
             ))
             .default(true)
             .interact()
-            .map_err(|_| Error::Cancelled)?
-    } else {
-        true
-    };
+            .map_err(|_| Error::Cancelled)?;
 
     if run_local {
         return run_stage(&local_run, "all", config);
     }
 
-    trigger_jenkins_one_task(
-        config,
-        n_tasks,
-        &icode_mode,
-        &icode_git_url,
-        &icode_git_ref,
-        &icode_git_ref_kind,
-        &model,
-        &benchmark,
-        &task,
-    )
+    let git = icode_mode == "git";
+    let req = QueueRequest {
+        benchmark,
+        shape: JobShape::One,
+        task: Some(task),
+        n_tasks: Some(n_tasks),
+        icode_mode: Some(icode_mode),
+        icode_git_url: git.then_some(icode_git_url),
+        icode_git_ref: git.then_some(icode_git_ref),
+        icode_git_ref_kind: git.then_some(icode_git_ref_kind),
+        model: Some(model),
+        ..Default::default()
+    };
+    eval_queue::queue(config, &req, false)
 }
 
 /// `--task` wins. If `--benchmark` is set, do not steal a leftover shell `TASK`
@@ -620,14 +658,6 @@ fn normalize_benchmark(s: &str) -> Result<String> {
     eval_catalog::require_benchmark(s)
 }
 
-fn eval_job_name(benchmark: &str) -> &'static str {
-    match benchmark {
-        "lolbench" => "lolbench_one_task",
-        "swebenchpro" => "swebenchpro_one_task",
-        _ => "deepswe_one_task",
-    }
-}
-
 fn discover_icode_release() -> String {
     crate::prepare::eval_assets::discover_icode_release()
         .map(|p| p.display().to_string())
@@ -828,187 +858,6 @@ fn record_local_run(root: &Path, workdir: &Path, exit_code: Option<i32>, started
     }
 }
 
-fn trigger_jenkins_one_task(
-    config: &MacK3dConfig,
-    n_tasks: u32,
-    icode_mode: &str,
-    icode_git_url: &str,
-    icode_git_ref: &str,
-    icode_git_ref_kind: &str,
-    model: &str,
-    benchmark: &str,
-    task: &str,
-) -> Result<()> {
-    let url = config
-        .jenkins_agent
-        .controller_url
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| Some(format!("http://localhost:{}", config.jenkins.host_port)))
-        .unwrap();
-    let base = url.trim_end_matches('/');
-    let job = eval_job_name(benchmark);
-    let job_mode = if icode_mode == "git" {
-        "git"
-    } else {
-        "release"
-    };
-    if job_mode != "git" {
-        return Err(Error::Config(format!(
-            "Jenkins release mode needs an uploaded ICODE_RELEASE_FILE \
-             (GET buildWithParameters cannot attach a file). Open {base}/job/{job}/build, \
-             set ICODE_MODE=release, and upload the icode / icode-*-full-* drop. \
-             Git mode still queues with --yes: mac-k3d eval --icode-mode git --icode-git-url URL --yes"
-        )));
-    }
-    let user = config
-        .jenkins_agent
-        .api_user()
-        .unwrap_or("admin")
-        .to_string();
-    let token = config
-        .jenkins_agent
-        .api_token()
-        .map(str::to_string)
-        .ok_or_else(|| {
-            Error::Config(
-                "Jenkins API token missing. Set jenkins_agent.api_user/api_token in config \
-                 (controller machine) or use --local."
-                    .into(),
-            )
-        })?;
-
-    if let Ok(spec) = eval_catalog::git_pat_spec(icode_git_url) {
-        println!(
-            "Jenkins git clone uses controller credential {} ({}).\n\
-             If the repo is private, add it with `mac-k3d config --update-secrets` on the controller.\n\
-             Do not put a PAT in ICODE_GIT_URL or job parameters.",
-            spec.jenkins_id, spec.env_var
-        );
-    }
-    let build_url = format!(
-        "{base}/job/{job}/buildWithParameters?\
-         HARNESS=icode&LLM=deepseek&BENCHMARK={}&TASK={}&N_TASKS={n_tasks}\
-         &ICODE_MODE={}&ICODE_GIT_URL={}&ICODE_GIT_REF={}&ICODE_GIT_REF_KIND={}&DEEPSEEK_MODEL={}",
-        urlencoding_simple(benchmark),
-        urlencoding_simple(task),
-        urlencoding_simple(job_mode),
-        urlencoding_simple(icode_git_url),
-        urlencoding_simple(icode_git_ref),
-        urlencoding_simple(icode_git_ref_kind),
-        urlencoding_simple(model),
-    );
-
-    println!("Triggering Jenkins job {job} at {base} …");
-    let auth = format!("{user}:{token}");
-    let code = jenkins_post_http(&auth, &build_url)?;
-    let code = if code == "400" {
-        // Job XML rewrite can drop ParametersDefinitionProperty until the next controller config.
-        let fallback = format!("{base}/job/{job}/build");
-        jenkins_post_http(&auth, &fallback)?
-    } else {
-        code
-    };
-    if code != "201" && code != "200" && code != "302" && code != "303" {
-        return Err(Error::Config(format!(
-            "failed to trigger {job} (HTTP {code}). Ensure the job exists \
-             (mac-k3d config on controller) or use --local."
-        )));
-    }
-    println!(
-        "Triggered. Watch progress in Jenkins UI:\n  {base}/job/{job}/\n\
-         Look for PROGRESS n% lines in the console log."
-    );
-    let _ = config;
-    Ok(())
-}
-
-fn jenkins_post_http(auth: &str, url: &str) -> Result<String> {
-    let cookie = std::env::temp_dir().join(format!("mac-k3d-eval-crumb-{}", std::process::id()));
-    let _ = std::fs::File::create(&cookie);
-    let base = url
-        .split("/job/")
-        .next()
-        .unwrap_or(url)
-        .trim_end_matches('/');
-    let crumb = Command::new("curl")
-        .args([
-            "-fsS",
-            "-b",
-            &cookie.display().to_string(),
-            "-c",
-            &cookie.display().to_string(),
-            "-u",
-            auth,
-            &format!("{base}/crumbIssuer/api/json"),
-        ])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| {
-            let text = String::from_utf8_lossy(&o.stdout);
-            let field = extract_json_str(&text, "crumbRequestField")?;
-            let value = extract_json_str(&text, "crumb")?;
-            Some((field, value))
-        });
-    let mut args = vec![
-        "-sS".into(),
-        "-b".into(),
-        cookie.display().to_string(),
-        "-c".into(),
-        cookie.display().to_string(),
-        "-u".into(),
-        auth.to_string(),
-        "-X".into(),
-        "POST".into(),
-        url.to_string(),
-        "-o".into(),
-        "/dev/null".into(),
-        "-w".into(),
-        "%{http_code}".into(),
-    ];
-    if let Some((field, value)) = crumb {
-        args.push("-H".into());
-        args.push(format!("{field}: {value}"));
-    }
-    let status = Command::new("curl").args(&args).output().map_err(|e| {
-        let _ = std::fs::remove_file(&cookie);
-        Error::CommandFailed {
-            cmd: "curl one_task trigger".into(),
-            source: e.into(),
-        }
-    })?;
-    let _ = std::fs::remove_file(&cookie);
-    Ok(String::from_utf8_lossy(&status.stdout).trim().to_string())
-}
-
-fn extract_json_str(json: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\"");
-    let idx = json.find(&needle)?;
-    let after = &json[idx + needle.len()..];
-    let colon = after.find(':')?;
-    let rest = after[colon + 1..].trim_start();
-    if !rest.starts_with('"') {
-        return None;
-    }
-    let rest = &rest[1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
-fn urlencoding_simple(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b':' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1190,13 +1039,6 @@ mod tests {
     }
 
     #[test]
-    fn eval_job_name_matches_benchmark() {
-        assert_eq!(eval_job_name("lolbench"), "lolbench_one_task");
-        assert_eq!(eval_job_name("deepswe"), "deepswe_one_task");
-        assert_eq!(eval_job_name("swebenchpro"), "swebenchpro_one_task");
-    }
-
-    #[test]
     fn inherit_eval_task_ignores_env_when_benchmark_flag_set() {
         assert_eq!(
             inherit_eval_task(None, Some("deepswe"), Some("ruff_1".into())),
@@ -1247,16 +1089,6 @@ mod tests {
                 .map(|(_, v)| v)
                 .as_deref(),
             Some("abc")
-        );
-    }
-
-    #[test]
-    fn extract_json_str_reads_crumb_fields() {
-        let json = r#"{"_class":"hudson.security.csrf.DefaultCrumbIssuer","crumb":"abc123","crumbRequestField":"Jenkins-Crumb"}"#;
-        assert_eq!(extract_json_str(json, "crumb").as_deref(), Some("abc123"));
-        assert_eq!(
-            extract_json_str(json, "crumbRequestField").as_deref(),
-            Some("Jenkins-Crumb")
         );
     }
 }

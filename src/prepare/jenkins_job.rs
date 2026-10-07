@@ -25,6 +25,11 @@ const DESC_SHARD_TASKS: &str = "Set by some_task or full_suite_task on a shard b
 const DESC_SHARD_N_TASKS: &str = "Set by some_task or full_suite_task on a shard build: how many sorted ids to take after TASK_OFFSET. 1 on a direct build.";
 const DESC_TASK_OFFSET: &str = "Set by some_task or full_suite_task on a shard build: sorted ids to skip before taking N_TASKS. 0 on a direct build.";
 const DESC_AGENT_LABEL: &str = "Label a worker must carry to run this build or its shards.";
+/// Every worker registers with this label, so it means any online worker.
+const DEFAULT_AGENT_LABEL: &str = "lolbench";
+/// Starts the help text of every developer-only field, so the developer page
+/// shows which fields a user never sees.
+const DEVELOPER_PREFIX: &str = "Developer (testing): ";
 const DESC_DEEPSEEK_MODEL: &str = "DeepSeek Chat Completions model id (catalog).";
 
 /// Parameters a dispatcher hands to every shard unchanged.
@@ -48,9 +53,10 @@ const FORWARDED_PARAMS: &[&str] = &[
 
 /// What a job is for. `one_task` is the only shape that evaluates; the other
 /// two split their questions into shards that run as `one_task` builds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum JobShape {
     /// One question, one rollout by default. Also the shard runner.
+    #[default]
     One,
     /// Dispatcher over a list of questions (TASKS) or the first N (N_TASKS).
     Some_,
@@ -69,6 +75,16 @@ impl JobShape {
 
     fn is_dispatcher(self) -> bool {
         self != JobShape::One
+    }
+
+    /// `mac-k3d eval --job`: `one`, `some`, `full`, or the job suffix itself.
+    pub fn from_cli(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "one" | "one_task" => Some(JobShape::One),
+            "some" | "some_task" => Some(JobShape::Some_),
+            "full" | "full_suite" | "full_suite_task" => Some(JobShape::FullSuite),
+            _ => None,
+        }
     }
 }
 
@@ -838,7 +854,7 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
         p.push(text_param("SHARD_SIZE", opts.default_shard_size.max(1), DESC_SHARD_SIZE, Developer));
     }
     p.extend([
-        text_param("AGENT_LABEL", "lolbench", DESC_AGENT_LABEL, Developer),
+        text_param("AGENT_LABEL", DEFAULT_AGENT_LABEL, DESC_AGENT_LABEL, Developer),
         text_param(
             "HARBOR_VERSION",
             crate::prepare::toolchain::harbor_version(),
@@ -852,7 +868,36 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
         choice_param("CANARY", &["official", "only", "on", "off"], DESC_CANARY, Developer),
         text_param("CANARY_ALLOW_HOST", "", DESC_CANARY_ALLOW_HOST, Developer),
     ]);
+    for spec in &mut p {
+        if spec.show == Developer {
+            spec.description = format!("{DEVELOPER_PREFIX}{}", spec.description);
+        }
+    }
     p
+}
+
+/// One field of a job's Build with Parameters page, as `mac-k3d eval --job` sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobParam {
+    pub name: &'static str,
+    /// False for shard plumbing that only a dispatcher sets on a shard build.
+    pub settable: bool,
+    /// Shown only in the developer profile; a hidden parameter in the user profile.
+    pub developer: bool,
+}
+
+/// The fields of `<job_benchmark>_<shape>` in page order. Names and visibility
+/// do not depend on the controller's config, only defaults do.
+pub fn job_params(job_benchmark: &str, shape: JobShape) -> Vec<JobParam> {
+    let opts = JobOpts::from_config(&crate::config::MacK3dConfig::default(), Vec::new());
+    eval_params(job_benchmark, shape, &opts)
+        .into_iter()
+        .map(|p| JobParam {
+            name: p.name,
+            settable: p.show != Show::Never,
+            developer: p.show == Show::Developer,
+        })
+        .collect()
 }
 
 fn groovy_params(params: &[ParamSpec], profile: UiProfile) -> String {
@@ -1147,18 +1192,29 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             error 'nothing to run: set N_TASKS >= 1 or a non-empty TASKS list'
           }}
           int shards = (int) ((total + shardSize - 1) / shardSize)
-          // At least one shard per online worker. nodesWithLabel needs
+          // At least one shard per online worker. nodesByLabel needs
           // pipeline-utility-steps; without it SHARD_SIZE alone decides.
-          int workers = 0
+          List<String> workerNames = null
           try {{
-            workers = nodesWithLabel(label: params.AGENT_LABEL, offline: false).size()
+            workerNames = nodesByLabel(label: params.AGENT_LABEL, offline: false)
           }} catch (Throwable t) {{
-            echo "Could not count workers for label ${{params.AGENT_LABEL}} (${{t}}); using SHARD_SIZE alone."
+            echo "WARNING: could not count workers for label ${{params.AGENT_LABEL}} (${{t}}); using SHARD_SIZE alone."
           }}
+          // A label no online worker carries would leave every shard queued forever.
+          if (workerNames != null && workerNames.isEmpty()) {{
+            List<String> online = []
+            try {{
+              online = nodesByLabel(label: '{default_label}', offline: false)
+            }} catch (Throwable t) {{
+            }}
+            error "No online worker has label ${{params.AGENT_LABEL}}. Online {default_label} workers: ${{online ? online.join(', ') : 'none'}}."
+          }}
+          int workers = workerNames == null ? 0 : workerNames.size()
+          String counted = workerNames == null ? 'not counted' : workerNames.join(', ')
           if (shards < workers) {{ shards = workers }}
           if (shards > total) {{ shards = total }}
           env.RUN_GROUP = "${{env.JOB_NAME}}-${{env.BUILD_NUMBER}}".replaceAll('[^A-Za-z0-9_.-]', '_')
-          echo "RUN_GROUP=${{env.RUN_GROUP}} total=${{total}} shards=${{shards}} shard_size=${{shardSize}} workers=${{workers}} rollouts=${{rollouts}}"
+          echo "RUN_GROUP=${{env.RUN_GROUP}} total=${{total}} shards=${{shards}} shard_size=${{shardSize}} workers=${{workers}} [${{counted}}] rollouts=${{rollouts}}"
 
           Map<String, Integer> shardBuilds = [:]
           List<String> notOk = []
@@ -1255,6 +1311,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
 }}
 "#,
         display_name = DISPLAY_NAME_GROOVY,
+        default_label = DEFAULT_AGENT_LABEL,
     )
 }
 
@@ -2229,7 +2286,7 @@ mod tests {
         assert!(jf.contains("TASK_OFFSET"));
         // Small shards, at least one per online worker.
         assert!(jf.contains("int shards = (int) ((total + shardSize - 1) / shardSize)"));
-        assert!(jf.contains("nodesWithLabel(label: params.AGENT_LABEL, offline: false)"));
+        assert!(jf.contains("nodesByLabel(label: params.AGENT_LABEL, offline: false)"));
         assert!(jf.contains("if (shards < workers) { shards = workers }"));
         assert!(jf.contains("hidden(name: 'N_TASKS', defaultValue: '113'"));
         assert!(jf.contains("stage('Aggregate')"));
@@ -2239,6 +2296,97 @@ mod tests {
         let lol = eval_jenkinsfile("lolbench", JobShape::FullSuite, &opts);
         assert!(lol.contains("build job: 'lolbench_one_task'"));
         assert!(lol.contains("hidden(name: 'N_TASKS', defaultValue: '20'"));
+    }
+
+    /// Names the rendered Build with Parameters page shows (hidden ones left out).
+    fn page_names(jf: &str) -> Vec<String> {
+        params_block(jf)
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("hidden("))
+            .map(|l| {
+                let rest = &l[l.find("name: '").expect("name") + "name: '".len()..];
+                rest[..rest.find('\'').unwrap()].to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn developer_page_is_the_user_page_plus_extras() {
+        let user = deepswe_opts(Vec::new());
+        let mut dev = user.clone();
+        dev.ui_profile = UiProfile::Developer;
+        for bench in EVAL_BENCHMARKS {
+            for shape in EVAL_SHAPES {
+                let specs = eval_params(bench, *shape, &user);
+                let page = |profile: UiProfile| -> Vec<(&str, String)> {
+                    specs
+                        .iter()
+                        .filter(|p| p.visible(profile))
+                        .map(|p| (p.name, p.default_value()))
+                        .collect()
+                };
+                let (user_page, dev_page) = (page(UiProfile::User), page(UiProfile::Developer));
+                // Every user field, in the same order with the same default, comes first.
+                assert_eq!(&dev_page[..user_page.len()], &user_page[..], "{bench} {shape:?}");
+                for p in specs.iter().filter(|p| p.visible(UiProfile::Developer) && !p.visible(UiProfile::User)) {
+                    assert_eq!(p.show, Show::Developer, "{bench} {shape:?} {}", p.name);
+                    assert!(p.description.starts_with(DEVELOPER_PREFIX), "{bench} {shape:?} {}", p.name);
+                }
+                for p in specs.iter().filter(|p| p.show != Show::Developer) {
+                    assert!(!p.description.starts_with(DEVELOPER_PREFIX), "{bench} {shape:?} {}", p.name);
+                }
+                // Same on the rendered pages.
+                let user_names = page_names(&eval_jenkinsfile(bench, *shape, &user));
+                let dev_names = page_names(&eval_jenkinsfile(bench, *shape, &dev));
+                assert_eq!(&dev_names[..user_names.len()], &user_names[..], "{bench} {shape:?}");
+                assert!(dev_names.len() > user_names.len(), "{bench} {shape:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn job_params_mark_shard_plumbing_and_developer_fields() {
+        let one = job_params("deepswe", JobShape::One);
+        let get = |ps: &[JobParam], n: &str| ps.iter().find(|p| p.name == n).cloned().expect(n);
+        for n in ["TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD"] {
+            assert!(!get(&one, n).settable, "{n}");
+        }
+        assert!(get(&one, "TASK").settable && !get(&one, "TASK").developer);
+        assert!(get(&one, "CANARY").settable && get(&one, "CANARY").developer);
+        let some = job_params("deepswe", JobShape::Some_);
+        assert!(get(&some, "TASKS").settable && !get(&some, "TASKS").developer);
+        assert!(get(&some, "SHARD_SIZE").settable && get(&some, "SHARD_SIZE").developer);
+        assert!(get(&some, "AGENT_LABEL").developer);
+        assert!(some.iter().all(|p| p.settable));
+        let full = job_params("deepswe", JobShape::FullSuite);
+        assert!(get(&full, "N_TASKS").developer);
+        assert!(!full.iter().any(|p| p.name == "TASKS"));
+        assert_eq!(JobShape::from_cli("some"), Some(JobShape::Some_));
+        assert_eq!(JobShape::from_cli("full_suite_task"), Some(JobShape::FullSuite));
+        assert_eq!(JobShape::from_cli("ONE"), Some(JobShape::One));
+        assert_eq!(JobShape::from_cli("all"), None);
+    }
+
+    #[test]
+    fn dispatchers_count_workers_with_nodes_by_label_and_fail_fast() {
+        let opts = deepswe_opts(Vec::new());
+        for bench in EVAL_BENCHMARKS {
+            for shape in [JobShape::Some_, JobShape::FullSuite] {
+                let jf = eval_jenkinsfile(bench, shape, &opts);
+                // nodesWithLabel is not a Jenkins step: a build calling it counts 0 workers.
+                assert!(!jf.contains("nodesWithLabel"), "{bench} {shape:?}");
+                assert!(jf.contains("workerNames = nodesByLabel(label: params.AGENT_LABEL, offline: false)"));
+                assert!(jf.contains("if (workerNames != null && workerNames.isEmpty()) {"));
+                assert!(jf.contains("online = nodesByLabel(label: 'lolbench', offline: false)"));
+                assert!(jf.contains(
+                    "error \"No online worker has label ${params.AGENT_LABEL}. Online lolbench workers: ${online ? online.join(', ') : 'none'}.\""
+                ));
+                assert!(jf.contains("echo \"WARNING: could not count workers for label"));
+                assert!(jf.contains("workers=${workers} [${counted}]"));
+                // The fail-fast check runs before any shard is queued.
+                assert!(jf.find("workerNames.isEmpty()").unwrap() < jf.find("build job:").unwrap());
+            }
+        }
     }
 
     #[test]

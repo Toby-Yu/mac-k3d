@@ -70,7 +70,7 @@ mac-k3d eval --local --stage tasks --icode-mode release --yes
 
 Named-path rules stay for local CLI (`icode` or `*-full-*`). `tasks/icode` prints `resolving iCode (release)`. Harbor keeps the real binary (no git wrapper). There is **no** `icode_git` object on the report.
 
-`mac-k3d eval --yes` (no `--local`) **cannot** queue a release build: GET `buildWithParameters` cannot attach a file. Open the Jenkins UI instead.
+`mac-k3d eval --job one` (or `--yes` without `--local`) **cannot** queue a release build: it does not attach a file, and stops with `--icode-mode release`. Open the Jenkins UI instead.
 
 ## 2. Git clone (`ICODE_MODE=git`)
 

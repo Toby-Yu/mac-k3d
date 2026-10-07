@@ -202,7 +202,7 @@ flowchart LR
   fullSuite --> mergeStage
 ```
 
-A dispatcher does **not** queue one build per rollout. It splits the sorted question list into contiguous shards of `SHARD_SIZE` (at least one per online worker, counted with `nodesWithLabel`), queues each as a `<suite>_one_task` build with its own `TASKS` or `TASK_OFFSET` and a shared `RUN_GROUP`, and waits. Its final `Aggregate` stage runs on a worker, copies each shard's archived trials by build number (`copyArtifacts selector: specific(n)`; `one_task` grants the two dispatchers `copyArtifactPermission`), and merges them with `aggregate_runs.py` into one `artifact.json` archived on the dispatcher build. The dispatcher holds no executor while its shards queue, so it cannot starve them.
+A dispatcher does **not** queue one build per rollout. It splits the sorted question list into contiguous shards of `SHARD_SIZE` (at least one per online worker, counted with `nodesByLabel`; a label no online worker carries fails the build before any shard is queued), queues each as a `<suite>_one_task` build with its own `TASKS` or `TASK_OFFSET` and a shared `RUN_GROUP`, and waits. Its final `Aggregate` stage runs on a worker, copies each shard's archived trials by build number (`copyArtifacts selector: specific(n)`; `one_task` grants the two dispatchers `copyArtifactPermission`), and merges them with `aggregate_runs.py` into one `artifact.json` archived on the dispatcher build. The dispatcher holds no executor while its shards queue, so it cannot starve them.
 
 ### One build per worker, every core
 
