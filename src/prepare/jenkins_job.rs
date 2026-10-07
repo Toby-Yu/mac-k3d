@@ -1011,6 +1011,14 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
             archiveArtifacts artifacts: pattern, allowEmptyArchive: true
           }}
         }}
+        // The run's .tar.gz, downloadable from the build page. A shard skips it:
+        // its dispatcher archives one combined .tar.gz instead.
+        if (!params.RUN_GROUP?.trim() && fileExists('eval-runs/last_backup.txt')) {{
+          def backup = readFile('eval-runs/last_backup.txt').trim()
+          if (backup) {{
+            archiveArtifacts artifacts: backup, allowEmptyArchive: true
+          }}
+        }}
         // A shard archives this build's trials and verdicts so the dispatcher
         // can merge them. The workspace keeps every earlier build's trials too.
         if (params.RUN_GROUP?.trim()) {{
@@ -1223,11 +1231,23 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             --run-group "$RUN_GROUP" \
             --n-rollouts "${{N_ROLLOUTS:-4}}" \
             --out "${{WORKSPACE}}/aggregate"
+          python3 "$MAC_K3D_ROOT/pipeline/lib/cost_token_report.py" \
+            --run-dir "${{WORKSPACE}}/aggregate" \
+            --out "${{WORKSPACE}}/aggregate/cost-token-report.md" \
+            || echo "WARNING: cost/token analysis failed; the combined .tar.gz goes ahead without cost-token-report.md"
+          python3 "$MAC_K3D_ROOT/pipeline/lib/archive_run.py" \
+            --report-dir "${{WORKSPACE}}/aggregate" \
+            --harness-dir "${{WORKSPACE}}/aggregate/harness" \
+            --task-file "${{WORKSPACE}}/aggregate/selected_tasks.txt" \
+            --suite "$BENCHMARK" \
+            --backup-root "${{WORKSPACE}}/backup" \
+            --run-folder "$RUN_GROUP"
         '''
       }}
       post {{
         always {{
           archiveArtifacts artifacts: 'aggregate/**', allowEmptyArchive: true
+          archiveArtifacts artifacts: 'backup/**', allowEmptyArchive: true
         }}
       }}
     }}
@@ -2260,6 +2280,31 @@ mod tests {
         assert!(xml.contains("<string>deepswe_full_suite_task</string>"));
         let some = eval_job_xml("deepswe", JobShape::Some_, "d", &opts);
         assert!(!some.contains("CopyArtifactPermissionProperty"));
+    }
+
+    #[test]
+    fn the_run_tar_gz_is_on_the_build_page() {
+        let opts = deepswe_opts(Vec::new());
+        // A one_task build archives the .tar.gz archive/backup names; a shard does not.
+        let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
+        assert!(one.contains(
+            "if (!params.RUN_GROUP?.trim() && fileExists('eval-runs/last_backup.txt')) {"
+        ));
+        assert!(one.contains("def backup = readFile('eval-runs/last_backup.txt').trim()"));
+        assert!(one.contains("archiveArtifacts artifacts: backup, allowEmptyArchive: true"));
+        // A dispatcher packs the merged shards once and archives that.
+        for shape in [JobShape::Some_, JobShape::FullSuite] {
+            let jf = eval_jenkinsfile("deepswe", shape, &opts);
+            let merge = jf.find("aggregate_runs.py").expect("aggregate step");
+            let cost = jf.find("cost_token_report.py").expect("cost step");
+            let pack = jf.find("archive_run.py").expect("pack step");
+            assert!(merge < cost && cost < pack, "{shape:?}");
+            assert!(jf.contains(r#"--task-file "${WORKSPACE}/aggregate/selected_tasks.txt""#));
+            assert!(jf.contains(r#"--backup-root "${WORKSPACE}/backup""#));
+            assert!(jf.contains(r#"--run-folder "$RUN_GROUP""#));
+            assert!(jf.contains("archiveArtifacts artifacts: 'backup/**', allowEmptyArchive: true"));
+            assert!(!jf.contains("last_backup.txt"), "{shape:?}");
+        }
     }
 
     #[test]

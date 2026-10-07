@@ -2,6 +2,7 @@
 # archive/backup: copy the run folder, anti-cheat verdicts and per-trial files
 # into the repo's output/<benchmark>/ and pack them as <run folder>.tar.gz.
 # MAC_K3D_BACKUP_ROOT or MAC_K3D_OUTPUT_ROOT moves the backup elsewhere.
+# Records the archive in last_backup.txt, which Jenkins archives on the build page.
 set -euo pipefail
 # shellcheck source=../_common.sh
 source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
@@ -14,4 +15,14 @@ python3 "$PIPELINE_LIB/archive_run.py" \
   --task-file "$WORKDIR/selected_tasks.txt" \
   --suite "$BENCHMARK" \
   --backup-root "$BACKUP_ROOT"
-echo "OK backup $BACKUP_ROOT/${BENCHMARK}/$(basename "$ART_DIR").tar.gz"
+ARCHIVE="$BACKUP_ROOT/${BENCHMARK}/$(basename "$ART_DIR").tar.gz"
+echo "OK backup $ARCHIVE"
+
+# archiveArtifacts takes workspace-relative paths only.
+if [ -n "${WORKSPACE:-}" ]; then
+  if [[ "$ARCHIVE" == "$WORKSPACE/"* ]]; then
+    printf '%s\n' "${ARCHIVE#"$WORKSPACE"/}" >"$WORKDIR/last_backup.txt"
+  else
+    echo "note: $ARCHIVE is outside the Jenkins workspace, so the build page will not offer it"
+  fi
+fi

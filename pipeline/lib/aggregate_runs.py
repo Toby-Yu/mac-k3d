@@ -224,6 +224,8 @@ def main() -> int:
                 file=sys.stderr,
             )
     write_report(doc, out)
+    # archive_run.py packs these tasks' trials into the combined .tar.gz.
+    (out / "selected_tasks.txt").write_text("".join(f"{tid}\n" for tid in tasks), encoding="utf-8")
     print(
         f"aggregate: {merged['shards']} shards, {len(tasks)} tasks, "
         f"{args.n_rollouts} rollouts -> {out / 'artifact.json'}"

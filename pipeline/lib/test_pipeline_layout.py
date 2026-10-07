@@ -258,6 +258,103 @@ class ArchiveRunTests(unittest.TestCase):
             self.assertIn("run the report phase first", proc.stderr)
             self.assertFalse((root / "backup").exists())
 
+    def _report(self, root: Path, name: str) -> tuple[Path, Path]:
+        report = root / name
+        report.mkdir(parents=True)
+        (report / "artifact.json").write_text('{"run_id": "x"}\n', encoding="utf-8")
+        (report / "summary.md").write_text("# s\n", encoding="utf-8")
+        tasks = root / "tasks.txt"
+        tasks.write_text("alpha\n", encoding="utf-8")
+        return report, tasks
+
+    def test_run_folder_names_the_tar_gz_and_its_top_folder(self):
+        import tarfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report, tasks = self._report(root, "aggregate")
+            proc = subprocess.run(
+                [
+                    sys.executable, str(LIB / "archive_run.py"),
+                    "--report-dir", str(report),
+                    "--harness-dir", str(root / "aggregate" / "harness"),
+                    "--task-file", str(tasks),
+                    "--suite", "deepswe",
+                    "--backup-root", str(root / "backup"),
+                    "--run-folder", "deepswe_full_suite_task-7",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            archive = root / "backup" / "deepswe" / "deepswe_full_suite_task-7.tar.gz"
+            self.assertTrue(archive.is_file(), sorted(p.name for p in (root / "backup" / "deepswe").iterdir()))
+            with tarfile.open(archive) as tar:
+                names = tar.getnames()
+            self.assertIn("deepswe_full_suite_task-7/artifact.json", names)
+            self.assertIn("deepswe_full_suite_task-7/summary.md", names)
+            self.assertFalse((root / "backup" / "deepswe" / "aggregate.tar.gz").exists())
+
+    def test_run_folder_must_be_a_plain_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report, tasks = self._report(root, "aggregate")
+            proc = subprocess.run(
+                [
+                    sys.executable, str(LIB / "archive_run.py"),
+                    "--report-dir", str(report),
+                    "--harness-dir", str(root / "harness"),
+                    "--task-file", str(tasks),
+                    "--backup-root", str(root / "backup"),
+                    "--run-folder", "../escape",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("--run-folder must be a plain folder name", proc.stderr)
+            self.assertFalse((root / "backup").exists())
+
+    def _run_backup(self, root: Path, workspace: Path) -> subprocess.CompletedProcess:
+        work = root / "ws" / "eval-runs"
+        report = work / "output" / "deepswe" / "jenkins-9-20261007T000000Z"
+        report.mkdir(parents=True)
+        (report / "artifact.json").write_text('{"run_id": "jenkins-9"}\n', encoding="utf-8")
+        (work / "report_dir.txt").write_text(f"{report}\n", encoding="utf-8")
+        (work / "selected_tasks.txt").write_text("alpha\n", encoding="utf-8")
+        env = {
+            **os.environ,
+            "HOME": str(root),
+            "MAC_K3D_EVAL_WORKDIR": str(work),
+            "MAC_K3D_BACKUP_ROOT": str(root / "ws" / "mac-k3d-pipeline" / "output"),
+            "BENCHMARK": "deepswe",
+            "WORKSPACE": str(workspace),
+        }
+        return subprocess.run(
+            ["bash", str(STAGES / "archive" / "backup.sh")], capture_output=True, text=True, check=False, env=env
+        )
+
+    def test_backup_names_its_tar_gz_for_the_jenkins_build_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proc = self._run_backup(root, root / "ws")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            pointer = root / "ws" / "eval-runs" / "last_backup.txt"
+            rel = "mac-k3d-pipeline/output/deepswe/jenkins-9-20261007T000000Z.tar.gz"
+            self.assertEqual(pointer.read_text(encoding="utf-8"), rel + "\n")
+            self.assertTrue((root / "ws" / rel).is_file())
+
+    def test_a_backup_outside_the_workspace_is_not_offered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proc = self._run_backup(root, root / "elsewhere")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertFalse((root / "ws" / "eval-runs" / "last_backup.txt").exists())
+            self.assertIn("outside the Jenkins workspace", proc.stdout)
+
+    def test_env_clears_the_last_backup_before_any_step(self):
+        text = (STAGES / "env.sh").read_text(encoding="utf-8")
+        self.assertIn('"$WORKDIR/last_backup.txt"', text)
+        self.assertLess(text.index("last_backup.txt"), text.index("run_steps"))
+
     def test_backup_carries_the_cost_analysis(self):
         from archive_run import REPORT_FILES
 

@@ -22,7 +22,7 @@ Used by `mac-k3d eval` and the Jenkins eval jobs (all Harbor). The phase and ste
 | `harness_labels.py` | Loads `../config/harness/icode-pr2-eea9d66.yaml` (`tuned_on`, `hinted`); `generate` rebuilds it from the improve loop and iCode's matchers, read-only |
 | `task_resources.py` | `plan`: declared `cpus`/`memory_mb`/`storage_mb` per task.toml → `EVAL_SLOTS` (Harbor's `-n`), failing when one task does not fit this worker. `sample`: append a `docker stats` snapshot to the build's memory trace ([optimization.md](../../docs/optimization.md)) |
 | `eval_slots.py` | Memory and disk helpers only (`docker stats` parsing, container peak). Harbor owns scheduling, so there is no slot loop here |
-| `aggregate_runs.py` | `Aggregate` stage of `_some_task` / `_full_suite_task`: merge the shard trials of one `RUN_GROUP` into one `artifact.json` / `summary.md` / `report.html` |
+| `aggregate_runs.py` | `Aggregate` stage of `_some_task` / `_full_suite_task`: merge the shard trials of one `RUN_GROUP` into one `artifact.json` / `summary.md` / `report.html`, plus `selected_tasks.txt` for the combined `.tar.gz` |
 | `eval_progress.py` | `evaluate/harbor_run` `progress.json` and the 60s heartbeat (`done/needed`, inflight, slots) |
 | `swebenchpro_tasks.py` | `tasks/benchmark`: materialize Harbor `tasks/<instance_id>/` (`task.toml`, tests) from the SWE-bench Pro dataset |
 | `swebenchpro_run.py` | Docker Hub tag helper used when writing those Harbor tasks |
@@ -30,7 +30,7 @@ Used by `mac-k3d eval` and the Jenkins eval jobs (all Harbor). The phase and ste
 | `score_results.py` | `score/score`: merge harness/baseline into one report schema (Pass@1, F2P/P2P rates, tokens, `wall_minutes`) for DeepSWE, LoLBench, and SWE-bench Pro |
 | `render_report.py` | `report/render`: `artifact.json`, `summary.md`, `report.html` for one run folder |
 | `cost_token_report.py` | `archive/analysis`: `cost-token-report.md` in the run folder; also by hand for older runs |
-| `archive_run.py` | `archive/backup`: copy the run folder, verdicts and per-trial files (transcripts gzipped and masked), then `tar.gz` |
+| `archive_run.py` | `archive/backup`: copy the run folder, verdicts and per-trial files (transcripts gzipped and masked), then `tar.gz`. The `Aggregate` stage runs it over `aggregate/` with `--run-folder <RUN_GROUP>` |
 | `check_report.py` | Validate required report keys (no network) |
 | `question_log.py` | `record`: one row per question of a run into `docs/testing/question-log.md` (from `artifact.json`, or the console when the run stopped early), the Open problems table, and `status`/`builds` in `question-coverage.md`. Called by `mac-k3d eval record` and at the end of `eval --local` |
 | `testdata/report-min.json` | Fixture for `pipeline/tools/check_report.sh` |

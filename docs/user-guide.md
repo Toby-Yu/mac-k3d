@@ -192,6 +192,7 @@ Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --yes
 3. Click **Build**. Console must say `Running on <this-worker-name>`. The build is allowed **96 hours**. Re-run `mac-k3d config` on the controller so the Jenkins job picks up that limit; an already installed job still has the old cap.
 4. Download **Build Artifacts** → `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, plus `summary.md` and `report.html` in that same folder. Token totals are input, output, and the sum.
    The Archive stage adds `cost-token-report.md` to that folder and keeps a compressed copy at `$WORKSPACE/mac-k3d-pipeline/output/<benchmark>/jenkins-<build>-<UTC>.tar.gz`, kept across builds (override with `MAC_K3D_OUTPUT_ROOT`). The workspace copy Jenkins shows is still the loose folder at `$HOME/jenkins-agent/workspace/<job>/eval-runs/output/` (or `{remote_fs}/workspace/<job>/eval-runs/output/` if `jenkins_agent.remote_fs` was changed).
+   The same `.tar.gz` is also under **Build Artifacts** as `mac-k3d-pipeline/output/<benchmark>/jenkins-<build>-<UTC>.tar.gz`, so anyone who can open the build can download the whole run: the report plus each attempt's patches, masked transcripts, `trial.log` and anti-cheat verdicts. `tar -xzf jenkins-<build>-<UTC>.tar.gz` recreates the run folder. A `some_task` or `full_suite_task` build offers one combined `backup/<benchmark>/<RUN_GROUP>.tar.gz` for all its shards instead.
 
 ### CLI from the worker (queues Jenkins; no `--local`)
 

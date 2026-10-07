@@ -145,17 +145,25 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--task-file", required=True)
     ap.add_argument("--suite", default=os.environ.get("BENCHMARK", "deepswe"))
     ap.add_argument("--backup-root", default="")
+    ap.add_argument(
+        "--run-folder",
+        default="",
+        help="name of the backup folder and <name>.tar.gz (default: the report folder's name)",
+    )
     args = ap.parse_args(argv)
     report_dir = Path(args.report_dir)
     if not (report_dir / "artifact.json").is_file():
         ap.error(f"no artifact.json in {report_dir}; run the report phase first")
+    run_folder = args.run_folder.strip() or report_dir.name
+    if "/" in run_folder or run_folder in {".", ".."}:
+        ap.error(f"--run-folder must be a plain folder name (got {run_folder!r})")
     ids = [ln.strip() for ln in Path(args.task_file).read_text(encoding="utf-8").splitlines() if ln.strip()]
     dest = backup_run(
         backup_root=Path(args.backup_root) if args.backup_root else default_backup_root(),
         suite=args.suite,
         task_ids=ids,
         report_dir=report_dir,
-        run_folder=report_dir.name,
+        run_folder=run_folder,
         harness_dir=Path(args.harness_dir),
     )
     print(f"backup {compress_backup(dest)}")

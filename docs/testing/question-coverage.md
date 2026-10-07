@@ -20,7 +20,7 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 
 ## DeepSWE
 
-5 run, 108 not run, 113 task dirs.
+6 run, 107 not run, 113 task dirs.
 
 | question | status | builds | peak_gb | slots | memory_mb |
 |----------|--------|--------|---------|-------|-----------|
@@ -70,7 +70,7 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 | `httpx-streaming-json-iteration` | not run |  | | | |
 | `igel-persist-feature-schema` | not run |  | | | |
 | `ink-grid-box-layout` | not run |  | | | |
-| `ipython-session-bundle-replay` | not run |  | | | |
+| `ipython-session-bundle-replay` | run | 54 | | | |
 | `katex-multicolumn-array-spans` | not run |  | | | |
 | `kcp-go-multiplexed-kcp-streams` | not run |  | | | |
 | `kea-atomic-signal-selectors` | not run |  | | | |

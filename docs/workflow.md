@@ -173,7 +173,7 @@ Workdir is **`eval-runs/`** (`MAC_K3D_EVAL_WORKDIR`). Jenkins sets it to `$WORKS
 | Summary and HTML | `summary.md` and `report.html` in that same run folder |
 | Backup | `output/<benchmark>/jenkins-<build>-<UTC>.tar.gz` under the pipeline root: `$WORKSPACE/mac-k3d-pipeline/output/` on Jenkins (kept across builds; the Environment stage clears only `pipeline/`), the checkout's `output/` for a local run. `MAC_K3D_OUTPUT_ROOT` overrides it |
 | On the worker (Jenkins workspace) | `$HOME/jenkins-agent/workspace/deepswe_one_task/eval-runs/output/` |
-| Jenkins artifact | that run folder only (`eval-runs/last_output.txt`) |
+| Jenkins artifact | that run folder (`eval-runs/last_output.txt`) and the backup `.tar.gz` (`eval-runs/last_backup.txt`; a shard skips it). A `some_task` / `full_suite_task` build has `aggregate/` and one combined `backup/<benchmark>/<RUN_GROUP>.tar.gz`. Every build's files are kept |
 | Score scratch (`score` phase) | `eval-runs/results/score-temp.json` |
 | Last report path | `eval-runs/last_output.txt` |
 | Harness logs/patches | `eval-runs/harness/` |

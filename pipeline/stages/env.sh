@@ -6,8 +6,8 @@ source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
 STEPS=(env/host env/compose env/harbor env/egress env/model_api)
 
-# Written only by report/render; Jenkins archives whatever it names.
-rm -f "$WORKDIR/last_output.txt"
+# Written only by report/render and archive/backup; Jenkins archives whatever they name.
+rm -f "$WORKDIR/last_output.txt" "$WORKDIR/last_backup.txt"
 
 progress 0 "env: checking this worker (benchmark=$BENCHMARK n=$N_TASKS harness=$HARNESS llm=$LLM)"
 run_steps "${STEPS[@]}"

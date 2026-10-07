@@ -240,6 +240,43 @@ class CliTests(unittest.TestCase):
             self.assertTrue((out / "summary.md").is_file())
             self.assertTrue((out / "report.html").is_file())
 
+    def test_the_combined_tar_gz_holds_every_shard(self):
+        """The Aggregate stage packs aggregate/ with archive_run.py (src/prepare/jenkins_job.rs)."""
+        import tarfile
+
+        from archive_run import main as archive_main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_shard(root / "shards", "101", {"alpha": [1.0]})
+            make_shard(root / "shards", "102", {"beta": [0.0]})
+            out = root / "aggregate"
+            self.assertEqual(self.run_main(root / "shards", out, rollouts=1), 0)
+            self.assertEqual((out / "selected_tasks.txt").read_text(encoding="utf-8"), "alpha\nbeta\n")
+            group = "deepswe_full_suite_task-7"
+            self.assertEqual(
+                archive_main(
+                    [
+                        "--report-dir", str(out),
+                        "--harness-dir", str(out / "harness"),
+                        "--task-file", str(out / "selected_tasks.txt"),
+                        "--suite", "deepswe",
+                        "--backup-root", str(root / "backup"),
+                        "--run-folder", group,
+                    ]
+                ),
+                0,
+            )
+            with tarfile.open(root / "backup" / "deepswe" / f"{group}.tar.gz") as tar:
+                names = set(tar.getnames())
+            self.assertIn(f"{group}/artifact.json", names)
+            self.assertIn(f"{group}/tasks.txt", names)
+            self.assertIn(f"{group}/anticheat/summary.json", names)
+            for task in ("alpha", "beta"):
+                self.assertTrue(
+                    any(n.startswith(f"{group}/icode/{task}/attempt-01/") for n in names), f"{task}: {sorted(names)}"
+                )
+
     def test_shards_from_reused_workspaces_merge_only_their_own_build(self):
         """Each worker still holds a pre-PF.1 build of the same task, scored 0."""
         with tempfile.TemporaryDirectory() as tmp:
