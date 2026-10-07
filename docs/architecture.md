@@ -166,8 +166,8 @@ mac-k3d is the **environment and scheduling manager**. It does not run container
 | Layer | Owner |
 |---|---|
 | Bare-machine prep: Docker, k3d, the pinned Harbor, Jenkins agent, base images | mac-k3d (`setup`, `start`, `config`), re-checked per build by the `env` phase |
-| Per-build prep and checks: benchmark checkout, task selection, iCode checkout and sandbox, read-only mount, network allowlist, leak scan | mac-k3d (pipeline `tasks` phase) |
-| Container lifecycle, per-task cpus/memory, retries, rollout fan-out, verifier, reward | **Harbor** (one `harbor run`) |
+| Per-build prep and checks: benchmark checkout, task selection, iCode checkout and sandbox, read-only mount, network allowlist, leak scan | mac-k3d (pipeline `tasks` phase). The checkout holds each question's image address, not the image ([pipeline.md](pipeline.md#benchmark-checkout-and-question-images)) |
+| Question image pull, container lifecycle, per-task cpus/memory, retries, rollout fan-out, verifier, reward | **Harbor** (one `harbor run`; LoLBench images are built for this CPU by `tasks/images` first) |
 | Job placement across workers and resource admission | Jenkins + lockable-resources |
 | Isolation canary, capture receipts, anti-cheat verdicts, score, report, archive | mac-k3d (pipeline `evaluate/canary`, then the `anticheat`, `score`, `report` and `archive` phases) |
 

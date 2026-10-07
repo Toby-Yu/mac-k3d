@@ -36,12 +36,12 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 | `env/harbor` | Harbor at `HARBOR_VERSION` from `pipeline/config/toolchain.env` (the same pin `mac-k3d setup` installs). Reinstalls with `uv tool install --force` only when the version differs | `harbor_version.txt` |
 | `env/egress` | Runs Harbor's egress-control kernel probe visibly (Harbor itself only refuses `--allow-agent-host` and `no-network` when it fails). When Docker cannot run Harbor's probe image, the same script runs in a pinned fallback image and the run uses it (see [How Harbor is called](#how-harbor-is-called)). Also checks Harbor's egress sidecar image | `egress_probe.json` |
 | `env/model_api` | `DEEPSEEK_MODEL` is served by `GET /models`. Skipped with a note when no key is set | — |
-| `tasks/benchmark` | Checks out the benchmark (see [Where the benchmarks come from](#where-the-benchmarks-come-from)) | `deep-swe/`, `lolbench/` or `swebenchpro/` |
+| `tasks/benchmark` | Checks out the benchmark (see [Where the benchmarks come from](#where-the-benchmarks-come-from)). Question images are fetched later, see [Benchmark checkout and question images](#benchmark-checkout-and-question-images) | `deep-swe/`, `lolbench/` or `swebenchpro/` |
 | `tasks/select` | Picks the questions from `TASK`, `TASKS`, `N_TASKS` and `TASK_OFFSET`; every later step reads this file | `selected_tasks.txt`, `selected_tasks_offset.txt` |
 | `tasks/icode` | Resolves the iCode under test: a release drop, or a git clone built with `uv sync`. Never changes iCode's source | `icode_bin_path.txt`, `icode_host_root.txt`, `icode_git.json` (git) |
 | `tasks/icode_sandbox` | Makes a git build runnable at `/opt/icode-host`: embedded CPython, sanitized venv, wrapper, probe. A release drop keeps its own binary | — |
 | `tasks/agent` | Harbor's Python can import `icode_harbor_agent` and `patch_harbor_agent` | — |
-| `tasks/images` | LoLBench: each selected task's image exists for this CPU architecture, rebuilt from its Dockerfile when it does not | — |
+| `tasks/images` | LoLBench: each selected task's image exists for this CPU architecture, rebuilt from its Dockerfile when it does not. DeepSWE and SWE-bench Pro images are pulled by Harbor at the trial | — |
 | `tasks/isolation` | Builds the one read-only mount and refuses a tree that overlaps a benchmark; checks the model API host is on the network allowlist; records both | `agent_mounts.json`, `eval_protocol_inputs.json` |
 | `tasks/leakscan` | Searches the mounted iCode tree for any selected task's gold patch. Warns on a smoke run; `OFFICIAL=1` stops | `anticheat_leakscan.json` |
 | `evaluate/slots` | Clears this build's Harbor job and memory samples, then divides `CPU_LOCK_QTY` by each task's declared `cpus`/`memory_mb` into `EVAL_SLOTS`. Refuses a worker that cannot host one trial | `eval_resources.json` |
@@ -67,6 +67,51 @@ mac-k3d clones each benchmark itself and hands Harbor the task folders with `-p 
 | SWE-bench Pro | Shallow clone of `SWEBENCHPRO_GIT_URL` (not pinned yet); `swebenchpro_tasks.py` writes Harbor task folders | `swebenchpro/tasks` |
 
 For DeepSWE and LoLBench, override a pin per run with the variable of the same name. An existing checkout at another commit is fetched and checked out at the pin, and a task count other than `DEEPSWE_TASK_COUNT` / `LOLBENCH_TASK_COUNT` fails the step.
+
+## Benchmark checkout and question images
+
+A worker needs two different downloads before a question can run, and different parts of the pipeline fetch them at different times. Neither needs a manual pre-download on a new machine.
+
+| | Benchmark checkout | Question image |
+|---|---|---|
+| What it is | The benchmark's git repo: one text folder per question | A prebuilt container filesystem for one question: OS, toolchain and the project at its base commit |
+| Who fetches it | mac-k3d, `tasks/benchmark` (`pin_benchmark_sha` in `_common.sh`) | Harbor, when that question's trial environment starts in `evaluate` (LoLBench: `tasks/images` first, below) |
+| From where | GitHub, at the pinned commit | A container registry, at the address in the task's `task.toml` |
+| When | The first build in that job's workspace; again only when the pin changes | The first trial of that question on that worker |
+| Kept in | `$WORKDIR/deep-swe` (`eval-runs/` in the job's Jenkins workspace) | The worker's Docker image store, shared by every job on that worker |
+| Covers | All questions at once (DeepSWE: 113 folders) | One question; each question has its own image |
+
+```mermaid
+flowchart LR
+  tasksPhase["tasks phase"]
+  clone["eval-runs/deep-swe task folders"]
+  harbor["Harbor at evaluate"]
+  registry["image registry"]
+  store["worker Docker store"]
+  tasksPhase --> clone
+  clone -->|"docker_image address"| harbor
+  harbor --> registry
+  registry --> store
+  store --> harbor
+```
+
+The checkout does not contain the image, only its address. A DeepSWE question folder, for example `deep-swe/tasks/ipython-session-bundle-replay/`, holds:
+
+- `instruction.md`: the question the agent gets
+- `tests/`: what the verifier runs to score the patch
+- `solution/`: the reference patch (the leak scan checks the iCode tree for it)
+- `task.toml`: declared `cpus`/`memory_mb`, verifier settings, and `[environment] docker_image = "public.ecr.aws/d3j8x8q7/swe-bench-202605:<id>-v1.1"`
+- `environment/Dockerfile`: the recipe the benchmark authors built that image from
+
+Harbor reads `docker_image` and, because mac-k3d never passes `--force-build`, runs that prebuilt image instead of building the Dockerfile; Docker pulls it when it is not already in the store. Once pulled, every later trial of that question on that worker, from any build, starts from the stored copy. A different question reuses the same checkout and pulls its own image the first time. The images stay until someone prunes Docker, so disk use grows with the number of different questions a worker has run (`env/host` checks `WORKER_MIN_DISK_GB` before each build).
+
+| Benchmark | Image address | Who makes sure it is there |
+|---|---|---|
+| DeepSWE | `public.ecr.aws/d3j8x8q7/swe-bench-202605:…`, one per question | Harbor pulls it at the trial |
+| LoLBench | `docker_image` in `task.toml` (default `smartdub26/lolbench:<id>-1.0.0`) | `tasks/images` before Harbor: keeps a local image built for this CPU, retags a leftover Harbor build, or builds the task's Dockerfile (`ensure_task_image` in `_common.sh`), because the published tags do not cover every architecture |
+| SWE-bench Pro | `jefzda/sweap-images:…`, written by `swebenchpro_tasks.py` | Harbor pulls it at the trial |
+
+The `env` phase fetches neither. It checks that the worker can run any evaluation (Docker, compose, Harbor, the egress probe, the model API), pulling only the small egress probe image when it is missing. So on a brand-new machine `mac-k3d setup` installs the tools, the first build's `tasks` phase clones the benchmark, and each question's first trial waits while Harbor pulls its image, which can take several minutes for a large image. A pull that fails, for a missing image or a damaged Docker store, fails that question's trial; the build's other questions still run.
 
 ## How Harbor is called
 

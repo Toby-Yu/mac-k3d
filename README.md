@@ -1,20 +1,44 @@
 # mac-k3d
 
-Turn a **new Linux or Mac** into a **Jenkins controller or worker**. Download a GitHub Release binary; it installs Docker and the rest.
+mac-k3d is evaluation infrastructure for AI coding harnesses. It turns a **new Linux or Mac** into a **Jenkins controller or worker**, and it ships the pipeline every worker runs, so one controller can send evaluation jobs for DeepSWE, LoLBench or SWE-bench Pro to many workers and get one report back. Download a GitHub Release binary; it installs Docker and the rest.
 
-## Project goal
+## How it works
 
-This project is a CI path for AI harness evaluation: many short jobs, each in its own sandbox, so one agent cannot read answers online or touch another run.
+```mermaid
+flowchart TD
+  person["You: Jenkins UI or mac-k3d eval"]
+  controller["Controller: Jenkins in k3d"]
+  one["one_task build on a free worker"]
+  many["some_task or full_suite_task splits into shards"]
+  worker["Worker runs env, tasks, evaluate, anticheat, score, report, archive"]
+  report["artifact.json, summary.md, report.html"]
+  person --> controller
+  controller -->|"one question"| one
+  controller -->|"many questions"| many
+  many -->|"one shard per build, next shard to the next free worker"| one
+  one --> worker --> report
+```
 
-- **Jenkins** queues one task per build, caps CPU with a lock, and discards the job when it finishes. That is the parallelism and the short lifetime.
-- **Harbor** (pinned in `pipeline/config/toolchain.env`) runs DeepSWE, LoLBench, and SWE-bench Pro as a black box. The agent allowlist (`pipeline/config/network-allowlist-v1.json`) is the isolation in this tree: the sandbox may reach the DeepSeek API and nothing else.
-- **mac-k3d** prepares the machine and each build's tasks, calls Harbor once, then runs anti-cheat, scoring, the report and the archive. The seven phases and every Harbor flag: [docs/pipeline.md](docs/pipeline.md).
-- **k3d** already hosts Jenkins on the controller. The next sandbox is a short-lived k3d cluster per build: a default-deny NetworkPolicy (DeepSeek API only), image pulls through a Harbor registry proxy cache, then the cluster is deleted. That cluster, the NetworkPolicy, and the registry cache are **not** in this tree yet. Do not report them as shipped.
+- **Controller:** Jenkins inside a k3d cluster (`http://localhost:17070`). It holds the nine eval jobs (three shapes for each benchmark), the DeepSeek key and the queue. It never runs Harbor.
+- **Worker:** Docker, Java, git, the pinned Harbor and a Jenkins inbound agent with one executor. More workers run more shards at once; nothing in the pipeline changes when you add one.
+- **A build** lands on one worker, holds all of that worker's cores while Harbor runs, and runs the seven phases from the `pipeline/` built into that worker's `mac-k3d`, so the result names the commit that produced it. `some_task` and `full_suite_task` queue one `one_task` build per shard and merge them into one report.
+- **Harbor** (pinned in `pipeline/config/toolchain.env`) runs the trials: containers, each task's declared limits, retries and grading. The agent can reach only the hosts in `pipeline/config/network-allowlist-v1.json`, the DeepSeek API.
+- **mac-k3d** does everything around Harbor: machine setup, the benchmark checkout and per-task checks, the isolation canary, anti-cheat, scoring, the report and the archive.
 
-Pier is not the eval runner. It keeps a Docker Compose sandbox on the worker host, so it does not give a fresh Kubernetes network, a NetworkPolicy, or a registry cache. One Harbor runner is the path that can move onto that k3d sandbox next. End-to-end story: [docs/workflow.md](docs/workflow.md).
+Not shipped yet: a short-lived k3d cluster per build with a default-deny NetworkPolicy and a registry cache. Today trials run as Harbor containers on the worker's own Docker.
 
-- **Controller** — Docker → k3d → Jenkins UI (`http://localhost:17070`)
-- **Worker** — Docker + Java + git + the pinned Harbor + Jenkins inbound agent (not a k3d node)
+## Where to read next
+
+| You want | Read |
+|----------|------|
+| Set up a controller and a worker, then run an eval | [docs/user-guide.md](docs/user-guide.md) |
+| The path from a blank machine to a report | [docs/workflow.md](docs/workflow.md) |
+| The seven phases, the benchmark checkout, and where question images come from | [docs/pipeline.md](docs/pipeline.md) |
+| How builds are placed on several workers | [docs/architecture.md](docs/architecture.md#evaluation-architecture) |
+| Every command and flag | [docs/commands.md](docs/commands.md) |
+| Config files, secrets, and iCode inputs | [docs/configuration.md](docs/configuration.md), [docs/secrets.md](docs/secrets.md), [docs/icode-harness-inputs.md](docs/icode-harness-inputs.md) |
+| This lab's controller IP, checklists and per-question run log | [docs/testing/README.md](docs/testing/README.md) |
+| Every doc by audience, and what each release shipped | [docs/README.md](docs/README.md) |
 
 Users do **not** need Rust. Developers who build from source do.
 
@@ -93,17 +117,6 @@ mac-k3d prepare --non-interactive -c ~/.config/mac-k3d/worker.yaml
 Default config path: `~/.config/mac-k3d/config.yaml`
 
 See [docs/configuration.md](docs/configuration.md) for the full schema.
-
-## Documentation
-
-**Users:** [docs/user-guide.md](docs/user-guide.md) (controller + worker + eval). Extra bootstrap: [docs/new-machine.md](docs/new-machine.md). Index: [docs/README.md](docs/README.md).
-
-- [Commands](docs/commands.md)
-- [Configuration](docs/configuration.md)
-- [iCode inputs](docs/icode-harness-inputs.md)
-- [Secrets](docs/secrets.md)
-- [Lab runbooks](docs/testing/README.md) (this team; not start-here)
-- [Releases / Historical](docs/README.md#releases-what-each-version-shipped) (what each version implemented; v0.3 cargo path is not start-here)
 
 ## License
 

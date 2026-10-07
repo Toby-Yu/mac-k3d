@@ -31,6 +31,7 @@ Copy-paste checklists with this lab’s IPs live under [testing/](testing/).
 | [testing/testing-binary-initializer.md](testing/testing-binary-initializer.md) | Bootstrap sign-off |
 | [testing/clean-machine-binary-test.md](testing/clean-machine-binary-test.md) | Wipe or new PC → eval-ready |
 | [testing/question-coverage.md](testing/question-coverage.md) | Questions run on this worker, and Docker memory per question |
+| [testing/question-log.md](testing/question-log.md) | Per-run result of every question, open problems and fix notes (`mac-k3d eval record`) |
 
 ## Developers
 
