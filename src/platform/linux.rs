@@ -442,12 +442,11 @@ pub fn install_agent_daemon(
         )));
     }
 
-    let body = std::fs::read_to_string(launch_script)
-        .map_err(|e| Error::Config(format!("failed to read {}: {e}", launch_script.display())))?;
-    if body.contains("REPLACE_ME") {
+    if !crate::prepare::jenkins_agent::has_agent_secret(launch_script) {
         println!(
-            "Launch script still has REPLACE_ME secret — not starting systemd unit.\n\
-             Re-run config with a valid API token, or paste the secret, then run config again."
+            "{} still has the REPLACE_ME secret — not starting systemd unit.\n\
+             Re-run config with a valid API token, or paste the secret there, then run config again.",
+            crate::prepare::jenkins_agent::secret_file_for(launch_script).display()
         );
         return Ok(());
     }
@@ -510,7 +509,7 @@ WantedBy=default.target
             run_cmd("systemctl", &["--user", "enable", SYSTEMD_UNIT])?;
             run_cmd("systemctl", &["--user", "restart", SYSTEMD_UNIT])?;
             println!(
-                "Jenkins agent restarted ({SYSTEMD_UNIT}): agent.jar, launch-agent.sh or the unit changed.\n\
+                "Jenkins agent restarted ({SYSTEMD_UNIT}): agent.jar, launch-agent.sh, .agent-secret or the unit changed.\n\
                  Logs: {}",
                 log_out.display()
             );

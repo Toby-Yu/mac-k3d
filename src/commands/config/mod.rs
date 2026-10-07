@@ -43,6 +43,10 @@ pub struct ConfigArgs {
 pub async fn run(args: ConfigArgs, config: &MacK3dConfig, config_path: Option<&Path>) -> Result<()> {
     ensure_supported_os()?;
     let config_path: PathBuf = MacK3dConfig::resolve_config_path(config_path);
+    // A YAML written before config files were private may still be 0644, with the API token in it.
+    if let Err(err) = crate::config::make_private(&config_path) {
+        println!("Warning: {err}; the API token in it may be readable by other users.");
+    }
 
     match config.role {
         NodeRole::Worker => worker::run(&args, config, &config_path)?,

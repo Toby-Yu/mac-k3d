@@ -1,5 +1,4 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
@@ -95,7 +94,7 @@ fn mem_total_kb() -> Option<u64> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let out = Command::new("sysctl")
+        let out = std::process::Command::new("sysctl")
             .args(["-n", "hw.memsize"])
             .output()
             .ok()?;
@@ -319,36 +318,7 @@ fn groovy_escape(s: &str) -> String {
 }
 
 fn run_script_text(base_url: &str, user: &str, token: &str, script: &str) -> Result<String> {
-    let base = base_url.trim_end_matches('/');
-    let auth = format!("{user}:{token}");
-    let cookie_file = tempfile_path("mac-k3d-lr-cookies")?;
-    let crumb = fetch_crumb(base, &auth, &cookie_file);
-
-    let mut cmd = Command::new("curl");
-    cmd.args([
-        "-sS",
-        "-b",
-        &cookie_file.display().to_string(),
-        "-c",
-        &cookie_file.display().to_string(),
-        "-u",
-        &auth,
-        "-X",
-        "POST",
-        &format!("{base}/scriptText"),
-        "--data-urlencode",
-        &format!("script={script}"),
-    ]);
-    if let Some((field, value)) = &crumb {
-        cmd.args(["-H", &format!("{field}: {value}")]);
-    }
-
-    let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: "curl scriptText".into(),
-        source: e.into(),
-    })?;
-    let _ = std::fs::remove_file(&cookie_file);
-
+    let output = crate::jenkins_curl::Session::open(base_url, user, token)?.script_text(script)?;
     let body = String::from_utf8_lossy(&output.stdout).to_string();
     if !output.status.success() {
         return Err(Error::CommandFailed {
@@ -368,49 +338,6 @@ fn run_script_text(base_url: &str, user: &str, token: &str, script: &str) -> Res
         return Err(Error::Config(truncate(&body, 300)));
     }
     Ok(body)
-}
-
-fn tempfile_path(prefix: &str) -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
-    std::fs::File::create(&path).map_err(|e| Error::Config(e.to_string()))?;
-    Ok(path)
-}
-
-fn fetch_crumb(base: &str, auth: &str, cookie_file: &Path) -> Option<(String, String)> {
-    let output = Command::new("curl")
-        .args([
-            "-fsS",
-            "-b",
-            &cookie_file.display().to_string(),
-            "-c",
-            &cookie_file.display().to_string(),
-            "-u",
-            auth,
-            &format!("{base}/crumbIssuer/api/json"),
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let field = extract_json_str(&text, "crumbRequestField")?;
-    let crumb = extract_json_str(&text, "crumb")?;
-    Some((field, crumb))
-}
-
-fn extract_json_str(json: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\"");
-    let idx = json.find(&needle)?;
-    let after = &json[idx + needle.len()..];
-    let colon = after.find(':')?;
-    let rest = after[colon + 1..].trim_start();
-    if !rest.starts_with('"') {
-        return None;
-    }
-    let rest = &rest[1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
 }
 
 fn truncate(s: &str, max: usize) -> String {

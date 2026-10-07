@@ -430,7 +430,7 @@ When `lolbench.path` is empty, the job falls back to cloning via `LOLBENCH_GIT_U
 
 Parameter defaults for harness/task/model come from `jenkins_job.*`. Credentials are **not** required for `HARNESS=oracle`; for model runs, `config` can create Secret text credentials on the **controller** from prepare’s pending file (see [secrets.md](secrets.md)) — not on each agent.
 
-**Harness map** (job choice → Harbor argv): `icode` → adapter `agents.icode_agent:ICodeAgent` with `PYTHONPATH=.`, `--ae DEEPSEEK_API_KEY` / `GITCODE_TOKEN`, DeepSeek host allowlist, and a longer agent-setup timeout; `dsh` / `chrys` → similarly mapped adapters; other values pass through as `-a <name>`.
+**Harbor command:** every job runs `pipeline/stages/run_all.sh`, whose evaluate phase builds it: adapter `icode_harbor_agent:ICodeAgent`, the DeepSeek host allowlist, and a longer agent-setup timeout. The model key goes through Harbor's `--env-file`, never `--ae`, and clone tokens never reach Harbor (see [pipeline.md](pipeline.md#how-harbor-is-called)).
 
 ---
 

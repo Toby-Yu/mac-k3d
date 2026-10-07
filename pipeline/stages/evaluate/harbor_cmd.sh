@@ -4,7 +4,8 @@
 #
 #   load_eval_state    read what the tasks phase and evaluate/slots left in $WORKDIR
 #   ensure_harbor_egress  re-run env/egress's probe check right before Harbor runs
-#   write_harbor_env   the 0600 --env-file with the model key and settings
+#   write_harbor_env   the 0600 --env-file with the model key and settings,
+#                      removed when the step's shell exits
 #   build_run_cmd      iCode: every selected task x N_ROLLOUTS trials, one job
 #   build_canary_cmd   canary: one trial with iCode's exact flags, mounts and env
 #   masked_cmd         the current command with secret values replaced by ***
@@ -59,7 +60,8 @@ load_eval_state() {
 
 # The env phase may have run long before the CPU lock was granted, so check
 # again. EGRESS_PROBE_IMAGE is set only when Docker cannot run Harbor's own
-# probe image; run_cmd hands it to harbor_probe_override.py.
+# probe image; run_cmd hands it to harbor_probe_override.py, and Harbor then
+# reuses this check's answer instead of starting its own probe container.
 ensure_harbor_egress() {
   local probe="$WORKDIR/egress_probe.json"
   python3 "$PIPELINE_LIB/harbor_egress.py" check --out "$probe" \
@@ -68,7 +70,11 @@ ensure_harbor_egress() {
   EGRESS_PROBE_IMAGE="$(python3 "$PIPELINE_LIB/harbor_egress.py" override --probe "$probe")"
 }
 
+# Harbor loads this file into its own environment; the agents copy the key
+# into each trial as a private file (icode_harbor_agent.py). It never goes on
+# a command line, and it stays on the worker's disk only while this step runs.
 write_harbor_env() {
+  trap 'rm -f "$HARBOR_ENV"' EXIT
   (
     umask 077
     {
@@ -178,7 +184,6 @@ append_agent_flags() {
   cmd+=(--ae "ICODE_MAX_ITERATIONS=${ICODE_MAX_ITERATIONS}")
   cmd+=(--ae "PYTHONDONTWRITEBYTECODE=1")
   cmd+=(--ae "DEEPSEEK_MODEL=${DEEPSEEK_MODEL}")
-  cmd+=(--ae "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")
   cmd+=(--ae "MAC_K3D_BENCHMARK=${BENCHMARK:-deepswe}")
   if [ -n "${REPO_CANDIDATES:-}" ]; then
     cmd+=(--ae "MAC_K3D_REPO_CANDIDATES=$REPO_CANDIDATES")

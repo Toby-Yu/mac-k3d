@@ -634,9 +634,47 @@ fn write_yaml(path: &Path, config: &MacK3dConfig, header: Option<&str>) -> Resul
         None => body,
     };
 
-    std::fs::write(path, contents)
-        .map_err(|e| Error::Config(format!("failed to write {}: {e}", path.display())))?;
+    // config.yaml and worker.yaml hold jenkins_agent.api_token.
+    write_private(path, contents.as_bytes())
+}
 
+/// Write `bytes` to `path` readable by this user only (0600). An existing file
+/// is tightened before it is rewritten.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    make_private(path)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts
+        .open(path)
+        .map_err(|e| Error::Config(format!("failed to write {}: {e}", path.display())))?;
+    file.write_all(bytes)
+        .map_err(|e| Error::Config(format!("failed to write {}: {e}", path.display())))
+}
+
+/// Set an existing file to 0600; a missing file is left alone.
+pub fn make_private(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(Error::Config(format!(
+                    "failed to chmod 600 {}: {e}",
+                    path.display()
+                )));
+            }
+            _ => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -781,6 +819,30 @@ mod tests {
         assert!(!text.contains("api_user"), "{text}");
         assert!(!text.contains("api_token"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_files_are_private_even_when_they_existed() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worker.yaml");
+        sample_worker().save(Some(&path)).unwrap();
+        assert_eq!(mode(&path), 0o600);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        sample_worker().save(Some(&path)).unwrap();
+        assert_eq!(mode(&path), 0o600, "a rewrite tightens an old 0644 file");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        make_private(&path).unwrap();
+        assert_eq!(mode(&path), 0o600, "`config` tightens the file without rewriting it");
+        make_private(&dir.path().join("missing.yaml")).unwrap();
+
+        let export = dir.path().join("export.yaml");
+        sample_worker().save_sanitized_export(&export).unwrap();
+        assert_eq!(mode(&export), 0o600);
     }
 
     #[test]

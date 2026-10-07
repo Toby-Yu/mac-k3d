@@ -4,6 +4,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod eval_catalog;
+pub mod jenkins_curl;
 pub mod platform;
 pub mod prepare;
 pub mod runtime;

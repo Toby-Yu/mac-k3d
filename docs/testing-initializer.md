@@ -460,7 +460,7 @@ Copy and tick as you go:
 
 ### `mac-k3d-jenkins-agent.service` could not be found / LaunchAgent missing
 
-**Cause:** Worker `prepare` skipped the daemon because `agent.jar` could not download, **or** you ran `config` on the **controller** file (`config.yaml`), **or** `api_token` is still `null` (`REPLACE_ME` in `launch-agent.sh`).
+**Cause:** Worker `prepare` skipped the daemon because `agent.jar` could not download, **or** you ran `config` on the **controller** file (`config.yaml`), **or** `api_token` is still `null` (`REPLACE_ME` in `{remote_fs}/.agent-secret`).
 
 **Fix:** Finish 7A, put `api_user` / `api_token` in `worker.yaml`, then:
 

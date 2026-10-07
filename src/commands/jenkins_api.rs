@@ -2,14 +2,14 @@
 //!
 //! The API user and token go to curl on stdin (`--config -`), never in its
 //! arguments, a URL, a file or a log, so they do not show in `ps` on a shared
-//! host. The crumb header goes the same way.
+//! host. The crumb header goes the same way (see `crate::jenkins_curl`).
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::path::Path;
+use std::process::Output;
 
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
+use crate::jenkins_curl::{auth_line, header_line, CookieJar};
 
 pub(super) struct JenkinsAccess {
     pub base: String,
@@ -51,37 +51,10 @@ pub(super) fn jenkins_access(config: &MacK3dConfig) -> Result<JenkinsAccess> {
     )))
 }
 
-fn curl_quote(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// curl's config text for `--config -`: the only place the credentials go.
-pub(super) fn curl_auth_config(user: &str, token: &str) -> String {
-    format!("user = \"{}:{}\"\n", curl_quote(user), curl_quote(token))
-}
-
 /// One curl run with the credentials (and any extra config lines) on stdin.
 fn run_curl(access: &JenkinsAccess, args: &[String], extra_config: &str) -> Result<Output> {
-    let mut child = Command::new("curl")
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::CommandFailed {
-            cmd: "curl".into(),
-            source: e.into(),
-        })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let config = format!("{}{extra_config}", curl_auth_config(&access.user, &access.token));
-        stdin
-            .write_all(config.as_bytes())
-            .map_err(|e| Error::Config(format!("curl stdin: {e}")))?;
-    }
-    child.wait_with_output().map_err(|e| Error::CommandFailed {
-        cmd: "curl".into(),
-        source: e.into(),
-    })
+    let config = format!("{}{extra_config}", auth_line(&access.user, &access.token));
+    crate::jenkins_curl::run_curl(args, &config)
 }
 
 fn failure(method: &str, url: &str, stderr: &[u8]) -> Error {
@@ -154,42 +127,10 @@ fn parse_post_reply(text: &str) -> Option<PostReply> {
     Some(PostReply { code, location })
 }
 
-/// Deleted however the call ends; holds the session cookie that goes with a crumb.
-struct CookieJar(PathBuf);
-
-impl CookieJar {
-    fn new() -> Result<Self> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "mac-k3d-jenkins-{}-{nanos}.cookies",
-            std::process::id()
-        ));
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        opts.open(&path)
-            .map_err(|e| Error::Config(format!("create {}: {e}", path.display())))?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for CookieJar {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
 /// POST `url` with a CSRF crumb when the controller issues one.
 pub(super) fn post_with_crumb(access: &JenkinsAccess, url: &str) -> Result<PostReply> {
     let jar = CookieJar::new()?;
-    let jar_path = jar.0.display().to_string();
+    let jar_path = jar.path().display().to_string();
     let crumb_url = format!("{}/crumbIssuer/api/json", access.base);
     let crumb_args: Vec<String> = [
         "-fsS", "--max-time", "30", "--config", "-", "-c", &jar_path, "-b", &jar_path, &crumb_url,
@@ -202,9 +143,7 @@ pub(super) fn post_with_crumb(access: &JenkinsAccess, url: &str) -> Result<PostR
         .filter(|o| o.status.success())
         .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
         .and_then(|v| {
-            let field = v["crumbRequestField"].as_str()?;
-            let crumb = v["crumb"].as_str()?;
-            Some(format!("header = \"{}: {}\"\n", curl_quote(field), curl_quote(crumb)))
+            Some(header_line(v["crumbRequestField"].as_str()?, v["crumb"].as_str()?))
         })
         .unwrap_or_default();
     let args: Vec<String> = [
@@ -268,14 +207,7 @@ mod tests {
         assert!(args.iter().all(|a| !a.contains(token) && !a.contains("admin")));
         assert!(args.windows(2).any(|w| w[0] == "--config" && w[1] == "-"));
         assert!(args.contains(&"-g".to_string()), "brackets in ?tree= must not glob");
-        assert_eq!(
-            curl_auth_config("admin", token),
-            format!("user = \"admin:{token}\"\n")
-        );
-        assert_eq!(
-            curl_auth_config("a\"b", "c\\d"),
-            "user = \"a\\\"b:c\\\\d\"\n"
-        );
+        assert_eq!(auth_line("admin", token), format!("user = \"admin:{token}\"\n"));
     }
 
     #[test]
@@ -313,19 +245,5 @@ mod tests {
         assert_eq!(query_value("a,b c&d=e/f:g"), "a%2Cb%20c%26d%3De%2Ff%3Ag");
         assert_eq!(query_value("deepseek-flash"), "deepseek-flash");
         assert_eq!(url_path("eval-runs/54 x"), "eval-runs/54%20x");
-    }
-
-    #[test]
-    fn the_cookie_jar_is_private_and_removed() {
-        let jar = CookieJar::new().unwrap();
-        let path = jar.0.clone();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
-        }
-        drop(jar);
-        assert!(!path.exists());
     }
 }

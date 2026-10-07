@@ -18,7 +18,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 from canary_verdict import render_spec
-from icode_harbor_agent import ICodeAgent
+from icode_harbor_agent import MODEL_KEY_LOADER, ICodeAgent
 
 PROBE_SRC = Path(__file__).with_name("canary_probe.sh")
 PROBE = "/installed-agent/canary_probe.sh"
@@ -68,10 +68,12 @@ class CanaryAgent(ICodeAgent):
         context: AgentContext,
     ) -> None:
         spec = self._spec()
+        # iCode's loader, so the probe sees iCode's exact env and the key file is gone.
+        await self.upload_model_key(environment)
         await self.exec_as_agent(
             environment,
             env=self.run_env(),
-            command=(
+            command=MODEL_KEY_LOADER + (
                 'export PATH="$HOME/.local/bin:$PATH"; '
                 f"bash {PROBE} probe; "
                 f"bash {PROBE} home post"

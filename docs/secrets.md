@@ -12,7 +12,7 @@ chmod 600 .env
 ```
 
 - Git never tracks `.env` (see `.gitignore`). Confirm with `git check-ignore -v .env`.
-- The evaluate phase's `eval-runs*/.harbor-env` (mode 600) is gitignored; it copies the key for Harbor and never holds a clone token. `.pier-env` from older trees stays ignored.
+- The evaluate phase's `eval-runs*/.harbor-env` (mode 600) is gitignored; it copies the key for Harbor and never holds a clone token. It exists only while the evaluate step runs: an `EXIT` trap removes it however the step ends, and the env phase removes a copy an older pipeline left. `.pier-env` from older trees stays ignored.
 - `./scripts/check_no_secrets.sh` and `./scripts/check_docs.sh` must pass before commit. The docs check also forbids linking v0.3 historical pages from the repo README or `docs/user-guide.md`, and requires a **Releases** inventory in `docs/README.md`. Install the hook once per clone:
 
 ```bash
@@ -56,9 +56,27 @@ LLM API keys, Git forge PATs, and similar CI secrets live in the **Jenkins Crede
 |--------|----------|--------|
 | LLM API keys (OpenRouter, DeepSeek, OpenLux, OpenAI, Anthropic, …) | Harbor / harnesses in Jenkins builds | Jenkins Credentials (Secret text) on **controller** |
 | GitHub / GitCode (etc.) PAT — clone, push, PR comments | Pipeline `git` / `gh` / REST on agent | Jenkins Credentials on **controller** |
-| Jenkins API user/token for `mac-k3d` agent register/clean | CLI on **worker** | Local only (Keychain / encrypted file later; plaintext in YAML is transitional debt). **`mac-k3d export` / `import` never copy `api_token` or `credentials.pending.yaml`.** |
-| Agent JNLP connection secret | LaunchAgent on worker | Local `launch-agent.sh` (node-specific, not shared) |
+| Jenkins API user/token for `mac-k3d` agent register/clean | CLI on **worker** | Local only, in `config.yaml` / `worker.yaml` written mode 600 (`mac-k3d config` tightens an older file). curl reads it on stdin, never from its arguments. Keychain / encrypted file later; plaintext in YAML is transitional debt. **`mac-k3d export` / `import` never copy `api_token` or `credentials.pending.yaml`.** |
+| Agent JNLP connection secret | LaunchAgent / systemd unit on worker | Local `<remote_fs>/.agent-secret` (mode 600, node-specific, not shared). `launch-agent.sh` (mode 700) passes `-secret @<file>`, so the secret is not in the agent's arguments. |
 | Jenkins initial admin password | Helm chart secret in k3d | Cluster secret; printed by `mac-k3d config` |
+
+## Never in process arguments
+
+Every user on a host can read every process's arguments (`ps -eo args`), and the cloud worker is a shared host. So a credential reaches a process only through an environment variable or a mode 600 file, never an argument or a URL.
+
+- **The model key during an eval.** Jenkins binds `deepseek-api-key` into the evaluate step's environment. `write_harbor_env` copies it into `.harbor-env` (mode 600), and Harbor loads that `--env-file` into its own process. Harbor turns an agent's exec environment into `docker compose exec -e KEY=VALUE`, so the iCode agent drops the key from it. Instead the agent writes the key into the trial as `/tmp/.mac-k3d-model.env`, mode 600 and owned by the agent user; `docker compose cp` puts only paths in the arguments. The run command loads that file and deletes it before iCode starts. The canary agent loads the key the same way. There is no `--ae DEEPSEEK_API_KEY=…`.
+- **The Jenkins API token, CSRF crumb and Groovy scripts.** `mac-k3d config` and `eval --job` / `eval record` send `user = "…"`, the crumb header and any `/scriptText` body (which embeds a credential's value when `config` uploads one) to curl on stdin (`--config -`). Node and job XML bind credentials by ID, so those bodies may stay arguments. Cookie jars are created mode 600 and removed after the call.
+- **The agent secret.** `java -jar agent.jar -secret @<remote_fs>/.agent-secret` reads it from the file.
+
+On a running worker, none of these print a secret:
+
+```bash
+ps -eo args | grep -c '[D]EEPSEEK_API_KEY='                  # 0
+ps -eo args | grep '[a]gent.jar' | grep -c -- '-secret "\?@'  # 1
+stat -c '%a %n' ~/.config/mac-k3d/worker.yaml ~/jenkins-agent/.agent-secret ~/jenkins-agent/launch-agent.sh  # 600 600 700
+```
+
+A value that went through arguments before this change (the model key, the API token) should be rotated once both workers run the new build.
 
 ## Jenkins Credentials (shared across all agents)
 

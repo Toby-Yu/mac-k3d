@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""env/egress: Harbor's egress probe, the fallback image, and how the run uses it.
+"""env/egress: Harbor's egress probe, the fallback images, and how the run uses it.
 
 A stub `docker` and a stub `harbor` package stand in for the real ones. The
-stub DockerEnvironment probes exactly like Harbor 0.22 (`docker container run`
-of the class attribute), so Harbor's own check runs through
-harbor_probe_override.py as it does in a trial.
+stub DockerEnvironment probes exactly like Harbor 0.22 (`docker container run
+--rm IMAGE sh -c SCRIPT` of the class attribute, 30 s), so Harbor's own check
+runs through harbor_probe_override.py as it does in a trial.
+
+Stub knobs: STUB_BROKEN (cannot inspect, pull or run: the build #53 store
+damage), STUB_RUN_BROKEN (present, but run exits 125: alpine:3.20 there),
+STUB_HANG (our named probe sleeps; with STUB_HANG_ONCE only the first time),
+STUB_HARBOR_FAIL (only Harbor's own probe fails), STUB_KERNEL_FAIL.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -17,12 +24,14 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 LIB = Path(__file__).resolve().parent
 ROOT = LIB.parent.parent
 STAGES = ROOT / "pipeline" / "stages"
 sys.path.insert(0, str(LIB))
 
+import harbor_egress  # noqa: E402
 from harbor_egress import FALLBACK_PROBE_IMAGE  # noqa: E402
 
 DEFAULT = "alpine:3.23.4@sha256:5b10"
@@ -33,11 +42,13 @@ ALREADY_EXISTS = (
 )
 
 DOCKER_STUB = r'''#!/usr/bin/env python3
-import os, sys
+import os, sys, time
 args = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as log:
     log.write(" ".join(args) + "\n")
-broken = set(filter(None, os.environ.get("STUB_BROKEN", "").split(",")))
+def refs(name):
+    return set(filter(None, os.environ.get(name, "").split(",")))
+broken, run_broken, hang = refs("STUB_BROKEN"), refs("STUB_RUN_BROKEN"), refs("STUB_HANG")
 ERR = os.environ["STUB_ERR"]
 if args[:2] == ["image", "inspect"]:
     ref = args[2]
@@ -49,15 +60,37 @@ if args[:1] == ["pull"]:
         sys.stderr.write(ERR + "\n")
         sys.exit(1)
     sys.exit(0)
+if args[:2] == ["container", "rm"]:
+    sys.exit(0)
 if args[:2] == ["container", "run"]:
-    if args[3] in broken:
+    at = args.index("-c")
+    ours = "--name" in args
+    ref = args[at - 1] if ours else args[at - 2]
+    if ref in broken or ref in run_broken:
         sys.stderr.write("docker: Error response from daemon: " + ERR + "\n")
         sys.exit(125)
+    if ours and ref in hang:
+        once = os.environ.get("STUB_HANG_ONCE", "")
+        if not once or not os.path.exists(once):
+            if once:
+                open(once, "w").close()
+            time.sleep(30)
+    if not ours and os.environ.get("STUB_HARBOR_FAIL"):
+        sys.exit(1)
     sys.exit(1 if os.environ.get("STUB_KERNEL_FAIL") else 0)
 if args[:1] == ["version"]:
     print("linux/amd64")
 sys.exit(0)
 '''
+
+
+def container_runs(log: Path) -> list[str]:
+    return [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.startswith("container run")]
+
+
+def harbor_runs(log: Path) -> list[str]:
+    """Probe containers Harbor itself started (ours are always named)."""
+    return [ln for ln in container_runs(log) if "--name" not in ln]
 
 HARBOR_DOCKER = f'''
 import functools, subprocess
@@ -151,6 +184,16 @@ class HarborEgressCheckTests(unittest.TestCase):
             capture_output=True, text=True, check=False, env=env,
         )
 
+    def check_fast_timeouts(self, **stub: str) -> tuple[dict, str]:
+        """check() in this process with 2 s probe timeouts, so a hanging probe costs seconds."""
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, dict(self.env, **stub), clear=True), \
+                mock.patch.object(harbor_egress, "RUN_TIMEOUT_S", 2), \
+                mock.patch.object(harbor_egress, "RETRY_TIMEOUT_S", 2), \
+                contextlib.redirect_stdout(out):
+            record = harbor_egress.check(self.out)
+        return record, out.getvalue()
+
     def probe(self) -> dict:
         return json.loads(self.out.read_text(encoding="utf-8"))
 
@@ -167,30 +210,82 @@ class HarborEgressCheckTests(unittest.TestCase):
         self.assertIn(f"OK egress sidecar {SIDECAR} present", proc.stdout)
         doc = self.probe()
         self.assertEqual((doc["image"], doc["substituted"], doc["sidecar"]), (DEFAULT, False, SIDECAR))
+        self.assertEqual([t["role"] for t in doc["tried"]], ["harbor_default"])
         self.assertEqual(self.override(), "")
-        self.assertNotIn(FALLBACK_PROBE_IMAGE, self.log.read_text(encoding="utf-8"))
+        runs = container_runs(self.log)
+        self.assertFalse(any(FALLBACK_PROBE_IMAGE in ln or SIDECAR in ln for ln in runs), runs)
+        # Harbor's own probe really ran, unpatched.
+        self.assertEqual(len(harbor_runs(self.log)), 1, runs)
 
-    def test_build_53_store_damage_switches_to_the_fallback_image(self):
+    def test_our_probe_is_named_has_no_network_and_its_own_entrypoint(self):
+        self.check()
+        ours = [ln for ln in container_runs(self.log) if "--name" in ln]
+        self.assertEqual(len(ours), 1, ours)
+        self.assertIn(f"--name {harbor_egress.PROBE_NAME_PREFIX}", ours[0])
+        self.assertIn(f"--network none --entrypoint sh {DEFAULT} -c ", ours[0])
+
+    def test_build_53_store_damage_switches_to_the_sidecar_image(self):
         proc = self.check(STUB_BROKEN=DEFAULT)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(f"WARNING: Harbor's probe image {DEFAULT} cannot run on this host", proc.stdout)
-        self.assertIn(f"using {FALLBACK_PROBE_IMAGE} for the kernel check. Network isolation is unchanged.", proc.stdout)
+        self.assertIn(f"using {SIDECAR} for the kernel check. Network isolation is unchanged.", proc.stdout)
+        self.assertIn(f"  tried Harbor's probe image {DEFAULT}: {ALREADY_EXISTS}", proc.stdout)
+        self.assertIn(f"  tried Harbor's egress sidecar {SIDECAR}: ok", proc.stdout)
         self.assertIn("Docker image store is damaged", proc.stdout)
         doc = self.probe()
         self.assertTrue(doc["substituted"])
-        self.assertEqual(doc["image"], FALLBACK_PROBE_IMAGE)
+        self.assertEqual(doc["image"], SIDECAR)
         self.assertEqual(doc["harbor_default"], DEFAULT)
         self.assertIn("unable to prepare extraction snapshot", doc["reason"])
-        self.assertEqual(self.override(), FALLBACK_PROBE_IMAGE)
-        runs = [ln for ln in self.log.read_text(encoding="utf-8").splitlines() if ln.startswith("container run")]
-        # our fallback probe, then Harbor's own check through harbor_probe_override.py
-        self.assertEqual(sum(FALLBACK_PROBE_IMAGE in ln for ln in runs), 2, runs)
+        self.assertEqual(self.override(), SIDECAR)
+        runs = container_runs(self.log)
+        self.assertEqual(sum(SIDECAR in ln for ln in runs), 1, runs)
+        # Harbor's own check reuses the answer: it starts no probe container.
+        self.assertEqual(harbor_runs(self.log), [])
+        self.assertNotIn(f"pull {SIDECAR}", self.log.read_text(encoding="utf-8"))
 
-    def test_both_images_failing_names_both_docker_errors(self):
-        proc = self.check(STUB_BROKEN=f"{DEFAULT},{FALLBACK_PROBE_IMAGE}")
+    def test_build_61_hanging_alpine_is_never_needed(self):
+        proc = self.check(STUB_BROKEN=DEFAULT, STUB_HANG=FALLBACK_PROBE_IMAGE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.probe()["image"], SIDECAR)
+        self.assertFalse(any(FALLBACK_PROBE_IMAGE in ln for ln in container_runs(self.log)))
+
+    def test_a_probe_that_times_out_is_removed_and_retried(self):
+        marker = self.root / "hung-once"
+        record, out = self.check_fast_timeouts(
+            STUB_BROKEN=DEFAULT, STUB_HANG=SIDECAR, STUB_HANG_ONCE=str(marker),
+        )
+        self.assertEqual(record["image"], SIDECAR)
+        self.assertIn(f"egress probe in {SIDECAR} timed out after 2s", out)
+        self.assertIn("retrying with 2s", out)
+        log = self.log.read_text(encoding="utf-8")
+        self.assertIn(f"container rm -f {harbor_egress.PROBE_NAME_PREFIX}", log)
+        self.assertEqual(sum(SIDECAR in ln for ln in container_runs(self.log)), 2)
+
+    def test_a_sidecar_that_hangs_twice_falls_through_to_alpine(self):
+        record, out = self.check_fast_timeouts(STUB_BROKEN=DEFAULT, STUB_HANG=SIDECAR)
+        self.assertEqual(record["image"], FALLBACK_PROBE_IMAGE)
+        self.assertEqual([t["role"] for t in record["tried"]], ["harbor_default", "sidecar", "fallback"])
+        self.assertIn("timed out after 2s", record["tried"][1]["detail"])
+        self.assertEqual(self.log.read_text(encoding="utf-8").count("container rm -f"), 2)
+
+    def test_a_broken_sidecar_falls_through_to_alpine(self):
+        proc = self.check(STUB_BROKEN=DEFAULT, STUB_RUN_BROKEN=SIDECAR)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        doc = self.probe()
+        self.assertEqual(doc["image"], FALLBACK_PROBE_IMAGE)
+        self.assertEqual([t["result"] for t in doc["tried"]], ["docker", "docker", "ok"])
+        self.assertEqual(self.override(), FALLBACK_PROBE_IMAGE)
+
+    def test_every_image_failing_names_each_docker_error(self):
+        proc = self.check(STUB_BROKEN=f"{DEFAULT},{FALLBACK_PROBE_IMAGE}", STUB_RUN_BROKEN=SIDECAR)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("Harbor cannot check egress control on this host", proc.stderr)
         self.assertIn(f"Harbor's probe image {DEFAULT}: {ALREADY_EXISTS}", proc.stderr)
+        self.assertIn(
+            f"Harbor's egress sidecar {SIDECAR}: docker: Error response from daemon: {ALREADY_EXISTS}",
+            proc.stderr,
+        )
         self.assertIn(f"fallback {FALLBACK_PROBE_IMAGE}: {ALREADY_EXISTS}", proc.stderr)
         self.assertIn("hint: this host's Docker image store is damaged", proc.stderr)
         self.assertFalse(self.out.exists())
@@ -199,13 +294,32 @@ class HarborEgressCheckTests(unittest.TestCase):
         proc = self.check(STUB_KERNEL_FAIL="1")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("CONFIG_NFT_FIB_INET", proc.stderr)
-        self.assertNotIn(FALLBACK_PROBE_IMAGE, self.log.read_text(encoding="utf-8"))
+        log = self.log.read_text(encoding="utf-8")
+        self.assertNotIn(FALLBACK_PROBE_IMAGE, log)
+        self.assertFalse(any(SIDECAR in ln for ln in container_runs(self.log)))
         self.assertFalse(self.out.exists())
+
+    def test_a_kernel_answer_in_the_sidecar_stops_before_alpine(self):
+        proc = self.check(STUB_BROKEN=DEFAULT, STUB_KERNEL_FAIL="1")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(f"the egress probe ran in {SIDECAR} but failed", proc.stderr)
+        self.assertNotIn(FALLBACK_PROBE_IMAGE, self.log.read_text(encoding="utf-8"))
+
+    def test_harbor_probe_failing_after_ours_passed_substitutes(self):
+        proc = self.check(STUB_HARBOR_FAIL="1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        doc = self.probe()
+        self.assertTrue(doc["substituted"])
+        self.assertEqual(doc["image"], SIDECAR)
+        self.assertIn("Harbor's own probe failed within its 30 s timeout", doc["reason"])
+        self.assertEqual(doc["tried"][0]["result"], "docker")
+        self.assertEqual(len(harbor_runs(self.log)), 1, "only the unpatched check starts Harbor's container")
 
     def test_missing_sidecar_after_a_fallback_stops_the_run(self):
         proc = self.check(STUB_BROKEN=DEFAULT, STUB_NO_SIDECAR="1")
         self.assertEqual(proc.returncode, 1)
         self.assertIn(f"egress sidecar {SIDECAR} is not on this host", proc.stderr)
+        self.assertTrue(any(FALLBACK_PROBE_IMAGE in ln for ln in container_runs(self.log)))
 
     def test_missing_sidecar_on_a_healthy_host_is_built_by_harbor(self):
         proc = self.check(STUB_NO_SIDECAR="1")
@@ -215,6 +329,7 @@ class HarborEgressCheckTests(unittest.TestCase):
     def test_rate_limit_gets_the_docker_login_hint(self):
         proc = self.check(
             STUB_BROKEN=f"{DEFAULT},{FALLBACK_PROBE_IMAGE}",
+            STUB_NO_SIDECAR="1",
             STUB_ERR="toomanyrequests: You have reached your pull rate limit",
         )
         self.assertEqual(proc.returncode, 1)
@@ -222,11 +337,29 @@ class HarborEgressCheckTests(unittest.TestCase):
 
 
 class ProbeOverrideTests(unittest.TestCase):
-    def run_override(self, docker_py: str, image: str | None) -> subprocess.CompletedProcess[str]:
+    def run_override(
+        self, docker_py: str, image: str | None, call_probe: bool = False, harbor_fails: bool = False,
+    ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        """(the process, the docker commands it ran) for a fresh import of the override."""
         with tempfile.TemporaryDirectory() as tmp:
-            site = fake_harbor(Path(tmp), docker_py)
-            env = dict(os.environ, PYTHONPATH=f"{site}{os.pathsep}{LIB}")
+            root = Path(tmp)
+            site = fake_harbor(root, docker_py)
+            bindir = root / "bin"
+            bindir.mkdir()
+            (bindir / "docker").write_text(DOCKER_STUB, encoding="utf-8")
+            (bindir / "docker").chmod(0o755)
+            log = root / "docker.log"
+            log.touch()
+            env = dict(
+                os.environ,
+                PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+                PYTHONPATH=f"{site}{os.pathsep}{LIB}",
+                STUB_LOG=str(log),
+                STUB_ERR=ALREADY_EXISTS,
+            )
             env.pop("MAC_K3D_EGRESS_PROBE_IMAGE", None)
+            if harbor_fails:
+                env["STUB_HARBOR_FAIL"] = "1"
             if image is not None:
                 env["MAC_K3D_EGRESS_PROBE_IMAGE"] = image
             script = (
@@ -234,28 +367,34 @@ class ProbeOverrideTests(unittest.TestCase):
                 "from harbor.environments.docker.docker import DockerEnvironment as D\n"
                 "print(getattr(D, '_EGRESS_CONTROL_KERNEL_PROBE_IMAGE', '<missing>'))\n"
             )
-            return subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+            if call_probe:
+                script += "print(D._egress_control_kernel_support())\n"
+            proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                                   check=False, env=env)
+            return proc, log.read_text(encoding="utf-8").splitlines()
 
-    def test_env_set_swaps_the_image_on_import(self):
-        proc = self.run_override(HARBOR_DOCKER, FALLBACK_PROBE_IMAGE)
+    def test_env_set_records_the_image_and_reuses_the_answer(self):
+        proc, docker = self.run_override(HARBOR_DOCKER, SIDECAR, call_probe=True, harbor_fails=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout.split(), [FALLBACK_PROBE_IMAGE])
+        self.assertEqual(proc.stdout.split(), [SIDECAR, "True"])
+        self.assertEqual(docker, [], "Harbor must start no probe container of its own")
 
     def test_env_unset_leaves_harbor_alone(self):
-        proc = self.run_override(HARBOR_DOCKER, None)
+        proc, docker = self.run_override(HARBOR_DOCKER, None, call_probe=True, harbor_fails=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout.split()[0], DEFAULT)
+        self.assertEqual(proc.stdout.split(), [DEFAULT, "False"])
         self.assertEqual(proc.stderr, "")
+        self.assertEqual(len(docker), 1)
+        self.assertTrue(docker[0].startswith(f"container run --rm {DEFAULT} sh -c"), docker)
 
     def test_a_harbor_without_the_attribute_only_warns(self):
         bare = "class DockerEnvironment:\n    pass\n"
-        proc = self.run_override(bare, FALLBACK_PROBE_IMAGE)
+        proc, _ = self.run_override(bare, FALLBACK_PROBE_IMAGE)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.split(), ["<missing>"])
-        self.assertIn("probe image left unchanged", proc.stderr)
+        self.assertIn("probe left unchanged", proc.stderr)
 
-    def test_a_cached_probe_answer_is_cleared(self):
+    def test_a_cached_false_is_replaced_by_the_measured_answer(self):
         import functools
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -272,11 +411,10 @@ class ProbeOverrideTests(unittest.TestCase):
 
                 # Harbor caches the probe's answer for the process (functools.cache).
                 D._egress_control_kernel_support = staticmethod(functools.cache(lambda: False))
-                D._egress_control_kernel_support()
-                self.assertEqual(D._egress_control_kernel_support.cache_info().currsize, 1)
+                self.assertFalse(D._egress_control_kernel_support())
                 self.assertTrue(harbor_probe_override.apply("img:1"))
                 self.assertEqual(D._EGRESS_CONTROL_KERNEL_PROBE_IMAGE, "img:1")
-                self.assertEqual(D._egress_control_kernel_support.cache_info().currsize, 0)
+                self.assertTrue(D._egress_control_kernel_support())
                 self.assertFalse(harbor_probe_override.apply(""))
             finally:
                 if prev is not None:
@@ -366,6 +504,7 @@ class EgressWiringTests(unittest.TestCase):
             return found[0].split("=", 1)[1] if found else ""
 
     def test_run_cmd_exports_the_probe_image_only_when_substituted(self):
+        self.assertEqual(self._run_cmd_env(SIDECAR, None), SIDECAR)
         self.assertEqual(self._run_cmd_env(FALLBACK_PROBE_IMAGE, None), FALLBACK_PROBE_IMAGE)
         self.assertEqual(self._run_cmd_env("", None), "")
         self.assertEqual(self._run_cmd_env("", "stale:image"), "", "a caller's leftover must not reach Harbor")

@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
 use crate::eval_catalog;
+use crate::jenkins_curl::{self, Session};
 
 pub const LOLBENCH_ONE_TASK: &str = "lolbench_one_task";
 
@@ -323,88 +323,35 @@ pub fn ensure_lolbench_one_task(
     opts: &JobOpts,
 ) -> Result<()> {
     let base = jenkins_url.trim_end_matches('/');
-    let auth = format!("{api_user}:{api_token_or_password}");
 
-    wait_for_jenkins(base, &auth, Duration::from_secs(90))?;
+    wait_for_jenkins(base, api_user, api_token_or_password, Duration::from_secs(90))?;
 
-    let cookie_file = tempfile_path("mac-k3d-job-cookies")?;
-    let crumb = fetch_crumb(base, &auth, &cookie_file);
-
-    let exists = curl_status(
-        base,
-        &auth,
-        &format!("/job/{LOLBENCH_ONE_TASK}/api/json"),
-        &crumb,
-        &cookie_file,
-    )
-    .map(|c| c == 200)
-    .unwrap_or(false);
+    let session = Session::open(base, api_user, api_token_or_password)?;
+    let exists = session.status(&format!("/job/{LOLBENCH_ONE_TASK}/api/json")) == Some(200);
 
     if exists {
         println!("Updating Jenkins job '{LOLBENCH_ONE_TASK}' Pipeline definition…");
-        match update_job_script(base, &auth, &crumb, &cookie_file, opts) {
+        match update_job_script(&session, opts) {
             Ok(()) => println!("Updated job '{LOLBENCH_ONE_TASK}'."),
             Err(err) => println!(
                 "Warning: failed to update job '{LOLBENCH_ONE_TASK}' ({err}).\n\
                  Delete the job in the UI and re-run `mac-k3d config`, or see docs/lolbench-jenkins.md."
             ),
         }
-        let _ = std::fs::remove_file(&cookie_file);
         return Ok(());
     }
 
     let xml = job_config_xml(opts);
-    let create_url = format!(
-        "{base}/createItem?name={}",
-        urlencoding_simple(LOLBENCH_ONE_TASK)
-    );
+    let create = format!("/createItem?name={}", urlencoding_simple(LOLBENCH_ONE_TASK));
     println!("Creating Jenkins job '{LOLBENCH_ONE_TASK}' on {base} …");
 
-    let mut cmd = Command::new("curl");
-    cmd.args([
-        "-sS",
-        "-b",
-        &cookie_file.display().to_string(),
-        "-c",
-        &cookie_file.display().to_string(),
-        "-u",
-        &auth,
-        "-H",
-        "Content-Type: text/xml",
-        "-X",
-        "POST",
-        &create_url,
-        "--data-binary",
-        &xml,
-        "-w",
-        "\n%{http_code}",
-    ]);
-    if let Some((field, value)) = &crumb {
-        cmd.args(["-H", &format!("{field}: {value}")]);
-    }
-
-    let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: "curl createItem lolbench_one_task".into(),
-        source: e.into(),
-    })?;
-    let _ = std::fs::remove_file(&cookie_file);
-
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let code = raw.lines().last().unwrap_or("").trim().to_string();
-    if code != "200" && code != "201" && code != "302" && code != "303" {
-        let body: String = raw
-            .lines()
-            .rev()
-            .skip(1)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
-        let snippet: String = body.chars().take(280).collect();
+    let reply = session.post_xml(&create, "text/xml", &xml)?;
+    if !reply.is(&["200", "201", "302", "303"]) {
+        let snippet: String = reply.body.chars().take(280).collect();
         println!(
-            "Warning: failed to create job '{LOLBENCH_ONE_TASK}' (HTTP {code}). {snippet}\n\
-             Create it manually — see docs/lolbench-jenkins.md."
+            "Warning: failed to create job '{LOLBENCH_ONE_TASK}' (HTTP {}). {snippet}\n\
+             Create it manually — see docs/lolbench-jenkins.md.",
+            reply.code
         );
         return Ok(());
     }
@@ -416,14 +363,8 @@ pub fn ensure_lolbench_one_task(
     Ok(())
 }
 
-fn update_job_script(
-    base: &str,
-    auth: &str,
-    crumb: &Option<(String, String)>,
-    cookie_file: &Path,
-    opts: &JobOpts,
-) -> Result<()> {
-    let xml_ok = update_job_config_xml(base, auth, crumb, cookie_file, opts).is_ok();
+fn update_job_script(session: &Session, opts: &JobOpts) -> Result<()> {
+    let xml_ok = update_job_config_xml(session, opts).is_ok();
     if xml_ok {
         return Ok(());
     }
@@ -449,28 +390,7 @@ println('updated-script')
         b64 = b64,
     );
 
-    let mut cmd = Command::new("curl");
-    cmd.args([
-        "-sS",
-        "-b",
-        &cookie_file.display().to_string(),
-        "-c",
-        &cookie_file.display().to_string(),
-        "-u",
-        auth,
-        "-X",
-        "POST",
-        &format!("{base}/scriptText"),
-        "--data-urlencode",
-        &format!("script={groovy}"),
-    ]);
-    if let Some((field, value)) = crumb {
-        cmd.args(["-H", &format!("{field}: {value}")]);
-    }
-    let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: "curl scriptText update job".into(),
-        source: e.into(),
-    })?;
+    let output = session.script_text(&groovy)?;
     let body = String::from_utf8_lossy(&output.stdout).to_string();
     if !output.status.success() || !body.contains("updated-script") {
         return Err(Error::Config(truncate(&body, 300)));
@@ -478,44 +398,11 @@ println('updated-script')
     Ok(())
 }
 
-fn update_job_config_xml(
-    base: &str,
-    auth: &str,
-    crumb: &Option<(String, String)>,
-    cookie_file: &Path,
-    opts: &JobOpts,
-) -> Result<()> {
+fn update_job_config_xml(session: &Session, opts: &JobOpts) -> Result<()> {
     let xml = job_config_xml(opts);
-    let mut cmd = Command::new("curl");
-    cmd.args([
-        "-sS",
-        "-b",
-        &cookie_file.display().to_string(),
-        "-c",
-        &cookie_file.display().to_string(),
-        "-u",
-        auth,
-        "-H",
-        "Content-Type: text/xml",
-        "-X",
-        "POST",
-        &format!("{base}/job/{LOLBENCH_ONE_TASK}/config.xml"),
-        "--data-binary",
-        &xml,
-        "-w",
-        "\n%{http_code}",
-    ]);
-    if let Some((field, value)) = crumb {
-        cmd.args(["-H", &format!("{field}: {value}")]);
-    }
-    let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: "curl job config.xml".into(),
-        source: e.into(),
-    })?;
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let code = raw.lines().last().unwrap_or("").trim().to_string();
-    if code != "200" && code != "201" && code != "204" {
-        return Err(Error::Config(format!("config.xml HTTP {code}")));
+    let reply = session.post_xml(&format!("/job/{LOLBENCH_ONE_TASK}/config.xml"), "text/xml", &xml)?;
+    if !reply.is(&["200", "201", "204"]) {
+        return Err(Error::Config(format!("config.xml HTTP {}", reply.code)));
     }
     Ok(())
 }
@@ -576,28 +463,10 @@ pub async fn ensure_lolbench_one_task_from_cluster(
     ensure_lolbench_one_task(&url, "admin", &password, &opts)
 }
 
-fn wait_for_jenkins(base: &str, auth: &str, timeout: Duration) -> Result<()> {
+fn wait_for_jenkins(base: &str, user: &str, token: &str, timeout: Duration) -> Result<()> {
     let start = std::time::Instant::now();
     loop {
-        let cookie = tempfile_path("mac-k3d-job-wait")?;
-        let ok = Command::new("curl")
-            .args([
-                "-fsS",
-                "-o",
-                "/dev/null",
-                "-u",
-                auth,
-                "-b",
-                &cookie.display().to_string(),
-                "-c",
-                &cookie.display().to_string(),
-                &format!("{base}/api/json"),
-            ])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        let _ = std::fs::remove_file(&cookie);
-        if ok {
+        if jenkins_curl::reachable(base, user, token) {
             return Ok(());
         }
         if start.elapsed() >= timeout {
@@ -1468,78 +1337,6 @@ fn jenkinsfile(opts: &JobOpts) -> String {
     one_task_jenkinsfile("lolbench", opts)
 }
 
-fn tempfile_path(prefix: &str) -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
-    std::fs::File::create(&path).map_err(|e| Error::Config(e.to_string()))?;
-    Ok(path)
-}
-
-fn fetch_crumb(base: &str, auth: &str, cookie_file: &Path) -> Option<(String, String)> {
-    let output = Command::new("curl")
-        .args([
-            "-fsS",
-            "-b",
-            &cookie_file.display().to_string(),
-            "-c",
-            &cookie_file.display().to_string(),
-            "-u",
-            auth,
-            &format!("{base}/crumbIssuer/api/json"),
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let field = extract_json_str(&text, "crumbRequestField")?;
-    let crumb = extract_json_str(&text, "crumb")?;
-    Some((field, crumb))
-}
-
-fn curl_status(
-    base: &str,
-    auth: &str,
-    path: &str,
-    crumb: &Option<(String, String)>,
-    cookie_file: &Path,
-) -> Option<i32> {
-    let mut args = vec![
-        "-sS".into(),
-        "-o".into(),
-        "/dev/null".into(),
-        "-w".into(),
-        "%{http_code}".into(),
-        "-b".into(),
-        cookie_file.display().to_string(),
-        "-c".into(),
-        cookie_file.display().to_string(),
-        "-u".into(),
-        auth.to_string(),
-        format!("{base}{path}"),
-    ];
-    if let Some((field, value)) = crumb {
-        args.push("-H".into());
-        args.push(format!("{field}: {value}"));
-    }
-    let output = Command::new("curl").args(&args).output().ok()?;
-    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
-}
-
-fn extract_json_str(json: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\"");
-    let idx = json.find(&needle)?;
-    let after = &json[idx + needle.len()..];
-    let colon = after.find(':')?;
-    let rest = after[colon + 1..].trim_start();
-    if !rest.starts_with('"') {
-        return None;
-    }
-    let rest = &rest[1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
 fn urlencoding_simple(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -1585,47 +1382,18 @@ fn delete_job_if_present(
     api_user: &str,
     api_token_or_password: &str,
 ) -> Result<()> {
-    let base = jenkins_url.trim_end_matches('/');
-    let auth = format!("{api_user}:{api_token_or_password}");
-    let cookie_file = tempfile_path(&format!("mac-k3d-{job_name}-cookies"))?;
-    let crumb = fetch_crumb(base, &auth, &cookie_file);
-    let exists = curl_status(base, &auth, &format!("/job/{job_name}/api/json"), &crumb, &cookie_file)
-        .map(|c| c == 200)
-        .unwrap_or(false);
-    if !exists {
-        let _ = std::fs::remove_file(&cookie_file);
+    let session = Session::open(jenkins_url, api_user, api_token_or_password)?;
+    if session.status(&format!("/job/{job_name}/api/json")) != Some(200) {
         return Ok(());
     }
-    let mut cmd = Command::new("curl");
-    cmd.args([
-        "-sS",
-        "-o",
-        "/dev/null",
-        "-b",
-        &cookie_file.display().to_string(),
-        "-c",
-        &cookie_file.display().to_string(),
-        "-u",
-        &auth,
-        "-X",
-        "POST",
-        &format!("{base}/job/{job_name}/doDelete"),
-        "-w",
-        "%{http_code}",
-    ]);
-    if let Some((field, value)) = &crumb {
-        cmd.args(["-H", &format!("{field}: {value}")]);
-    }
-    let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: format!("curl doDelete {job_name}"),
-        source: e.into(),
-    })?;
-    let _ = std::fs::remove_file(&cookie_file);
-    let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if code == "200" || code == "302" || code == "303" {
+    let reply = session.post(&format!("/job/{job_name}/doDelete"))?;
+    if reply.is(&["200", "302", "303"]) {
         println!("Deleted retired job '{job_name}'.");
     } else {
-        println!("Warning: could not delete retired job '{job_name}' (HTTP {code}); delete it in the UI.");
+        println!(
+            "Warning: could not delete retired job '{job_name}' (HTTP {}); delete it in the UI.",
+            reply.code
+        );
     }
     Ok(())
 }
@@ -1658,96 +1426,28 @@ fn ensure_named_one_task_xml(
     api_token_or_password: &str,
 ) -> Result<()> {
     let base = jenkins_url.trim_end_matches('/');
-    let auth = format!("{api_user}:{api_token_or_password}");
 
-    wait_for_jenkins(base, &auth, Duration::from_secs(90))?;
+    wait_for_jenkins(base, api_user, api_token_or_password, Duration::from_secs(90))?;
 
-    let cookie_file = tempfile_path(&format!("mac-k3d-{job_name}-cookies"))?;
-    let crumb = fetch_crumb(base, &auth, &cookie_file);
-
-    let exists = curl_status(
-        base,
-        &auth,
-        &format!("/job/{job_name}/api/json"),
-        &crumb,
-        &cookie_file,
-    )
-    .map(|c| c == 200)
-    .unwrap_or(false);
+    let session = Session::open(base, api_user, api_token_or_password)?;
+    let exists = session.status(&format!("/job/{job_name}/api/json")) == Some(200);
 
     if exists {
         println!("Updating Jenkins job '{job_name}'…");
-        let post_url = format!("{base}/job/{job_name}/config.xml");
-        let mut cmd = Command::new("curl");
-        cmd.args([
-            "-sS",
-            "-b",
-            &cookie_file.display().to_string(),
-            "-c",
-            &cookie_file.display().to_string(),
-            "-u",
-            &auth,
-            "-H",
-            "Content-Type: text/xml",
-            "-X",
-            "POST",
-            &post_url,
-            "--data-binary",
-            xml,
-            "-w",
-            "\n%{http_code}",
-        ]);
-        if let Some((field, value)) = &crumb {
-            cmd.args(["-H", &format!("{field}: {value}")]);
-        }
-        let output = cmd.output().map_err(|e| Error::CommandFailed {
-            cmd: format!("curl config.xml {job_name}"),
-            source: e.into(),
-        })?;
-        let _ = std::fs::remove_file(&cookie_file);
-        let raw = String::from_utf8_lossy(&output.stdout);
-        let code = raw.lines().last().unwrap_or("").trim().to_string();
-        if code != "200" && code != "201" {
-            println!("Warning: failed to update '{job_name}' (HTTP {code}).");
-        } else {
+        let reply = session.post_xml(&format!("/job/{job_name}/config.xml"), "text/xml", xml)?;
+        if reply.is(&["200", "201"]) {
             println!("Updated job '{job_name}'.");
+        } else {
+            println!("Warning: failed to update '{job_name}' (HTTP {}).", reply.code);
         }
         return Ok(());
     }
 
-    let create_url = format!("{base}/createItem?name={}", urlencoding_simple(job_name));
+    let create = format!("/createItem?name={}", urlencoding_simple(job_name));
     println!("Creating Jenkins job '{job_name}' on {base} …");
-    let mut cmd = Command::new("curl");
-    cmd.args([
-        "-sS",
-        "-b",
-        &cookie_file.display().to_string(),
-        "-c",
-        &cookie_file.display().to_string(),
-        "-u",
-        &auth,
-        "-H",
-        "Content-Type: text/xml",
-        "-X",
-        "POST",
-        &create_url,
-        "--data-binary",
-        xml,
-        "-w",
-        "\n%{http_code}",
-    ]);
-    if let Some((field, value)) = &crumb {
-        cmd.args(["-H", &format!("{field}: {value}")]);
-    }
-    let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: format!("curl createItem {job_name}"),
-        source: e.into(),
-    })?;
-    let _ = std::fs::remove_file(&cookie_file);
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let code = raw.lines().last().unwrap_or("").trim().to_string();
-    if code != "200" && code != "201" && code != "302" && code != "303" {
-        println!("Warning: failed to create '{job_name}' (HTTP {code}).");
+    let reply = session.post_xml(&create, "text/xml", xml)?;
+    if !reply.is(&["200", "201", "302", "303"]) {
+        println!("Warning: failed to create '{job_name}' (HTTP {}).", reply.code);
         return Ok(());
     }
     println!(

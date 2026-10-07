@@ -3726,17 +3726,16 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertIn("harbor run", line)
             self.assertIn('"read_only": true', line)
             self.assertIn('"target": "/opt/icode-host"', line)
-            self.assertIn("DEEPSEEK_API_KEY=***", line)
+            # The key reaches Harbor only through --env-file, never on its command line.
+            self.assertNotIn("DEEPSEEK_API_KEY", line)
+            self.assertIn(f"--env-file {work / '.harbor-env'}", line)
             tokens = line.split()
             hosts = [tokens[i + 1] for i, tok in enumerate(tokens) if tok == "--allow-agent-host"]
             self.assertEqual(hosts, ["api.deepseek.com", "api.deepseek.ai"])
             self.assertNotIn("GITCODE_TOKEN", output)
             self.assertNotIn(self.SENTINEL_TOKEN, output)
             self.assertNotIn(self.SENTINEL_KEY, output)
-            harbor_env = (work / ".harbor-env").read_text(encoding="utf-8")
-            self.assertNotIn("GITCODE_TOKEN", harbor_env)
-            self.assertNotIn(self.SENTINEL_TOKEN, harbor_env)
-            self.assertIn("DEEPSEEK_API_KEY=", harbor_env)
+            self.assertFalse((work / ".harbor-env").exists(), "the step removes its env file on exit")
             leak = json.loads((work / "anticheat_leakscan.json").read_text(encoding="utf-8"))
             self.assertEqual(leak["hit_tasks"], [])
             self.assertEqual(leak["tasks"]["alpha"]["status"], "too_small")
@@ -3750,6 +3749,34 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertEqual(isolation["network_allowlist"]["agent_hosts"], ["api.deepseek.com", "api.deepseek.ai"])
         stage = (ROOT / "pipeline" / "stages" / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
         self.assertIn("unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT", stage)
+
+    def test_harbor_env_lives_only_while_the_step_runs(self):
+        script = (
+            "set -euo pipefail\n"
+            'source "$1"\n'
+            'HARBOR_ENV="$2"\n'
+            "write_harbor_env\n"
+            'ls -l "$HARBOR_ENV" | cut -c1-10\n'
+            'grep -c "^DEEPSEEK_API_KEY=" "$HARBOR_ENV"\n'
+            '[ "$3" = ok ] || false\n'
+        )
+        harbor_cmd = ROOT / "pipeline" / "stages" / "evaluate" / "harbor_cmd.sh"
+        for how, rc in (("ok", 0), ("fail", 1)):
+            with tempfile.TemporaryDirectory() as tmp:
+                env_file = Path(tmp) / ".harbor-env"
+                env = dict(os.environ, DEEPSEEK_API_KEY=self.SENTINEL_KEY)
+                for key in ("DEEPSEEK_MODEL", "ICODE_MODEL", "ICODE_API_BASE", "ICODE_PROVIDER",
+                            "ICODE_REASONING_EFFORT", "ICODE_MAX_TOKENS", "ICODE_MAX_ITERATIONS"):
+                    env[key] = "x"
+                proc = subprocess.run(
+                    ["bash", "-c", script, "_", str(harbor_cmd), str(env_file), how],
+                    capture_output=True, text=True, check=False, env=env,
+                )
+                self.assertEqual(proc.returncode, rc, proc.stderr)
+                self.assertEqual(proc.stdout.split(), ["-rw-------", "1"], proc.stderr)
+                self.assertFalse(env_file.exists(), f"{how}: .harbor-env must not outlive the step")
+        env_sh = (STAGES / "env.sh").read_text(encoding="utf-8")
+        self.assertIn('rm -f "$WORKDIR/.harbor-env"', env_sh)
 
     def test_lolbench_image_of_another_arch_is_rebuilt(self):
         cases = (
@@ -3857,7 +3884,7 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertTrue(icode and canary, output)
             self.assertIn("canary_harbor_agent:CanaryAgent", canary)
             self.assertIn("--disable-verification", canary)
-            self.assertIn("DEEPSEEK_API_KEY=***", canary)
+            self.assertFalse(any("DEEPSEEK_API_KEY" in tok for tok in canary), canary)
             self.assertNotIn(self.SENTINEL_KEY, output)
             spec_arg = canary[canary.index("--ak") + 1]
             self.assertTrue(spec_arg.startswith("spec="), spec_arg)
