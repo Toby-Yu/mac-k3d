@@ -393,6 +393,8 @@ def rescore(run: Path, harbor_runs: Path | None = None, tasks_dir: Path | None =
     ctx = Context(suite, tasks_dir)
     overrides = load_overrides(run / "anticheat_overrides.json")
     n_rollouts = int(artifact.get("n_rollouts") or 1)
+    params = (artifact.get("eval_protocol") or {}).get("model_params") or {}
+    max_tokens = params.get("max_tokens") if isinstance(params.get("max_tokens"), int) else None
     ids = [ln.strip() for ln in (run / "tasks.txt").read_text(encoding="utf-8").splitlines() if ln.strip()]
     docs: list[dict] = []
     task_rows: list[tuple[str, list[dict]]] = []
@@ -405,7 +407,7 @@ def rescore(run: Path, harbor_runs: Path | None = None, tasks_dir: Path | None =
             doc = apply_override(evaluate(ctx, tid, n, attempt, transcript_root=source), overrides)
             docs.append(doc)
             reward = attempt / "verifier" / "reward.json"
-            row = _attempt_from_trial(attempt, reward if reward.is_file() else None)
+            row = _attempt_from_trial(attempt, reward if reward.is_file() else None, max_tokens)
             row["anticheat"] = doc["verdict"]
             rows.append(row)
         task_rows.append((tid, rows))

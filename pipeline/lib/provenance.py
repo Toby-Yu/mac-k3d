@@ -316,6 +316,8 @@ def model_inputs() -> dict:
         "api_base": os.environ.get("ICODE_API_BASE") or "https://api.deepseek.com/v1",
         "provider": os.environ.get("ICODE_PROVIDER") or "DeepSeek",
         "reasoning_effort": os.environ.get("ICODE_REASONING_EFFORT") or "high",
+        "max_tokens": _env_int("ICODE_MAX_TOKENS"),
+        "max_iterations": _env_int("ICODE_MAX_ITERATIONS"),
         "cpu_lock_qty": _env_int("CPU_LOCK_QTY"),
         "concurrency": _env_int("EVAL_SLOTS"),
         "cpus_each": cpu_count(os.environ.get("EVAL_CPUS_EACH")) or 0,
@@ -667,7 +669,69 @@ def provenance_view(protocol: dict | None) -> dict | None:
         "user": str(requester.get("user") or ""),
         "build_url": str(requester.get("build_url") or ""),
         "tasks": rows,
+        "shards": shard_views(protocol.get("shards")),
+        "model_params_status": str(protocol.get("model_params_status") or ""),
+        "model_params_mismatch": (
+            protocol.get("model_params_mismatch") if isinstance(protocol.get("model_params_mismatch"), dict) else {}
+        ),
     }
+
+
+def shard_views(shards: object) -> list[dict]:
+    """One Worker line's fields per shard of an aggregated run."""
+    out = []
+    for item in shards if isinstance(shards, list) else []:
+        if not isinstance(item, dict):
+            continue
+        worker = item.get("worker") if isinstance(item.get("worker"), dict) else {}
+        res = item.get("resources") if isinstance(item.get("resources"), dict) else {}
+        params = item.get("model_params") if isinstance(item.get("model_params"), dict) else {}
+        builds = [str(b) for b in item.get("builds") or []]
+        label = f"shard {item.get('shard')}" + (f" {', '.join(builds)}" if builds else "")
+        out.append(
+            {
+                "label": label,
+                "node": str(worker.get("node") or ""),
+                "nproc": worker.get("nproc"),
+                "memory_kb": worker.get("memory_kb"),
+                "docker_version": str(worker.get("docker_version") or ""),
+                "kernel": str(worker.get("kernel") or ""),
+                "cpu_model": str(worker.get("cpu_model") or ""),
+                "concurrency": res.get("concurrency"),
+                "cpus_each": res.get("cpus_each"),
+                "max_tokens": params.get("max_tokens"),
+                "max_iterations": params.get("max_iterations"),
+                "icode_version": str(item.get("icode_version") or ""),
+            }
+        )
+    return out
+
+
+SHARD_WORKER_FIELDS = (
+    ("node", "node"),
+    ("nproc", "nproc"),
+    ("memory_kb", "memory_kb"),
+    ("docker_version", "docker"),
+    ("kernel", "kernel"),
+    ("cpu_model", "cpu"),
+    ("concurrency", "concurrency"),
+    ("cpus_each", "cpus_each"),
+    ("max_tokens", "max_tokens"),
+    ("max_iterations", "max_iterations"),
+    ("icode_version", "iCode"),
+)
+
+
+def shard_worker_lines(view: dict) -> list[str]:
+    """One plain-text `Worker (shard N ...)` line per shard, then a line when the shards differ."""
+    lines = []
+    for shard in view.get("shards") or []:
+        fields = " · ".join(f"{name} {_cell(shard[key])}" for key, name in SHARD_WORKER_FIELDS)
+        lines.append(f"Worker ({shard['label']}): {fields}")
+    if view.get("model_params_status") == "mixed":
+        detail = "; ".join(f"{k} {v}" for k, v in view.get("model_params_mismatch", {}).items())
+        lines.append(f"Shards differ: {detail or 'model params'}. Not one measurement of one iCode setup.")
+    return lines
 
 
 def provenance_markdown(protocol: dict | None) -> list[str]:
@@ -690,15 +754,18 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
     if view["pipeline_hash"]:
         pipeline += f" hash `{_cell(view['pipeline_hash'])}`"
     lines.append(pipeline)
-    lines.append(
-        "- Worker: "
-        f"node `{_cell(view['node'])}` · "
-        f"nproc `{_cell(view['nproc'])}` · "
-        f"memory_kb `{_cell(view['memory_kb'])}` · "
-        f"docker `{_cell(view['docker_version'])}` · "
-        f"kernel `{_cell(view['kernel'])}` · "
-        f"cpu `{_cell(view['cpu_model'])}`"
-    )
+    if view["shards"]:
+        lines.extend(f"- {line}" for line in shard_worker_lines(view))
+    else:
+        lines.append(
+            "- Worker: "
+            f"node `{_cell(view['node'])}` · "
+            f"nproc `{_cell(view['nproc'])}` · "
+            f"memory_kb `{_cell(view['memory_kb'])}` · "
+            f"docker `{_cell(view['docker_version'])}` · "
+            f"kernel `{_cell(view['kernel'])}` · "
+            f"cpu `{_cell(view['cpu_model'])}`"
+        )
     lines.append(f"- Requester: `{_cell(view['user'])}` `{_cell(view['build_url'])}`")
     for line in isolation_lines(view["isolation"]):
         lines.append(f"- {line}")

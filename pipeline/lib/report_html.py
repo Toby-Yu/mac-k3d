@@ -337,8 +337,21 @@ def _minute_tick(value: float) -> str:
     return f"{value:.1f}"
 
 
+def _empty_patch_html(arm: dict) -> str:
+    """The empty-patch section; empty for an artifact written before rollouts recorded it."""
+    from eval_metrics import EMPTY_PATCH_HEADERS, EMPTY_PATCH_INTRO, EMPTY_PATCH_TITLE
+    from render_report import empty_patch_cells
+
+    items = arm.get("empty_patches")
+    if not isinstance(items, list):
+        return ""
+    rows = [empty_patch_cells(item) for item in items if isinstance(item, dict)]
+    body = _scroll(_table(EMPTY_PATCH_HEADERS, rows, "unscored"), len(rows)) if rows else "<p>None</p>"
+    return f"<h2>{_esc(EMPTY_PATCH_TITLE)}</h2>\n<p class=\"source\">{_esc(EMPTY_PATCH_INTRO)}</p>\n{body}"
+
+
 def _provenance_html(doc: dict) -> str:
-    from provenance import isolation_lines, provenance_view
+    from provenance import isolation_lines, provenance_view, shard_worker_lines
 
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
     view = provenance_view(protocol)
@@ -363,13 +376,16 @@ def _provenance_html(doc: dict) -> str:
             f" applied {_esc(cell(view['overlay_applied']))}"
         ),
         f"Pipeline {_esc(cell(view['commit']))} dirty {_esc(cell(view['dirty']))}",
-        (
+    ]
+    if view["shards"]:
+        items.extend(_esc(line) for line in shard_worker_lines(view))
+    else:
+        items.append(
             f"Worker node {_esc(cell(view['node']))}, nproc {_esc(cell(view['nproc']))},"
             f" memory_kb {_esc(cell(view['memory_kb']))}, docker {_esc(cell(view['docker_version']))},"
             f" kernel {_esc(cell(view['kernel']))}, cpu {_esc(cell(view['cpu_model']))}"
-        ),
-        f"Requester {_esc(cell(view['user']))} {_esc(cell(view['build_url']))}",
-    ]
+        )
+    items.append(f"Requester {_esc(cell(view['user']))} {_esc(cell(view['build_url']))}")
     items.extend(_esc(line) for line in isolation_lines(view["isolation"]))
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
     release = icode.get("release") if isinstance(icode.get("release"), dict) else None
@@ -486,8 +502,21 @@ def report_html(doc: dict) -> str:
             f"iCode {icode.get('mode') or '-'} {version}. "
             f"Provider {params.get('provider') or '-'}. "
             f"reasoning_effort {params.get('reasoning_effort') or '-'}. "
-            f"thinking.type {thinking.get('type') or '-'}."
+            f"thinking.type {thinking.get('type') or '-'}. "
+            f"max_tokens {params.get('max_tokens') or '-'}. "
+            f"max_iterations {params.get('max_iterations') or '-'}."
         )
+    empty_items = arm.get("empty_patches")
+    if isinstance(empty_items, list):
+        from eval_metrics import empty_patch_cause_counts
+
+        counts = empty_patch_cause_counts([item for item in empty_items if isinstance(item, dict)])
+        clauses.append(
+            f"Empty model.patch {len(empty_items)} of {n_tasks * n_rollouts} rollouts "
+            f"(infra {counts['infra']}, cut_off {counts['cut_off']}, no_edit {counts['no_edit']})."
+        )
+    if isinstance(arm.get("cut_off_rollouts"), int) and not isinstance(arm.get("cut_off_rollouts"), bool):
+        clauses.append(f"Cut-off replies (last reply hit max_tokens) {arm['cut_off_rollouts']}.")
     anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else None
     if anticheat and anticheat.get("status") == "ok":
         counts = anticheat.get("counts") if isinstance(anticheat.get("counts"), dict) else {}
@@ -714,6 +743,7 @@ def report_html(doc: dict) -> str:
             + _scroll(_table(["Task", "unscored/n", "notes"], u_rows, "unscored"), len(u_rows))
         )
 
+    empty_html = _empty_patch_html(arm)
     provenance_html = _provenance_html(doc)
     chip_html = "".join(f'<span class="chip">{_esc(chip)}</span>' for chip in chips)
     kpi_html = "".join(
@@ -814,6 +844,7 @@ table.outcomes th, table.outcomes td {{ white-space: nowrap; }}
 <div class="card"><h3>Lowest pass fraction</h3>
 {_scroll(task_table(low, ["Task", "c/n"], "weak"), len(low))}
 </div>
+{empty_html}
 {unscored_html}
 </main>
 </body>

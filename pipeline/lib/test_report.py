@@ -1158,6 +1158,12 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
         self.assertIn('cmd+=(--ae "ICODE_REASONING_EFFORT=${ICODE_REASONING_EFFORT}")', text)
         self.assertIn("ICODE_PROVIDER=DeepSeek", text)
         self.assertIn('ICODE_REASONING_EFFORT:-high', text)
+        self.assertIn('ICODE_MAX_TOKENS="${ICODE_MAX_TOKENS:-65536}"', text)
+        self.assertIn('ICODE_MAX_ITERATIONS="${ICODE_MAX_ITERATIONS:-500}"', text)
+        self.assertIn('cmd+=(--ae "ICODE_MAX_TOKENS=${ICODE_MAX_TOKENS}")', text)
+        self.assertIn('cmd+=(--ae "ICODE_MAX_ITERATIONS=${ICODE_MAX_ITERATIONS}")', text)
+        self.assertIn('printf \'ICODE_MAX_TOKENS=%s\\n\' "${ICODE_MAX_TOKENS}"', text)
+        self.assertIn('printf \'ICODE_MAX_ITERATIONS=%s\\n\' "${ICODE_MAX_ITERATIONS}"', text)
         self.assertIn('printf \'ICODE_MODEL=%s\\n\' "${ICODE_MODEL}"', text)
         self.assertFalse((LIB / "icode_pier_agent.py").exists())
         self.assertFalse((LIB / "pier-agent-icode").exists())
@@ -1213,6 +1219,13 @@ exit 0
         self.assertIn('cmd+=(--ae "ICODE_PROVIDER=${ICODE_PROVIDER}")', stage)
         self.assertIn('cmd+=(--ae "ICODE_API_BASE=${ICODE_API_BASE}")', stage)
         self.assertIn('cmd+=(--ae "ICODE_REASONING_EFFORT=${ICODE_REASONING_EFFORT}")', stage)
+        self.assertIn('cmd+=(--ae "ICODE_MAX_TOKENS=${ICODE_MAX_TOKENS}")', stage)
+        self.assertIn('cmd+=(--ae "ICODE_MAX_ITERATIONS=${ICODE_MAX_ITERATIONS}")', stage)
+        self.assertIn('env.setdefault("ICODE_MAX_TOKENS", MAX_TOKENS)', agent)
+        self.assertIn('env.setdefault("ICODE_MAX_ITERATIONS", MAX_ITERATIONS)', agent)
+        # Same defaults as _common.sh, for a Harbor run started without it.
+        self.assertIn('MAX_TOKENS = "65536"', agent)
+        self.assertIn('MAX_ITERATIONS = "500"', agent)
         self.assertIn('BENCHMARK:-deepswe}" = "lolbench"', stage)
         self.assertLess(stage.find("= \"lolbench\""), stage.find("cmd=(harbor run)"))
 
@@ -1834,6 +1847,8 @@ class EvalReportTests(unittest.TestCase):
                         "api_base": "https://api.deepseek.com/v1",
                         "provider": "DeepSeek",
                         "reasoning_effort": "high",
+                        "max_tokens": 65536,
+                        "max_iterations": 500,
                         "cpu_lock_qty": 8,
                         "concurrency": 4,
                         "cpus_each": 2,
@@ -1853,6 +1868,8 @@ class EvalReportTests(unittest.TestCase):
             self.assertEqual(protocol["model_params"]["provider"], "DeepSeek")
             self.assertEqual(protocol["model_params"]["reasoning_effort"], "high")
             self.assertEqual(protocol["model_params"]["thinking"]["type"], "enabled")
+            self.assertEqual(protocol["model_params"]["max_tokens"], 65536)
+            self.assertEqual(protocol["model_params"]["max_iterations"], 500)
             self.assertEqual(protocol["resources"]["concurrency"], 4)
             # Declared, not CPU_LOCK_QTY / slots.
             self.assertEqual(protocol["resources"]["cpus_each"], 2)

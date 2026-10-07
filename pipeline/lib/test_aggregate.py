@@ -46,7 +46,11 @@ def write_trial(job: Path, task: str, attempt: int, reward: float, patch_bytes: 
 
 
 def make_shard(
-    root: Path, build: str, tasks: dict[str, list[float]], commit: str = "84c66ededd24"
+    root: Path,
+    build: str,
+    tasks: dict[str, list[float]],
+    commit: str = "84c66ededd24",
+    inputs: dict | None = None,
 ) -> Path:
     """One shard's archived ``eval-runs`` tree, as copyArtifacts would leave it."""
     shard = root / build / "eval-runs"
@@ -59,7 +63,12 @@ def make_shard(
     pipeline = {"source": "binary", "commit": commit, "dirty": False, "pipeline_hash": f"hash-{commit}"}
     (shard / "eval_protocol_inputs.json").write_text(
         json.dumps(
-            {"model": "deepseek-flash", "api_base": "https://api.deepseek.com/v1", "pipeline": pipeline}
+            {
+                "model": "deepseek-flash",
+                "api_base": "https://api.deepseek.com/v1",
+                "pipeline": pipeline,
+                **(inputs or {}),
+            }
         ),
         encoding="utf-8",
     )
@@ -140,7 +149,7 @@ class MergeTests(unittest.TestCase):
             builds = sorted(p.name for p in (merged["harness"] / "harbor_runs").iterdir())
             # Prefixed per shard, so two workers' builds cannot collide.
             self.assertEqual(builds, ["shard1-101", "shard2-102"])
-            self.assertEqual(merged["protocol"]["model"], "deepseek-flash")
+            self.assertEqual(merged["protocol"]["model_params"]["model"], "deepseek-flash")
             self.assertEqual(merged["anticheat"]["attempts"], 4)
             self.assertEqual(merged["anticheat"]["counts"]["clean"], 2)
 
@@ -334,6 +343,83 @@ class CliTests(unittest.TestCase):
             root = Path(tmp)
             self.assertEqual(self.run_main(root, root / "out"), 1)
 
+    def test_every_shard_keeps_its_own_worker_and_model_params(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for build, node in (("101", "mac-cloud"), ("102", "mac-home")):
+                make_shard(
+                    root,
+                    build,
+                    {f"task{build}": [1.0]},
+                    inputs={
+                        "provider": "DeepSeek",
+                        "reasoning_effort": "high",
+                        "max_tokens": 65536,
+                        "max_iterations": 500,
+                        "concurrency": 2,
+                        "cpus_each": 2,
+                        "worker": {"node": node, "nproc": 16},
+                        "images": {f"task{build}": {"id": f"sha256:{build}"}},
+                    },
+                )
+            out = root / "aggregate"
+            self.assertEqual(self.run_main(root, out, rollouts=1), 0)
+            doc = json.loads((out / "artifact.json").read_text(encoding="utf-8"))
+            protocol = doc["eval_protocol"]
+            self.assertEqual(protocol["model_params_status"], "same")
+            self.assertEqual([s["worker"]["node"] for s in protocol["shards"]], ["mac-cloud", "mac-home"])
+            self.assertEqual([s["builds"] for s in protocol["shards"]], [["101"], ["102"]])
+            self.assertEqual(protocol["model_params"]["max_tokens"], 65536)
+            # Both shards' image pins, not only the first shard's.
+            self.assertEqual(sorted(protocol["images"]), ["task101", "task102"])
+            md = (out / "summary.md").read_text(encoding="utf-8")
+            self.assertIn("- Worker (shard 1 101): node mac-cloud", md)
+            self.assertIn("- Worker (shard 2 102): node mac-home", md)
+            self.assertIn("max_tokens `65536` · max_iterations `500`", md)
+            page = (out / "report.html").read_text(encoding="utf-8")
+            self.assertIn("Worker (shard 2 102): node mac-home", page)
+
+    def test_shards_with_different_max_tokens_are_marked_mixed(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_shard(root, "101", {"alpha": [1.0]}, inputs={"max_tokens": 65536, "worker": {"node": "a"}})
+            make_shard(root, "102", {"beta": [1.0]}, inputs={"max_tokens": 8192, "worker": {"node": "b"}})
+            out = root / "aggregate"
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(self.run_main(root, out, rollouts=1), 0)
+            doc = json.loads((out / "artifact.json").read_text(encoding="utf-8"))
+            self.assertEqual(doc["eval_protocol"]["model_params_status"], "mixed")
+            self.assertEqual(doc["eval_protocol"]["model_params_mismatch"], {"max_tokens": [8192, 65536]})
+            self.assertIn("WARNING: shards ran different model params or iCode (max_tokens [8192, 65536])", err.getvalue())
+            md = (out / "summary.md").read_text(encoding="utf-8")
+            self.assertIn("- Shards differ: max_tokens [8192, 65536]. Not one measurement of one iCode setup.", md)
+
+    def test_a_shards_own_report_supplies_the_icode_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shard = make_shard(root, "101", {"alpha": [1.0]})
+            report = shard / "output" / "deepswe" / "101-20261007T000000Z"
+            report.mkdir(parents=True)
+            own = {
+                "icode": {"mode": "git", "version": "eea9d66"},
+                "model_params": {"model": "deepseek-flash", "provider": "DeepSeek", "max_tokens": 65536},
+                "resources": {"concurrency": 2, "cpus_each": 2},
+                "worker": {"node": "mac-cloud"},
+            }
+            (report / "artifact.json").write_text(
+                json.dumps({"run_id": "101", "eval_protocol": own}), encoding="utf-8"
+            )
+            out = root / "aggregate"
+            self.assertEqual(self.run_main(root, out, rollouts=1), 0)
+            doc = json.loads((out / "artifact.json").read_text(encoding="utf-8"))
+            self.assertEqual(doc["eval_protocol"]["icode"]["version"], "eea9d66")
+            self.assertEqual(doc["eval_protocol"]["shards"][0]["icode_version"], "eea9d66")
+            self.assertIn("- iCode version: `eea9d66`", (out / "summary.md").read_text(encoding="utf-8"))
+
 
 class EmptyPatchP2PTests(unittest.TestCase):
     def test_a_trial_that_changed_nothing_does_not_count_as_broken_p2p(self):
@@ -368,8 +454,30 @@ class EmptyPatchP2PTests(unittest.TestCase):
             self.assertIsNone(rates["p2p"])
             self.assertIsNone(rates["p2p_pass"])
             self.assertIsNone(rates["p2p_total"])
+            self.assertIsNone(rates["partial"])
+            # What the grader said is kept for the report, outside the averages.
+            self.assertEqual((rates["grader_p2p_pass"], rates["grader_p2p_total"]), (0, 52))
             # F2P still counts: the agent genuinely did not fix the bug.
             self.assertEqual(rates["f2p"], 0.0)
+
+    def test_deepswe_passes_the_base_repo_and_that_is_kept_as_the_graders_count(self):
+        """DeepSWE runs the untouched base's tests for an empty patch, so they pass (1/1)."""
+        from score_results import rates_for_trial
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trial = Path(tmp) / "trial"
+            (trial / "verifier").mkdir(parents=True)
+            (trial / "verifier" / "reward.json").write_text(
+                json.dumps(
+                    {"reward": 0, "f2p": 0.0, "f2p_total": 103, "f2p_passed": 0, "p2p": 1.0, "p2p_total": 1, "p2p_passed": 1}
+                ),
+                encoding="utf-8",
+            )
+            (trial / "agent").mkdir()
+            (trial / "agent" / "capture.json").write_text(json.dumps({"patch": {"bytes": 0}}), encoding="utf-8")
+            rates = rates_for_trial(trial)
+            self.assertIsNone(rates["p2p"])
+            self.assertEqual((rates["grader_p2p_pass"], rates["grader_p2p_total"]), (1, 1))
 
     def test_a_real_patch_keeps_its_p2p(self):
         from score_results import rates_for_trial

@@ -128,6 +128,7 @@ harbor run -p <task folder> -i <task> [-i <task> ...] \
   -y --env-file eval-runs/.harbor-env \
   --mounts '[{"type":"bind","source":"<iCode tree>","target":"/opt/icode-host","read_only":true}]' \
   --ae ICODE_MODEL=... --ae ICODE_API_BASE=... --ae ICODE_PROVIDER=... --ae ICODE_REASONING_EFFORT=... \
+  --ae ICODE_MAX_TOKENS=65536 --ae ICODE_MAX_ITERATIONS=500 \
   --ae PYTHONDONTWRITEBYTECODE=1 --ae DEEPSEEK_MODEL=... --ae DEEPSEEK_API_KEY=... --ae MAC_K3D_BENCHMARK=...
 ```
 
@@ -143,7 +144,7 @@ harbor run -p <task folder> -i <task> [-i <task> ...] \
 | `--allow-agent-host` | Once per host in `pipeline/config/network-allowlist-v1.json`; the agent can reach nothing else |
 | `--mounts` | The one bind mount: iCode read-only at `/opt/icode-host` (`agent_mounts.json`) |
 | `--env-file` | A 0600 file with the model key and settings. Clone tokens are unset before Harbor and never written |
-| `--ae` | The agent's environment: model, API base, provider, reasoning effort, key, benchmark, and `MAC_K3D_REPO_CANDIDATES` (each selected task's declared repo) |
+| `--ae` | The agent's environment: model, API base, provider, reasoning effort, iCode's limits (`ICODE_MAX_TOKENS` output tokens per reply, default 65536; `ICODE_MAX_ITERATIONS`, default 500), key, benchmark, and `MAC_K3D_REPO_CANDIDATES` (each selected task's declared repo) |
 | `--ve LOLBENCH_SUITE=union` | LoLBench only: the verifier's test suite |
 | `--agent-setup-timeout-multiplier 10`, `-y` | Plumbing: time to install the agent; no prompts |
 

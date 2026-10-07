@@ -25,7 +25,8 @@ The cases that cover this branch:
 - `eval_job_runs_one_stage_per_phase_and_locks_only_evaluate` — seven stages in phase order, each running `run_all.sh` with its `MAC_K3D_PHASE`, and exactly one `lock(label: env.NODE_NAME, variable: 'HELD_CORES')` with no quantity, inside `Evaluate`
 - `test_harbor_run_uses_import_path_not_bare_agent_icode` / `test_shared_harbor_command_for_every_benchmark` — exactly one `harbor run` per build, carrying `-k $N_ROLLOUTS` and `-n $EVAL_SLOTS`
 - `pipeline/lib/test_task_resources.py` (17 cases) — declared cpus/memory/storage are read from `task.toml`, slots are planned from them, and a worker that cannot fit one task fails early
-- `pipeline/lib/test_aggregate.py` (12 cases) — two shards' trials merge into one artifact with `tasks x rollouts` records; verdict counts add; mixed pipeline versions are flagged, not averaged; an empty patch keeps its F2P but drops its P2P
+- `pipeline/lib/test_aggregate.py` (21 cases) — two shards' trials merge into one artifact with `tasks x rollouts` records; verdict counts add; mixed pipeline versions are flagged, not averaged; an empty patch keeps its F2P, and its P2P is kept as the grader's counts (`grader_p2p_pass` / `grader_p2p_total`) but not averaged; `eval_protocol.shards` keeps every shard's worker, resources, model params and iCode version, the merged protocol comes from the shard's own report, and shards with different `max_tokens` are `model_params_status: mixed` with a WARNING
+- `pipeline/lib/test_empty_patch.py` (23 cases) — an empty patch's cause (`infra` unscored, `cut_off`, `no_edit`), provider-error markers only from iCode's error lines and JSON `error`, `cut_off_reply` against the run's `max_tokens`, notes as `empty model.patch (k/n)`, the `excluded (grader k/n)` P2P cell, and the Empty patch section in `summary.md` and `report.html`
 - `test_a_trial_that_started_off_the_declared_base_is_flagged` — the `anticheat` phase compares each receipt's base SHA against `task.toml` on the host, since the agent env no longer carries it
 - `test_parallel_degree_does_not_guess_when_evaluate_never_ran` — the report phases read the plan `evaluate/slots` wrote instead of re-probing the machine
 - `pipeline/lib/test_pipeline_layout.py` — every phase and step exists and is listed; only evaluate steps source `harbor_cmd.sh`; Harbor flags and `harbor run` appear only there; no literal agent host in a script; no `pN_*.sh` name anywhere; an unknown phase is refused; `CANARY=only` skips the later phases; `archive` needs a report and carries the cost analysis
@@ -67,7 +68,7 @@ The run that has to pass before anyone else uses this.
    - each shard build's description reads `shard i/5 of deepswe_full_suite_task #<n>`
    - **Lockable Resources** shows every `<agent>-core-N` of a busy worker held by that worker's build, and no build holding a token whose prefix is not its own node
    - each shard's console prints a different `TASK_OFFSET`, and the five `selected_tasks.txt` files are disjoint
-5. When the dispatcher's `Aggregate` stage finishes, open `aggregate/artifact.json` on the `deepswe_full_suite_task` build and confirm `shards: 5`, `n_tasks: 10`, `pipeline_status: same`, and that the rollout records total `10 x N_ROLLOUTS`.
+5. When the dispatcher's `Aggregate` stage finishes, open `aggregate/artifact.json` on the `deepswe_full_suite_task` build and confirm `shards: 5`, `n_tasks: 10`, `pipeline_status: same`, that the rollout records total `10 x N_ROLLOUTS`, that `eval_protocol.shards` names both workers with `model_params_status: same`, and that `summary.md` prints one `Worker (shard N ...)` line per shard.
 6. Record the build numbers and the outcome as a new row in [../integration-log.md](../integration-log.md).
 
 ## Status

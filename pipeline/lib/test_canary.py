@@ -111,6 +111,14 @@ class VerdictFixtureTests(unittest.TestCase):
         self.assertIn("remotes origin", hist)
         self.assertIn("2 unreachable objects", hist)
 
+    def test_icode_limit_names_are_not_secret_like(self):
+        from canary_verdict import check_env
+
+        facts = facts_for("pass")
+        names = list(facts["probe"]["env_names"]) + ["ICODE_MAX_TOKENS", "ICODE_MAX_ITERATIONS"]
+        got = check_env({"env_names": names}, self.config)
+        self.assertEqual(got["status"], "pass", got)
+
     def test_reachable_declared_host_warns_but_task_passes(self):
         facts = facts_for("pass")
         facts["probe"]["network"].append(

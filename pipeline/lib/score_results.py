@@ -811,11 +811,13 @@ def rates_for_trial(trial: Path) -> dict:
         derived = partial_from_counts(rates)
         if derived is not None:
             rates["partial"] = derived
-    # A trial that produced no patch leaves the repo untouched, so its P2P is
-    # not evidence that the agent broke anything. The verifier still reports
-    # 0/N for it (LoLBench sets applied=0, which cascades to build_ok=0), and
-    # averaging that in understates P2P. Drop it instead of counting it.
+    # A trial that produced no patch leaves the repo untouched, so its P2P
+    # measures the base repo, not the agent. Graders disagree on it (DeepSWE
+    # passes the base's tests, LoLBench reports 0/N because applied=0), so it is
+    # kept out of the averages. The grader's counts stay for the report.
     if trial_patch_bytes(trial) == 0:
+        rates["grader_p2p_pass"] = rates.get("p2p_pass")
+        rates["grader_p2p_total"] = rates.get("p2p_total")
         rates["p2p"] = None
         rates["p2p_pass"] = None
         rates["p2p_total"] = None

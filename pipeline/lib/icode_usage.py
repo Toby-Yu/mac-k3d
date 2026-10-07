@@ -3,8 +3,42 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
+
+# iCode's is_fatal_provider_error markers, plus the OpenAI SDK's connection and
+# timeout messages. Matched as whole words so "401" inside a number does not count.
+PROVIDER_ERROR_MARKERS = (
+    "insufficient balance",
+    "invalid api key",
+    "incorrect api key",
+    "authentication",
+    "401",
+    "403 forbidden",
+    "billing",
+    "quota exceeded",
+    "exceeded your current quota",
+    "rate limit",
+    "connection error",
+    "request timed out",
+    "apiconnectionerror",
+    "apitimeouterror",
+)
+ERROR_LINES = (
+    re.compile(r"caught tool/runtime error; continuing \(\d+/\d+\): (.*)"),
+    re.compile(r"fatal provider error with deliverable worktree; finishing turn: (.*)"),
+)
+ERROR_MESSAGE_CHARS = 300
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _first_present(usage: dict, keys: tuple[str, ...], extra: Any = None) -> Any:
@@ -61,6 +95,8 @@ def usage_from_obj(obj: Any) -> dict[str, Any] | None:
         "total": total,
         "model": model if isinstance(model, str) else None,
         "cache_hit": cache_hit,
+        "model_calls": _int_or_none(usage.get("model_calls")),
+        "last_output_tokens": _int_or_none(usage.get("last_output_tokens")),
     }
 
 
@@ -95,6 +131,64 @@ def parse_icode_usage_file(path: Path, tail_bytes: int = 262144) -> dict[str, An
     if len(raw) > tail_bytes:
         raw = raw[-tail_bytes:]
     return parse_icode_usage_text(raw.decode("utf-8", errors="replace"))
+
+
+def _marker_in(message: str) -> str | None:
+    """First provider-error marker in an error message, or None.
+
+    An OS error is a tool failing on the filesystem, and its text quotes the
+    model's own path or file content, so it never counts.
+    """
+    text = message.strip()
+    if text.startswith("[Errno"):
+        return None
+    text = text[:ERROR_MESSAGE_CHARS].lower()
+    for marker in PROVIDER_ERROR_MARKERS:
+        if re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", text):
+            return marker
+    return None
+
+
+def provider_error_marker(text: str) -> str | None:
+    """The provider-error marker in iCode's error lines or its JSON `error`, else None.
+
+    The final `result` is the model's own words, so it is never searched.
+    """
+    for line in text.splitlines():
+        for pattern in ERROR_LINES:
+            match = pattern.search(line)
+            got = _marker_in(match.group(1)) if match else None
+            if got:
+                return got
+        stripped = line.strip()
+        if stripped.startswith("{") and '"error"' in stripped:
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("error"), str):
+                got = _marker_in(obj["error"])
+                if got:
+                    return got
+    return None
+
+
+def icode_log_text(trial: Path, tail_bytes: int = 1048576) -> str:
+    path = trial / "agent" / "icode.txt"
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+    return raw[-tail_bytes:].decode("utf-8", errors="replace")
+
+
+def icode_exit_code(trial: Path) -> int | None:
+    """iCode's exit status from `agent/icode-exit.txt`, or None when it was not written."""
+    try:
+        text = (trial / "agent" / "icode-exit.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(text) if text.lstrip("-").isdigit() else None
 
 
 def find_icode_usage(root: Path) -> dict[str, Any] | None:

@@ -106,7 +106,7 @@ A flag the job has no field for is refused rather than ignored: `--tasks` and `-
 | `--icode-git-ref REF` | `git` mode: branch name, tag, commit SHA, or pull-request number when kind is `pr`. Default `main` |
 | `--icode-git-ref-kind KIND` | `branch` (default), `tag`, `commit` (PR SHA), or `pr` (pull-request number). Leftover `auto` still maps: 7–40 hex → commit, else branch |
 | `--workdir PATH` | Eval workdir (default `./eval-runs`) |
-| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-flash` (default) or `deepseek-v4-pro`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, and `ICODE_API_BASE=https://api.deepseek.com/v1`; the HTTP model id stays this catalog id |
+| `--model ID` | DeepSeek Chat Completions id. Catalog: `deepseek-flash` (default) or `deepseek-v4-pro`. Env `DEEPSEEK_MODEL`. TTY Select when flags are omitted. iCode is called with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, `ICODE_API_BASE=https://api.deepseek.com/v1`, `ICODE_MAX_TOKENS=65536` and `ICODE_MAX_ITERATIONS=500`; the HTTP model id stays this catalog id |
 | `--yes` | Skip prompts. Without `--local` or `--stage` it queues `<benchmark>_one_task` exactly as `--job one` does. Also skips the git PAT prompt |
 
 Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.

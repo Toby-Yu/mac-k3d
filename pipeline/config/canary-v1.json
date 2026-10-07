@@ -20,7 +20,7 @@
   "secret_names": {
     "contains": ["TOKEN", "SECRET", "PASSWORD", "API_KEY"],
     "suffix": ["_PAT"],
-    "allowed": ["DEEPSEEK_API_KEY"],
+    "allowed": ["DEEPSEEK_API_KEY", "ICODE_MAX_TOKENS"],
     "forbidden": ["GITCODE_TOKEN", "MAC_K3D_GITCODE_PAT", "GITHUB_TOKEN", "MAC_K3D_GITHUB_PAT", "MAC_K3D_GIT_TOKEN"]
   },
   "gold_names": ["solution.patch", "eval_tests*.patch"],

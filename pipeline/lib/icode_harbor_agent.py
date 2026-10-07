@@ -18,6 +18,8 @@ from harbor.models.agent.context import AgentContext
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-flash"
+MAX_TOKENS = "65536"
+MAX_ITERATIONS = "500"
 ICODE_HOST = "/opt/icode-host"
 CAPTURE_SRC = Path(__file__).with_name("icode_capture.sh")
 CAPTURE = "/installed-agent/icode_capture.sh"
@@ -74,6 +76,8 @@ class ICodeAgent(BaseInstalledAgent):
         )
         env.setdefault("ICODE_REASONING_EFFORT", "high")
         env.setdefault("ICODE_MODEL", DEFAULT_MODEL)
+        env.setdefault("ICODE_MAX_TOKENS", MAX_TOKENS)
+        env.setdefault("ICODE_MAX_ITERATIONS", MAX_ITERATIONS)
         return env
 
     @override

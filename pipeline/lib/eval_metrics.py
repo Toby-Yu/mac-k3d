@@ -22,9 +22,11 @@ def pad_flags(flags: list[bool], k: int) -> list[bool]:
 
 
 def attempt_is_scored(row: dict) -> bool:
-    """True when the attempt has a verifier outcome (reward.json)."""
+    """True when the attempt has a verifier outcome (reward.json) and the model API worked."""
     notes = str(row.get("notes") or "")
     if "missing reward.json" in notes:
+        return False
+    if row.get("infra_failure"):
         return False
     if row.get("has_reward") is False:
         return False
@@ -128,8 +130,7 @@ def task_row(task_id: str, attempts: list[dict], n_rollouts: int) -> dict:
     durs = [_num(row.get("dur_s")) for row in attempts]
     durs = [d for d in durs if d is not None]
     best_dur = _num(chosen_row.get("dur_s")) if chosen_row else None
-    notes = [str(row.get("notes")) for row in attempts if row.get("notes")]
-    return {
+    out = {
         "id": task_id,
         "c": c,
         "n": n,
@@ -152,12 +153,35 @@ def task_row(task_id: str, attempts: list[dict], n_rollouts: int) -> dict:
         "tok_in": tok_in,
         "tok_out": tok_out,
         "dur_s": best_dur,
-        "notes": "; ".join(notes) if notes else "-",
+        "notes": joined_notes(attempts, n_rollouts),
         "rollouts": attempts,
         "flags": flags,
         "scored_flags": scored_flags,
         "rollout_durs": durs,
     }
+    if chosen_row.get("empty_patch"):
+        out["empty_patch"] = True
+        out["grader_p2p_pass"] = chosen_row.get("grader_p2p_pass")
+        out["grader_p2p_total"] = chosen_row.get("grader_p2p_total")
+    return out
+
+
+def joined_notes(attempts: list[dict], n_rollouts: int) -> str:
+    """Each distinct rollout note once, with how many rollouts had it: `empty model.patch (2/4)`."""
+    counts: dict[str, int] = {}
+    for row in attempts:
+        seen = set()
+        for part in str(row.get("notes") or "").split(";"):
+            note = part.strip()
+            if note and note not in seen:
+                seen.add(note)
+                counts[note] = counts.get(note, 0) + 1
+    if not counts:
+        return "-"
+    n = max(n_rollouts, len(attempts))
+    if n <= 1:
+        return "; ".join(counts)
+    return "; ".join(f"{note} ({k}/{n})" for note, k in counts.items())
 
 
 def _mean(vals: list[float]) -> float | None:
@@ -222,6 +246,10 @@ def _median(vals: list[float]) -> float | None:
     return (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
+def _is_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _micro(rows: list[dict], pass_key: str, total_key: str) -> dict:
     passes = [row.get(pass_key) for row in rows if isinstance(row.get(pass_key), int) and isinstance(row.get(total_key), int)]
     totals = [row.get(total_key) for row in rows if isinstance(row.get(pass_key), int) and isinstance(row.get(total_key), int)]
@@ -230,6 +258,75 @@ def _micro(rows: list[dict], pass_key: str, total_key: str) -> dict:
     got = sum(passes)
     den = sum(totals)
     return {"rate": got / den, "pass": got, "total": den}
+
+
+EMPTY_PATCH_CAUSES = ("infra", "cut_off", "no_edit")
+EMPTY_PATCH_TITLE = "Empty patch: iCode left the repo unchanged"
+EMPTY_PATCH_INTRO = (
+    "The capture receipt (agent/capture.json) recorded a 0-byte model.patch for these rollouts, "
+    "so the repo ended identical to its base commit and the grader tested the unchanged repo. "
+    "infra rollouts are unscored; the others count as failed. "
+    "The grader's P2P is shown but kept out of the P2P averages. "
+    "Cause: infra = the model API failed, cut_off = the last reply hit max_tokens, "
+    "no_edit = iCode stopped without editing."
+)
+EMPTY_PATCH_HEADERS = [
+    "Task",
+    "rollout",
+    "trial",
+    "cause",
+    "iCode exit",
+    "model calls",
+    "last reply tokens",
+    "tok_in/out",
+    "dur_s",
+    "F2P",
+    "P2P (grader)",
+]
+
+
+def empty_patch_cause_counts(items: list[dict]) -> dict[str, int]:
+    counts = {cause: 0 for cause in EMPTY_PATCH_CAUSES}
+    for item in items:
+        cause = str(item.get("cause") or "no_edit")
+        counts[cause] = counts.get(cause, 0) + 1
+    return counts
+
+
+def pass_total(passed, total) -> str:
+    return f"{passed}/{total}" if _is_count(passed) and _is_count(total) else "-"
+
+
+EMPTY_PATCH_FIELDS = (
+    "icode_exit",
+    "model_calls",
+    "last_output_tokens",
+    "tok_in",
+    "tok_out",
+    "dur_s",
+    "f2p_pass",
+    "f2p_total",
+    "grader_p2p_pass",
+    "grader_p2p_total",
+)
+
+
+def empty_patch_rows(rows: list[dict]) -> list[dict]:
+    """One entry per rollout whose model.patch was empty, in question then rollout order."""
+    out = []
+    for row in rows:
+        for i, attempt in enumerate(row.get("rollouts") or [], start=1):
+            if not attempt.get("empty_patch"):
+                continue
+            item = {
+                "id": row["id"],
+                "rollout": i,
+                "trial": attempt.get("trial"),
+                "cause": attempt.get("empty_patch_cause") or "no_edit",
+            }
+            item.update({key: attempt.get(key) for key in EMPTY_PATCH_FIELDS})
+            out.append(item)
+    return out
 
 
 def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, _concurrency: int) -> dict:
@@ -252,9 +349,11 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
     micro_p2p = _micro(rows, "p2p_pass", "p2p_total")
     micro_partial_pass = None
     micro_partial_total = None
-    if micro_f2p["pass"] is not None and micro_p2p["pass"] is not None:
-        micro_partial_pass = micro_f2p["pass"] + micro_p2p["pass"]
-        micro_partial_total = micro_f2p["total"] + micro_p2p["total"]
+    # Partial needs both halves from the same question; an empty-patch question has F2P only.
+    both = [row for row in rows if all(_is_count(row.get(key)) for key in ("f2p_pass", "f2p_total", "p2p_pass", "p2p_total"))]
+    if both:
+        micro_partial_pass = sum(row["f2p_pass"] + row["p2p_pass"] for row in both)
+        micro_partial_total = sum(row["f2p_total"] + row["p2p_total"] for row in both)
     micro_partial = None
     if micro_partial_total:
         micro_partial = micro_partial_pass / micro_partial_total
@@ -269,6 +368,8 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
     scored = sum(len(row["rollouts"]) for row in rows)
     infra_excluded = sum(1 for _tid, attempts in task_attempts if not attempts)
     wall = _wall_seconds(rows)
+    empty_patches = empty_patch_rows(rows)
+    cut_off = sum(1 for row in rows for attempt in row["rollouts"] if attempt.get("cut_off_reply"))
     public_rows = []
     for row in rows:
         item = dict(row)
@@ -304,6 +405,10 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
         "scored_rollouts": scored,
         "unscored_rollouts": unscored_rollouts,
         "unscored_tasks": unscored_tasks,
+        "p2p_excluded_empty_patch": sum(1 for row in rows if row.get("empty_patch") and row.get("p2p") is None),
+        "empty_patch_rollouts": len(empty_patches),
+        "empty_patches": empty_patches,
+        "cut_off_rollouts": cut_off,
         "pass_methods": dict(PASS_METHODS),
         "macro": {
             "f2p": _mean([v for v in f2p_vals if v is not None]),

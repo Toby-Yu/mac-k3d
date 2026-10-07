@@ -14,10 +14,22 @@ from datetime import datetime
 from pathlib import Path
 
 from anticheat_verdict import adjust_attempt
-from eval_metrics import mean_ci, summarize_arm
+from eval_metrics import (
+    EMPTY_PATCH_HEADERS,
+    EMPTY_PATCH_INTRO,
+    EMPTY_PATCH_TITLE,
+    empty_patch_cause_counts,
+    mean_ci,
+    pass_total,
+    summarize_arm,
+)
 from score_results import load_json, parse_reward_value, rates_for_trial
-from icode_usage import find_icode_usage
+from icode_usage import find_icode_usage, icode_exit_code, icode_log_text, provider_error_marker
 from task_resources import cpu_count
+
+# iCode's built-in output cap. A run that recorded no max_tokens predates
+# mac-k3d setting it, so this is the limit that run had.
+ICODE_DEFAULT_MAX_TOKENS = 8192
 
 
 def _resolved(data: dict) -> bool:
@@ -68,7 +80,7 @@ def _timing_from_result(result: dict) -> tuple[float | None, str | None, str | N
     return None, None, None
 
 
-def _attempt_from_trial(trial: Path, reward_path: Path | None) -> dict:
+def _attempt_from_trial(trial: Path, reward_path: Path | None, max_tokens: int | None = None) -> dict:
     data = load_json(reward_path) if reward_path is not None else None
     data = data if isinstance(data, dict) else {}
     rates = rates_for_trial(trial)
@@ -108,7 +120,31 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None) -> dict:
         "tok_out": None if usage is None else int(usage.get("completion") or 0),
         "dur_s": dur,
         "notes": notes,
+        "trial": trial.name,
+        "model_calls": None if usage is None else usage.get("model_calls"),
+        "last_output_tokens": None if usage is None else usage.get("last_output_tokens"),
+        "icode_exit": icode_exit_code(trial),
     }
+    cap = max_tokens or ICODE_DEFAULT_MAX_TOKENS
+    last_out = row["last_output_tokens"]
+    if isinstance(last_out, int) and last_out >= cap:
+        row["cut_off_reply"] = True
+        row["notes"] = _add_note(row["notes"], "last reply cut off at max_tokens")
+    if rates.get("empty_patch"):
+        row["empty_patch"] = True
+        row["grader_p2p_pass"] = rates.get("grader_p2p_pass")
+        row["grader_p2p_total"] = rates.get("grader_p2p_total")
+        row["notes"] = _add_note(row["notes"], "empty model.patch")
+        marker = provider_error_marker(icode_log_text(trial))
+        if row["model_calls"] == 0 or marker:
+            row["empty_patch_cause"] = "infra"
+            row["infra_failure"] = True
+            why = f"model API error ({marker})" if marker else "no model call completed"
+            row["notes"] = _add_note(row["notes"], f"infra: {why}")
+        elif row.get("cut_off_reply"):
+            row["empty_patch_cause"] = "cut_off"
+        else:
+            row["empty_patch_cause"] = "no_edit"
     if isinstance(started, str):
         row["started_at"] = started
     if isinstance(finished, str):
@@ -117,6 +153,10 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None) -> dict:
     if isinstance(verdict, dict) and verdict.get("verdict"):
         row["anticheat"] = str(verdict["verdict"])
     return row
+
+
+def _add_note(notes: str, note: str) -> str:
+    return f"{notes}; {note}" if notes else note
 
 
 def _missing_attempt() -> dict:
@@ -137,7 +177,9 @@ def _missing_attempt() -> dict:
     }
 
 
-def harness_task_attempts(harness_dir: Path, tid: str, n_rollouts: int = 0) -> list[dict]:
+def harness_task_attempts(
+    harness_dir: Path, tid: str, n_rollouts: int = 0, max_tokens: int | None = None
+) -> list[dict]:
     """Attempts in `_aNN` order. A missing slot stays put as no-response, not shifted to the end."""
     from score_results import attempt_index, harbor_task_trials
 
@@ -147,7 +189,7 @@ def harness_task_attempts(harness_dir: Path, tid: str, n_rollouts: int = 0) -> l
         reward = trial / "verifier" / "reward.json"
         if not reward.is_file():
             reward = trial / "reward.json"
-        row = _attempt_from_trial(trial, reward if reward.is_file() else None)
+        row = _attempt_from_trial(trial, reward if reward.is_file() else None, max_tokens)
         index = attempt_index(trial)
         if index is not None:
             previous = indexed.get(index)
@@ -210,6 +252,16 @@ def _thinking_type(effort: str) -> str:
     return "disabled" if str(effort or "").strip().lower() == "none" else "enabled"
 
 
+def _limit(value) -> int | None:
+    """A recorded iCode limit, or None. A run that recorded none shows `-`, not a guess."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    text = str(value or "").strip()
+    return int(text) if text.isdigit() and int(text) > 0 else None
+
+
 def _icode_version_from_path(bin_path: str) -> str:
     match = re.search(r"full-v([0-9][^/\\]*)", bin_path or "")
     if not match:
@@ -258,6 +310,8 @@ def build_eval_protocol(
         or "high"
     )
     provider = str(inputs.get("provider") or os.environ.get("ICODE_PROVIDER") or "DeepSeek")
+    max_tokens = _limit(inputs.get("max_tokens")) or _limit(os.environ.get("ICODE_MAX_TOKENS"))
+    max_iterations = _limit(inputs.get("max_iterations")) or _limit(os.environ.get("ICODE_MAX_ITERATIONS"))
     if git_doc:
         icode = {
             "mode": "git",
@@ -293,6 +347,8 @@ def build_eval_protocol(
             "provider": provider,
             "reasoning_effort": effort,
             "thinking": {"type": _thinking_type(effort)},
+            "max_tokens": max_tokens,
+            "max_iterations": max_iterations,
             "n_rollouts": n_rollouts,
         },
         "resources": {
@@ -332,7 +388,9 @@ def build_artifact(
     eval_protocol: dict | None = None,
 ) -> dict:
     del baseline_dir
-    raw_rows = [(tid, harness_task_attempts(harness_dir, tid, n_rollouts)) for tid in task_ids]
+    params = (eval_protocol or {}).get("model_params")
+    max_tokens = _limit(params.get("max_tokens")) if isinstance(params, dict) else None
+    raw_rows = [(tid, harness_task_attempts(harness_dir, tid, n_rollouts, max_tokens)) for tid in task_ids]
     icode_rows = [(tid, [adjust_attempt(row) for row in rows]) for tid, rows in raw_rows]
     arm = summarize_arm(icode_rows, n_rollouts, concurrency)
     raw_arm = summarize_arm(raw_rows, n_rollouts, concurrency)
@@ -361,7 +419,7 @@ def build_artifact(
         "concurrency": concurrency,
         "cpus_each": cpus_each,
         "icode": arm,
-        "icode_raw": {k: v for k, v in raw_arm.items() if k not in ("tasks", "unscored_tasks")},
+        "icode_raw": {k: v for k, v in raw_arm.items() if k not in ("tasks", "unscored_tasks", "empty_patches")},
         "anticheat": anticheat_block(harness_dir, raw_arm, arm),
     }
     if eval_protocol:
@@ -421,6 +479,16 @@ def _count(rate, passed, total) -> str:
     if isinstance(passed, int) and isinstance(total, int):
         return f"{float(rate):.4f} ({passed}/{total})"
     return f"{float(rate):.4f}"
+
+
+def _p2p_cell(row: dict) -> str:
+    """P2P for one question; an empty model.patch shows what the grader said but is not averaged."""
+    if row.get("p2p") is None and row.get("empty_patch"):
+        passed, total = row.get("grader_p2p_pass"), row.get("grader_p2p_total")
+        if isinstance(passed, int) and isinstance(total, int):
+            return f"excluded (grader {passed}/{total})"
+        return "excluded"
+    return _count(row.get("p2p"), row.get("p2p_pass"), row.get("p2p_total"))
 
 
 def _fmt_token(value) -> str:
@@ -520,6 +588,33 @@ def _ci_half(stored, fracs: list) -> float | None:
     return half
 
 
+def empty_patch_cells(item: dict) -> list[str]:
+    tok = "-" if item.get("tok_in") is None else f"{_fmt_token(item.get('tok_in'))}/{_fmt_token(item.get('tok_out'))}"
+    return [
+        str(item.get("id") or ""),
+        str(item.get("rollout") or "-"),
+        str(item.get("trial") or "-"),
+        str(item.get("cause") or "no_edit"),
+        "-" if item.get("icode_exit") is None else str(item.get("icode_exit")),
+        "-" if item.get("model_calls") is None else str(item.get("model_calls")),
+        "-" if item.get("last_output_tokens") is None else str(item.get("last_output_tokens")),
+        tok,
+        _dur_cell(item.get("dur_s")),
+        pass_total(item.get("f2p_pass"), item.get("f2p_total")),
+        pass_total(item.get("grader_p2p_pass"), item.get("grader_p2p_total")),
+    ]
+
+
+def _empty_patch_markdown(items: list) -> list[str]:
+    items = [item for item in items if isinstance(item, dict)]
+    if not items:
+        return ["empty-patch rollouts: 0", ""]
+    lines = [f"## {EMPTY_PATCH_TITLE}", "", EMPTY_PATCH_INTRO, ""]
+    lines.extend(_md_table(EMPTY_PATCH_HEADERS, [[c.replace("|", "/") for c in empty_patch_cells(item)] for item in items]))
+    lines.append("")
+    return lines
+
+
 def summary_markdown(doc: dict) -> str:
     suite = doc.get("suite")
     title = _suite_title(suite)
@@ -545,7 +640,9 @@ def summary_markdown(doc: dict) -> str:
             "- Model params: "
             f"provider `{params.get('provider') or '-'}` · "
             f"reasoning_effort `{params.get('reasoning_effort') or '-'}` · "
-            f"thinking.type `{thinking.get('type') or '-'}`"
+            f"thinking.type `{thinking.get('type') or '-'}` · "
+            f"max_tokens `{params.get('max_tokens') or '-'}` · "
+            f"max_iterations `{params.get('max_iterations') or '-'}`"
         )
         lines.append(
             "- Resources: "
@@ -602,6 +699,16 @@ def summary_markdown(doc: dict) -> str:
             f"- {title} detail — first-rollout (= padded Pass@1): **{_pct(arm.get('pass@1'))}** · any-pass: **{_pct(arm.get('any_pass'))}** · scored rollouts: **{scored}** · infra-excluded: **{excluded}**"
         )
         lines.append(f"- Best-attempt pass (secondary): **{hits}** / {metrics_n} ({_pct(arm.get('any_pass'))})")
+        empty_items = arm.get("empty_patches") if isinstance(arm.get("empty_patches"), list) else None
+        if empty_items is not None:
+            counts = empty_patch_cause_counts(empty_items)
+            of = f" of {metrics_n * k}" if isinstance(metrics_n, int) else ""
+            lines.append(
+                f"- Empty model.patch (repo unchanged after iCode): **{len(empty_items)}**{of} rollouts "
+                f"(infra {counts['infra']} · cut_off {counts['cut_off']} · no_edit {counts['no_edit']})"
+            )
+        if isinstance(arm.get("cut_off_rollouts"), int):
+            lines.append(f"- Cut-off replies (last reply hit max_tokens): **{arm['cut_off_rollouts']}** rollouts")
         macro = arm.get("macro") or {}
         micro = arm.get("micro") or {}
         lines.append(
@@ -615,6 +722,12 @@ def summary_markdown(doc: dict) -> str:
             + " · partial: "
             + _micro_count(micro.get("partial"), micro.get("partial_pass"), micro.get("partial_total"))
         )
+        p2p_excluded = arm.get("p2p_excluded_empty_patch")
+        if isinstance(p2p_excluded, int) and not isinstance(p2p_excluded, bool) and p2p_excluded > 0:
+            lines.append(
+                "- P2P and partial averages are over questions whose best rollout submitted a patch "
+                f"({p2p_excluded} excluded: best rollout left an empty model.patch)"
+            )
         timing = arm.get("timing") or {}
         mem_peak = doc.get("container_mem_max_gb")
         if isinstance(mem_peak, (int, float)) and not isinstance(mem_peak, bool):
@@ -667,7 +780,7 @@ def summary_markdown(doc: dict) -> str:
                     "yes" if row["best"] else "no",
                     _num(row["reward"]),
                     _count(row.get("f2p"), row.get("f2p_pass"), row.get("f2p_total")),
-                    _count(row.get("p2p"), row.get("p2p_pass"), row.get("p2p_total")),
+                    _p2p_cell(row),
                     _num(row.get("partial")),
                     tok,
                     _dur_cell(row.get("dur_s")),
@@ -676,6 +789,8 @@ def summary_markdown(doc: dict) -> str:
             )
         lines.extend(_md_table(headers, table_rows))
         lines.append("")
+        if empty_items is not None:
+            lines.extend(_empty_patch_markdown(empty_items))
         unscored_tasks = arm.get("unscored_tasks") if isinstance(arm.get("unscored_tasks"), list) else []
         unscored_tasks = [row for row in unscored_tasks if isinstance(row, dict)]
         if not unscored_tasks:

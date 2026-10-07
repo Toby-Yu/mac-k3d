@@ -78,6 +78,8 @@ write_harbor_env() {
       printf 'ICODE_API_BASE=%s\n' "${ICODE_API_BASE}"
       printf 'ICODE_PROVIDER=%s\n' "${ICODE_PROVIDER}"
       printf 'ICODE_REASONING_EFFORT=%s\n' "${ICODE_REASONING_EFFORT}"
+      printf 'ICODE_MAX_TOKENS=%s\n' "${ICODE_MAX_TOKENS}"
+      printf 'ICODE_MAX_ITERATIONS=%s\n' "${ICODE_MAX_ITERATIONS}"
       printf 'PYTHONDONTWRITEBYTECODE=%s\n' "1"
       printf 'MAC_K3D_BENCHMARK=%s\n' "${BENCHMARK:-deepswe}"
     } >"$HARBOR_ENV"
@@ -172,6 +174,8 @@ append_agent_flags() {
   cmd+=(--ae "ICODE_API_BASE=${ICODE_API_BASE}")
   cmd+=(--ae "ICODE_PROVIDER=${ICODE_PROVIDER}")
   cmd+=(--ae "ICODE_REASONING_EFFORT=${ICODE_REASONING_EFFORT}")
+  cmd+=(--ae "ICODE_MAX_TOKENS=${ICODE_MAX_TOKENS}")
+  cmd+=(--ae "ICODE_MAX_ITERATIONS=${ICODE_MAX_ITERATIONS}")
   cmd+=(--ae "PYTHONDONTWRITEBYTECODE=1")
   cmd+=(--ae "DEEPSEEK_MODEL=${DEEPSEEK_MODEL}")
   cmd+=(--ae "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}")

@@ -307,6 +307,10 @@ if [ -z "${ICODE_PROVIDER:-}" ]; then
   esac
 fi
 export ICODE_REASONING_EFFORT="${ICODE_REASONING_EFFORT:-high}"
+# Unset, iCode allows 8192 output tokens per reply, which cuts a long
+# write_file call off mid-JSON. iCode caps iterations at 50 per continuation.
+export ICODE_MAX_TOKENS="${ICODE_MAX_TOKENS:-65536}"
+export ICODE_MAX_ITERATIONS="${ICODE_MAX_ITERATIONS:-500}"
 
 # The iCode tree Harbor mounts read-only at /opt/icode-host (tasks/icode.sh).
 icode_host_root() {

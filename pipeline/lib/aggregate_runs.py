@@ -23,11 +23,94 @@ from pathlib import Path
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
-from render_report import build_artifact, write_report  # noqa: E402
+from render_report import _thinking_type, build_artifact, write_report  # noqa: E402
 from score_results import load_json  # noqa: E402
 from task_resources import cpu_count  # noqa: E402
 
 VERDICTS = ("clean", "flagged", "rejected")
+# What has to match for the shards to be one measurement of one iCode setup.
+COMPARED_MODEL_PARAMS = ("model", "api_base", "provider", "reasoning_effort", "max_tokens", "max_iterations")
+INPUT_PROTOCOL_KEYS = ("harbor", "benchmark", "grader_overlay", "images", "worker", "requester", "pipeline", "isolation")
+
+
+def shard_report_protocol(shard: Path, builds: list[str]) -> dict | None:
+    """The eval_protocol the shard's own report phase wrote on its worker; None when it did not run.
+
+    A reused workspace can hold older runs' reports, so the shard's own build wins.
+    """
+    found = []
+    for path in (shard / "output").glob("*/*/artifact.json"):
+        doc = load_json(path)
+        if isinstance(doc, dict) and isinstance(doc.get("eval_protocol"), dict):
+            own = str(doc.get("run_id") or "") in builds
+            found.append((own, path.stat().st_mtime, str(path), doc["eval_protocol"]))
+    return max(found, key=lambda item: item[:3])[3] if found else None
+
+
+def inputs_protocol(inputs: dict) -> dict:
+    """A protocol from a shard's raw inputs alone. A value the shard did not record stays None."""
+    out = {key: inputs[key] for key in INPUT_PROTOCOL_KEYS if key in inputs}
+    effort = inputs.get("reasoning_effort")
+    out["model_params"] = {
+        "model": inputs.get("model"),
+        "api_base": inputs.get("api_base"),
+        "provider": inputs.get("provider"),
+        "reasoning_effort": effort,
+        "thinking": {"type": _thinking_type(effort)} if effort else {},
+        "max_tokens": inputs.get("max_tokens") or None,
+        "max_iterations": inputs.get("max_iterations") or None,
+        "n_rollouts": inputs.get("n_rollouts"),
+    }
+    out["resources"] = {
+        "cpu_lock_qty": inputs.get("cpu_lock_qty"),
+        "concurrency": inputs.get("concurrency"),
+        "cpus_each": inputs.get("cpus_each"),
+    }
+    return out
+
+
+def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
+    icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
+    return {
+        "shard": index,
+        "builds": builds,
+        "worker": protocol.get("worker") if isinstance(protocol.get("worker"), dict) else {},
+        "resources": protocol.get("resources") if isinstance(protocol.get("resources"), dict) else {},
+        "model_params": protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {},
+        "icode_version": icode.get("version") or None,
+    }
+
+
+def merge_protocols(protocols: list[dict]) -> dict:
+    """The first shard's protocol, with every shard's per-task image and benchmark pins."""
+    if not protocols:
+        return {}
+    out = json.loads(json.dumps(protocols[0]))
+    images = out.get("images") if isinstance(out.get("images"), dict) else {}
+    bench = out.get("benchmark") if isinstance(out.get("benchmark"), dict) else None
+    pins = bench.get("tasks") if bench is not None and isinstance(bench.get("tasks"), dict) else None
+    for other in protocols[1:]:
+        if isinstance(other.get("images"), dict):
+            images.update({k: v for k, v in other["images"].items() if k not in images})
+        other_bench = other.get("benchmark") if isinstance(other.get("benchmark"), dict) else {}
+        if pins is not None and isinstance(other_bench.get("tasks"), dict):
+            pins.update({k: v for k, v in other_bench["tasks"].items() if k not in pins})
+    if images:
+        out["images"] = images
+    return out
+
+
+def shard_mismatches(rows: list[dict]) -> dict:
+    """Model params and iCode versions that differ between shards, by key."""
+    found: dict[str, list] = {}
+    for key in COMPARED_MODEL_PARAMS:
+        values = {json.dumps(row["model_params"].get(key)) for row in rows}
+        if len(values) > 1:
+            found[key] = sorted(json.loads(v) for v in values if v != "null") or [None]
+    versions = {row.get("icode_version") for row in rows}
+    if len(versions) > 1:
+        found["icode_version"] = sorted(str(v) for v in versions)
+    return found
 
 
 def shard_dirs(root: Path) -> list[Path]:
@@ -56,12 +139,15 @@ def merge_harness(shards: list[Path], dest: Path) -> dict:
     tasks: list[str] = []
     summaries: list[dict] = []
     pipelines: list[dict] = []
-    protocol: dict | None = None
+    protocols: list[dict] = []
+    rows: list[dict] = []
+    first_inputs: dict | None = None
     resources: dict | None = None
     for index, shard in enumerate(shards, start=1):
         src = shard / "harness" / "harbor_runs"
-        if src.is_dir():
-            for build in sorted(p for p in src.iterdir() if p.is_dir()):
+        builds = sorted(p for p in src.iterdir() if p.is_dir()) if src.is_dir() else []
+        if builds:
+            for build in builds:
                 target = harness / "harbor_runs" / f"shard{index}-{build.name}"
                 if target.exists():
                     shutil.rmtree(target)
@@ -84,11 +170,16 @@ def merge_harness(shards: list[Path], dest: Path) -> dict:
                 if tid and tid not in tasks:
                     tasks.append(tid)
         got = load_json(shard / "eval_protocol_inputs.json")
-        if isinstance(got, dict):
-            if protocol is None:
-                protocol = got
-            if isinstance(got.get("pipeline"), dict):
-                pipelines.append(got["pipeline"])
+        inputs = got if isinstance(got, dict) else {}
+        if inputs and first_inputs is None:
+            first_inputs = inputs
+        if isinstance(inputs.get("pipeline"), dict):
+            pipelines.append(inputs["pipeline"])
+        names = [build.name for build in builds]
+        protocol = shard_report_protocol(shard, names) or (inputs_protocol(inputs) if inputs else None)
+        if protocol is not None:
+            protocols.append(protocol)
+            rows.append(shard_row(index, names, protocol))
         if resources is None:
             got = load_json(shard / "eval_resources.json")
             if isinstance(got, dict):
@@ -101,7 +192,9 @@ def merge_harness(shards: list[Path], dest: Path) -> dict:
     return {
         "harness": harness,
         "tasks": sorted(tasks),
-        "protocol": protocol,
+        "protocol": merge_protocols(protocols),
+        "inputs": first_inputs or {},
+        "shard_rows": rows,
         "resources": resources,
         "anticheat": merged,
         "pipelines": pipelines,
@@ -195,11 +288,26 @@ def main() -> int:
         return 1
 
     protocol = merged["protocol"] or {}
+    inputs = merged["inputs"]
+    params = protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {}
+    rows = merged["shard_rows"]
+    if rows:
+        protocol["shards"] = rows
+        mismatched = shard_mismatches(rows)
+        protocol["model_params_status"] = "mixed" if mismatched else "same"
+        if mismatched:
+            protocol["model_params_mismatch"] = mismatched
+            detail = "; ".join(f"{key} {values}" for key, values in mismatched.items())
+            print(
+                f"WARNING: shards ran different model params or iCode ({detail}). "
+                "This report is not one measurement of one iCode setup.",
+                file=sys.stderr,
+            )
     applied = (merged["resources"] or {}).get("applied") or {}
     doc = build_artifact(
         suite=args.benchmark,
-        model=str(protocol.get("model") or ""),
-        api_base=str(protocol.get("api_base") or ""),
+        model=str(params.get("model") or inputs.get("model") or ""),
+        api_base=str(params.get("api_base") or inputs.get("api_base") or ""),
         task_ids=tasks,
         harness_dir=merged["harness"],
         baseline_dir=out / "baseline",
