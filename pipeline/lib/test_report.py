@@ -1397,6 +1397,36 @@ printf 'first2:%s\\n' "$(tr '\\n' ',' <"$MAC_K3D_EVAL_WORKDIR/selected_tasks.txt
             self.assertIn("task-csv:zzz-last,aaa-first, n:2", proc.stdout)
             self.assertIn("first2:aaa-first,zzz-last,", proc.stdout)
 
+    def test_offset_slices_use_byte_order_whatever_the_locale(self):
+        """en_US.UTF-8 sorts sqlfmt-… before sql-formatter-…; a C-locale worker would cut a different slice."""
+        common = ROOT / "pipeline" / "stages" / "_common.sh"
+        suite = ["aaa-first", "sql-formatter-bigquery-pipe-formatting", "sqlfmt-create-table-ddl-formatting"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for tid in reversed(suite):
+                (root / "deep-swe" / "tasks" / tid).mkdir(parents=True)
+            script = f"""
+export MAC_K3D_EVAL_WORKDIR={root}
+export BENCHMARK=deepswe
+unset TASK TASKS
+export N_TASKS=1 TASK_OFFSET=1
+source {common}
+write_selected_tasks
+"""
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                env={**os.environ, "LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual((root / "suite_tasks.txt").read_text(encoding="utf-8").split(), suite)
+            self.assertEqual(
+                (root / "selected_tasks.txt").read_text(encoding="utf-8").split(),
+                ["sql-formatter-bigquery-pipe-formatting"],
+            )
+
     def test_common_canonicalizes_relative_workdir(self):
         common = ROOT / "pipeline" / "stages" / "_common.sh"
         with tempfile.TemporaryDirectory() as tmp:
@@ -3263,6 +3293,22 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(doc["images"]["alpha"]["id"], "sha256:alpha")
         self.assertEqual(doc["images"]["beta"]["id"], "sha256:beta")
 
+    def test_requester_is_the_jenkins_user_or_the_local_login(self):
+        from unittest import mock
+
+        from provenance import requester_facts
+
+        url = "http://jenkins:8080/job/deepswe_one_task/70/"
+        cases = [
+            ({"BUILD_USER": "Toby", "BUILD_URL": url}, {"user": "Toby", "build_url": url}),
+            ({"BUILD_URL": url, "USER": "jenkins"}, {"user": "unknown", "build_url": url}),
+            ({"USER": "Toby"}, {"user": "local Toby", "build_url": "unknown"}),
+        ]
+        for env, want in cases:
+            clean = {k: v for k, v in os.environ.items() if k not in ("BUILD_USER", "BUILD_USER_ID", "BUILD_URL", "USER", "LOGNAME")}
+            with mock.patch.dict(os.environ, {**clean, **env}, clear=True):
+                self.assertEqual(requester_facts(), want, env)
+
     def test_env_clears_the_files_a_shard_archives_but_keeps_overrides(self):
         text = (STAGES / "env.sh").read_text(encoding="utf-8")
         start = text.index('rm -f "$WORKDIR/eval_protocol_inputs.json"')
@@ -3281,6 +3327,7 @@ class ProvenanceTests(unittest.TestCase):
                 work / "egress_probe.json",
                 work / "selected_tasks.txt",
                 work / "selected_tasks_offset.txt",
+                work / "suite_tasks.txt",
                 anticheat / "summary.json",
                 anticheat / "report.md",
                 anticheat / "anticheat.jsonl",
