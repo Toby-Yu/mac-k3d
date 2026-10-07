@@ -202,6 +202,69 @@ def shard_dirs(root: Path) -> list[Path]:
     return found
 
 
+def name_offset_shards(rows: list[dict], suites: list[list[str]], ran_tasks: set[str]) -> list[str]:
+    """Name the questions of offset shards that ran nothing; returns the names found.
+
+    Every shard that reached the tasks phase wrote the same byte-ordered
+    ``suite_tasks.txt``, and an offset shard's slice is ``suite[offset:offset+count]``.
+    Lists that disagree name nothing, and the shard stays counted only.
+    """
+    unnamed = [row for row in rows if row.get("not_run_count")]
+    if not unnamed or not suites:
+        return []
+    if any(suite != suites[0] for suite in suites[1:]):
+        print(
+            "WARNING: the shards listed different suites (benchmark or pipeline differ), "
+            "so the questions of a shard that ran nothing stay unnamed",
+            file=sys.stderr,
+        )
+        return []
+    suite = suites[0]
+    found: list[str] = []
+    for row in unnamed:
+        offset, count = int(row.get("not_run_offset") or 0), int(row["not_run_count"])
+        names = suite[offset : offset + count]
+        if len(names) != count:
+            print(
+                f"WARNING: shard {row['shard']} {row['builds'][0]}: offset {offset} + {count} runs past "
+                f"the suite's {len(suite)} questions; left unnamed",
+                file=sys.stderr,
+            )
+            continue
+        overlap = sorted(set(names) & ran_tasks)
+        if overlap:
+            print(
+                f"WARNING: shard {row['shard']} {row['builds'][0]}'s slice overlaps questions another shard ran "
+                f"({', '.join(overlap)}); the shards cut different slices of the suite",
+                file=sys.stderr,
+            )
+        row["not_run"] = names
+        row.pop("not_run_count", None)
+        row.pop("not_run_offset", None)
+        found.extend(names)
+    return found
+
+
+def coverage_record(rows: list[dict], plan: list[dict], harness: Path, tasks: list[str]) -> dict:
+    """How many of the dispatcher's planned questions the merged report has trials for."""
+    from score_results import harbor_task_trials
+
+    not_run = [tid for row in rows for tid in row.get("not_run") or []]
+    failed = [
+        f"shard {row['shard']} {row['builds'][0]} {row.get('result') or 'UNKNOWN'}"
+        for row in rows
+        if row.get("not_run") or row.get("not_run_count")
+    ]
+    return {
+        "planned": sum(entry["count"] for entry in plan),
+        "with_trials": sum(1 for tid in tasks if harbor_task_trials(harness, tid)),
+        "not_run": not_run,
+        "not_named": sum(int(row.get("not_run_count") or 0) for row in rows),
+        "shards_not_run": failed,
+        "in_metrics": len(tasks),
+    }
+
+
 def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None) -> dict:
     """Copy every shard's trials and anti-cheat verdicts under one harness dir.
 
@@ -221,6 +284,8 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
     pipelines: list[dict] = []
     protocols: list[dict] = []
     rows: list[dict] = []
+    suites: list[list[str]] = []
+    ran_tasks: set[str] = set()
     first_inputs: dict | None = None
     resources: dict | None = None
     for index, shard, entry in planned_shards(shards, plan or []):
@@ -267,6 +332,11 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
         for tid in shard_tasks:
             if tid not in tasks:
                 tasks.append(tid)
+        if ran:
+            ran_tasks.update(shard_tasks)
+        suite_file = shard / "suite_tasks.txt" if shard else None
+        if trusted and suite_file is not None and suite_file.is_file():
+            suites.append([ln.strip() for ln in suite_file.read_text(encoding="utf-8").splitlines() if ln.strip()])
         if inputs and first_inputs is None:
             first_inputs = inputs
         if isinstance(inputs.get("pipeline"), dict):
@@ -294,6 +364,9 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
             got = load_json(shard / "eval_resources.json")
             if isinstance(got, dict):
                 resources = got
+    for tid in name_offset_shards(rows, suites, ran_tasks):
+        if tid not in tasks:
+            tasks.append(tid)
     merged = merge_anticheat(summaries)
     if merged is not None:
         (harness / "anticheat" / "summary.json").write_text(
@@ -378,6 +451,7 @@ def main() -> int:
     ap.add_argument("--n-rollouts", type=int, default=4)
     ap.add_argument("--plan", default="", help="the dispatcher's shards/plan.txt (index|build|result|offset|count|tasks)")
     ap.add_argument("--build-url", default="", help="the dispatcher build's URL, the merged report's requester")
+    ap.add_argument("--requester-user", default="", help="the Jenkins user who started the dispatcher build")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -421,9 +495,11 @@ def main() -> int:
     if isinstance(protocol.get("images"), dict):
         # A shard on an older pipeline still lists its workspace's earlier tasks.
         protocol["images"] = {tid: image for tid, image in protocol["images"].items() if tid in tasks}
+    requester = protocol.get("requester") if isinstance(protocol.get("requester"), dict) else {}
     if args.build_url:
-        requester = protocol.get("requester") if isinstance(protocol.get("requester"), dict) else {}
-        protocol["requester"] = {**requester, "build_url": args.build_url}
+        protocol["requester"] = requester = {**requester, "build_url": args.build_url}
+    if args.requester_user.strip():
+        protocol["requester"] = {**requester, "user": args.requester_user.strip()}
     if rows:
         protocol["shards"] = rows
         mismatched = shard_mismatches(rows)
@@ -463,6 +539,15 @@ def main() -> int:
             print(
                 f"WARNING: shards ran different pipelines ({names}). "
                 "A worker missed a redeploy; this report is not one run of one pipeline.",
+                file=sys.stderr,
+            )
+    if plan:
+        coverage = coverage_record(rows, plan, merged["harness"], tasks)
+        doc["coverage"] = coverage
+        if coverage["planned"] != len(tasks):
+            print(
+                f"WARNING: the dispatcher planned {coverage['planned']} questions but Pass@k covers {len(tasks)}; "
+                "the metrics are not over the whole selection",
                 file=sys.stderr,
             )
     write_report(doc, out)

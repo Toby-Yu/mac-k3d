@@ -266,9 +266,13 @@ def worker_facts() -> dict:
 
 
 def requester_facts() -> dict:
-    user = os.environ.get("BUILD_USER") or os.environ.get("BUILD_USER_ID") or "unknown"
-    build_url = os.environ.get("BUILD_URL") or "unknown"
-    return {"user": user, "build_url": build_url}
+    """Who asked for this run. Jenkins jobs set ``BUILD_USER`` from the build cause."""
+    build_url = os.environ.get("BUILD_URL") or ""
+    user = os.environ.get("BUILD_USER") or os.environ.get("BUILD_USER_ID") or ""
+    if not user and not build_url:
+        login = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        user = f"local {login}" if login else ""
+    return {"user": user or "unknown", "build_url": build_url or "unknown"}
 
 
 def pipeline_facts(root: Path) -> dict:
@@ -767,6 +771,24 @@ def shard_worker_lines(view: dict) -> list[str]:
         detail = "; ".join(f"{k} {v}" for k, v in view.get("model_params_mismatch", {}).items())
         lines.append(f"Shards differ: {detail or 'model params'}. Not one measurement of one iCode setup.")
     return lines
+
+
+def coverage_line(coverage: object) -> str:
+    """How much of the dispatcher's plan a merged report covers; empty without a plan."""
+    if not isinstance(coverage, dict) or not isinstance(coverage.get("planned"), int):
+        return ""
+    planned = coverage["planned"]
+    not_run = coverage.get("not_run") if isinstance(coverage.get("not_run"), list) else []
+    not_named = coverage.get("not_named") if isinstance(coverage.get("not_named"), int) else 0
+    text = f"Coverage: {_cell(coverage.get('with_trials'))} of {planned} planned questions have trials"
+    if not_run or not_named:
+        text += f"; {len(not_run) + not_named} not run"
+        shards = [str(s) for s in coverage.get("shards_not_run") or []]
+        if shards:
+            text += f" ({', '.join(shards)})"
+    if not_named:
+        text += f"; {not_named} not named, so Pass@k covers {_cell(coverage.get('in_metrics'))} questions"
+    return text
 
 
 def provenance_markdown(protocol: dict | None) -> list[str]:

@@ -530,9 +530,12 @@ selected_tasks_csv_source() {
 }
 
 write_selected_tasks() {
-  local list="$WORKDIR/selected_tasks.txt" n root tid csv skip
+  local list="$WORKDIR/selected_tasks.txt" suite="$WORKDIR/suite_tasks.txt" n root tid csv skip
   root="$(benchmark_tasks_dir)"
   [ -d "$root" ] || die "run the tasks phase first (missing $root)"
+  # Byte order, so every worker cuts the same offset slices whatever its locale;
+  # the dispatcher's merge names a failed shard's questions from this list.
+  find "$root" -mindepth 1 -maxdepth 1 -type d | sed 's#.*/##' | LC_ALL=C sort >"$suite"
   csv="$(selected_tasks_csv_source || true)"
   if [ -n "$csv" ]; then
     : >"$list"
@@ -563,8 +566,7 @@ EOF
   case "$skip" in
     "" | *[!0-9]*) die "TASK_OFFSET must be an integer >= 0 (got '$skip')" ;;
   esac
-  find "$root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n "+$((skip + 1))" | head -n "$n" \
-    | xargs -n1 basename >"$list"
+  tail -n "+$((skip + 1))" "$suite" | head -n "$n" >"$list"
   [ -s "$list" ] || die "no tasks to select under $root (N_TASKS=$n TASK_OFFSET=$skip)"
 }
 

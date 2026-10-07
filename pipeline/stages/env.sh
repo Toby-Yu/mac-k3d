@@ -13,7 +13,7 @@ rm -f "$WORKDIR/.harbor-env"
 # Per-build state a shard archives for its dispatcher. A build that stops before
 # the tasks phase would otherwise ship the previous build's copies.
 rm -f "$WORKDIR/eval_protocol_inputs.json" "$WORKDIR/eval_resources.json" "$WORKDIR/egress_probe.json" \
-  "$WORKDIR/selected_tasks.txt" "$WORKDIR/selected_tasks_offset.txt" \
+  "$WORKDIR/selected_tasks.txt" "$WORKDIR/selected_tasks_offset.txt" "$WORKDIR/suite_tasks.txt" \
   "$HARNESS_DIR/anticheat/summary.json" "$HARNESS_DIR/anticheat/report.md" "$HARNESS_DIR/anticheat/anticheat.jsonl"
 
 progress 0 "env: checking this worker (benchmark=$BENCHMARK n=$N_TASKS harness=$HARNESS llm=$LLM)"

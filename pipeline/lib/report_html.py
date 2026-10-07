@@ -351,7 +351,7 @@ def _empty_patch_html(arm: dict) -> str:
 
 
 def _provenance_html(doc: dict) -> str:
-    from provenance import isolation_lines, provenance_view, shard_worker_lines
+    from provenance import coverage_line, isolation_lines, provenance_view, shard_worker_lines
 
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
     view = provenance_view(protocol)
@@ -378,6 +378,9 @@ def _provenance_html(doc: dict) -> str:
         f"Pipeline {_esc(cell(view['commit']))} dirty {_esc(cell(view['dirty']))}",
     ]
     if view["shards"]:
+        coverage = coverage_line(doc.get("coverage"))
+        if coverage:
+            items.append(_esc(coverage))
         items.extend(_esc(line) for line in shard_worker_lines(view))
     else:
         items.append(

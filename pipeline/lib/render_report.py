@@ -671,6 +671,11 @@ def summary_markdown(doc: dict) -> str:
         if isinstance(n_tasks, int) and not isinstance(n_tasks, bool):
             metrics_n = n_tasks
         lines.append(f"- Tasks with metrics: **{metrics_n}** (missing/excluded: {excluded})")
+        from provenance import coverage_line
+
+        coverage = coverage_line(doc.get("coverage"))
+        if coverage:
+            lines.append(f"- {coverage}")
         ci = _ci_half(arm.get("macro_pass@1_ci"), [row.get("pass_frac") for row in tasks])
         ci_txt = "" if ci is None else f" ±{ci * 100:.1f}% (CI)"
         ci_s = _ci_half(

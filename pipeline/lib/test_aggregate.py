@@ -99,6 +99,7 @@ SHARD_ARCHIVE = (
     "harness/harbor_runs/jenkins-{build}",
     "harness/anticheat",
     "selected_tasks.txt",
+    "suite_tasks.txt",
     "eval_protocol_inputs.json",
     "eval_resources.json",
 )
@@ -460,7 +461,9 @@ class DispatcherPlanTests(unittest.TestCase):
     def collect(self, root: Path, build: str, work: Path) -> None:
         archive_like_a_shard(work, build, root / "shards" / build / "eval-runs")
 
-    def run_plan(self, root: Path, plan: list[str], rollouts: int = 4) -> tuple[int, str]:
+    def run_plan(
+        self, root: Path, plan: list[str], rollouts: int = 4, extra: tuple[str, ...] = ()
+    ) -> tuple[int, str]:
         import contextlib
         import io
 
@@ -472,7 +475,7 @@ class DispatcherPlanTests(unittest.TestCase):
                 root / "shards",
                 root / "aggregate",
                 rollouts,
-                ("--plan", str(root / "shards" / "plan.txt"), "--build-url", DISPATCHER_URL),
+                ("--plan", str(root / "shards" / "plan.txt"), "--build-url", DISPATCHER_URL, *extra),
             )
         return code, err.getvalue()
 
@@ -540,6 +543,9 @@ class DispatcherPlanTests(unittest.TestCase):
             self.assertIn(f"egress probe Harbor default {DEFAULT_PROBE}", md)
             self.assertNotIn(SUBSTITUTE_PROBE, md)
             self.assertIn(f"- Requester: `toby` `{DISPATCHER_URL}`", md)
+            self.assertIn(
+                "- Coverage: 1 of 3 planned questions have trials; 2 not run (shard 2 jenkins-61 FAILURE)", md
+            )
             self.assertEqual(doc["model"], "openai/deepseek-flash")
             self.assertEqual(sorted(protocol["images"]), ["Yb43UkF"])
             self.assertNotIn("abs-module-cache-flags", md)
@@ -558,18 +564,87 @@ class DispatcherPlanTests(unittest.TestCase):
             self.assertEqual(doc["n_tasks"], 2)
             self.assertIn("- Worker (shard 2 jenkins-61): ABORTED before any trial · 1 question not run: beta", md)
 
-    def test_an_offset_shard_that_did_not_run_is_counted_not_named(self):
+    def offset_shard(self, root: Path, build: str, tasks: dict[str, list[float]], suite: list[str]) -> None:
+        """A full_suite_task shard: selected by offset, with the suite list its tasks phase wrote."""
+        work = make_shard(root / f"ws{build}", f"jenkins-{build}", tasks, inputs=shard_inputs(build, f"node{build}"))
+        (work / "suite_tasks.txt").write_text("".join(f"{tid}\n" for tid in suite), encoding="utf-8")
+        self.collect(root, build, work)
+
+    def test_an_offset_shard_that_ran_nothing_is_named_from_the_suite_list(self):
+        """full_suite_task names no ids, so a failed shard's questions come from the shards' suite_tasks.txt."""
+        suite = ["alpha", "beta", "delta", "epsilon", "gamma", "zeta"]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            local = make_shard(root / "home", "jenkins-60", {"alpha": [1.0]}, inputs=shard_inputs("60", "a"))
-            self.collect(root, "60", local)
+            self.offset_shard(root, "60", {"alpha": [1.0]}, suite)
             code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|", "2|61|FAILURE|1|5|"], rollouts=1)
+            self.assertEqual(code, 0, err)
+            doc, md, page = self.report(root)
+            failed = doc["eval_protocol"]["shards"][1]
+            self.assertEqual(failed["not_run"], suite[1:])
+            self.assertNotIn("not_run_count", failed)
+            self.assertEqual(doc["n_tasks"], 6)
+            self.assertIn("(missing/excluded: 5)", md)
+            self.assertIn(
+                "- Worker (shard 2 jenkins-61): FAILURE before any trial · "
+                "5 questions not run: beta, delta, epsilon, gamma, zeta",
+                md,
+            )
+            coverage = "Coverage: 1 of 6 planned questions have trials; 5 not run (shard 2 jenkins-61 FAILURE)"
+            self.assertIn(f"- {coverage}", md)
+            self.assertIn(coverage, page)
+            self.assertEqual(
+                {k: doc["coverage"][k] for k in ("planned", "with_trials", "not_named", "in_metrics")},
+                {"planned": 6, "with_trials": 1, "not_named": 0, "in_metrics": 6},
+            )
+            self.assertIn("5 questions count as missing", err)
+            self.assertNotIn("Pass@k covers", err)
+
+    def test_an_offset_shard_stays_unnamed_when_the_suite_lists_disagree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.offset_shard(root, "60", {"alpha": [1.0]}, ["alpha", "beta", "eta"])
+            self.offset_shard(root, "62", {"eta": [1.0]}, ["alpha", "eta", "beta"])
+            code, err = self.run_plan(
+                root, ["1|60|SUCCESS|0|1|", "2|61|FAILURE|1|5|", "3|62|SUCCESS|6|1|"], rollouts=1
+            )
             self.assertEqual(code, 0, err)
             doc, md, _ = self.report(root)
             failed = doc["eval_protocol"]["shards"][1]
             self.assertEqual((failed["not_run_count"], failed["not_run_offset"]), (5, 1))
-            self.assertIn("- Worker (shard 2 jenkins-61): FAILURE before any trial · 5 questions at offset 1 not run", md)
+            self.assertIn("WARNING: the shards listed different suites", err)
             self.assertIn("its 5 questions at offset 1 are not named, so the report does not count them", err)
+            self.assertIn("WARNING: the dispatcher planned 7 questions but Pass@k covers 2", err)
+            self.assertIn("- Worker (shard 2 jenkins-61): FAILURE before any trial · 5 questions at offset 1 not run", md)
+            self.assertIn(
+                "- Coverage: 2 of 7 planned questions have trials; 5 not run (shard 2 jenkins-61 FAILURE); "
+                "5 not named, so Pass@k covers 2 questions",
+                md,
+            )
+
+    def test_a_slice_overlapping_another_shards_questions_is_flagged(self):
+        """Two workers that sorted the suite differently cut overlapping slices."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.offset_shard(root, "60", {"beta": [1.0]}, ["alpha", "beta", "gamma"])
+            code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|", "2|61|FAILURE|1|2|"], rollouts=1)
+            self.assertEqual(code, 0, err)
+            self.assertIn(
+                "WARNING: shard 2 jenkins-61's slice overlaps questions another shard ran (beta); "
+                "the shards cut different slices of the suite",
+                err,
+            )
+
+    def test_the_dispatchers_user_is_the_requester(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = make_shard(root / "home", "jenkins-60", {"alpha": [1.0]}, inputs=shard_inputs("60", "a"))
+            self.collect(root, "60", local)
+            code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha"], rollouts=1, extra=("--requester-user", "Toby"))
+            self.assertEqual(code, 0, err)
+            doc, md, page = self.report(root)
+            self.assertEqual(doc["eval_protocol"]["requester"], {"user": "Toby", "build_url": DISPATCHER_URL})
+            self.assertIn(f"- Requester: `Toby` `{DISPATCHER_URL}`", md)
+            self.assertIn(f"Requester Toby {DISPATCHER_URL}", page)
 
     def test_a_fresh_shard_from_its_own_build_counts_in_full(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -584,6 +659,7 @@ class DispatcherPlanTests(unittest.TestCase):
             self.assertEqual({row["id"] for row in doc["icode"]["tasks"]}, {"alpha", "beta"})
             self.assertEqual(doc["anticheat"]["attempts"], 4)
             self.assertNotIn("not run", md)
+            self.assertIn("- Coverage: 2 of 2 planned questions have trials", md)
             self.assertIn("- Worker (shard 2 jenkins-61): node cloud", md)
             self.assertIn(f"- Egress probe: Harbor default {DEFAULT_PROBE}", md)
 

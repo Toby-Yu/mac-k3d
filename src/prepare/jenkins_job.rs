@@ -21,6 +21,7 @@ const DESC_CANARY_ALLOW_HOST: &str = "Test only: open this host (for example git
 const DESC_SHARD_SIZE: &str = "Questions per shard. All shards are queued at once and each worker takes the next one when it finishes, so a faster worker runs more of them. There is always at least one shard per online worker.";
 const DESC_RUN_GROUP: &str = "Set by some_task or full_suite_task on a shard build: ties the shards of one run together. Empty on a direct build.";
 const DESC_SHARD: &str = "Set by some_task or full_suite_task on a shard build: which shard this is. Shown as the build description.";
+const DESC_REQUESTED_BY: &str = "Set by some_task or full_suite_task on a shard build: the Jenkins user who started the run, for the report's Requester. Empty on a direct build.";
 const DESC_SHARD_TASKS: &str = "Set by some_task or full_suite_task on a shard build: the question ids this shard runs. Empty on a direct build.";
 const DESC_SHARD_N_TASKS: &str = "Set by some_task or full_suite_task on a shard build: how many sorted ids to take after TASK_OFFSET. 1 on a direct build.";
 const DESC_TASK_OFFSET: &str = "Set by some_task or full_suite_task on a shard build: sorted ids to skip before taking N_TASKS. 0 on a direct build.";
@@ -713,6 +714,7 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             p.push(text_param("TASK_OFFSET", 0, DESC_TASK_OFFSET, Never));
             p.push(text_param("RUN_GROUP", "", DESC_RUN_GROUP, Never));
             p.push(text_param("SHARD", "", DESC_SHARD, Never));
+            p.push(text_param("REQUESTED_BY", "", DESC_REQUESTED_BY, Never));
         }
         JobShape::Some_ => {}
         JobShape::FullSuite => {
@@ -863,6 +865,24 @@ fn shard_readers(job_benchmark: &str) -> Vec<String> {
 const DISPLAY_NAME_GROOVY: &str =
     r##"currentBuild.displayName = "#${env.BUILD_NUMBER} ${params.HARNESS}/${params.DEEPSEEK_MODEL}/${params.BENCHMARK}""##;
 
+/// Sets `env.BUILD_USER`, which provenance records as the report's Requester: the
+/// Jenkins user (or API token owner) who started this build, else the user a
+/// dispatcher forwarded in `REQUESTED_BY`. A sandbox refusal only warns.
+fn requester_groovy(indent: &str) -> String {
+    [
+        "String requester = ''",
+        "try {",
+        "  def causes = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')",
+        "  if (causes) { requester = (causes[0].userId ?: causes[0].userName ?: '').toString() }",
+        "} catch (Throwable t) {",
+        "  echo \"WARNING: could not read who started this build (${t})\"",
+        "}",
+        "if (!requester.trim()) { requester = params.REQUESTED_BY?.trim() ?: 'unknown' }",
+        "env.BUILD_USER = requester",
+    ]
+    .join(&format!("\n{indent}"))
+}
+
 fn one_task_jenkinsfile(job_benchmark: &str, opts: &JobOpts) -> String {
     eval_jenkinsfile(job_benchmark, JobShape::One, opts)
 }
@@ -937,7 +957,7 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
         // can merge them. The workspace keeps every earlier build's trials too.
         if (params.RUN_GROUP?.trim()) {{
           archiveArtifacts artifacts: "eval-runs/harness/harbor_runs/jenkins-${{env.BUILD_NUMBER}}/**, eval-runs/harness/anticheat/**", allowEmptyArchive: true
-          archiveArtifacts artifacts: 'eval-runs/selected_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json', allowEmptyArchive: true
+          archiveArtifacts artifacts: 'eval-runs/selected_tasks.txt, eval-runs/suite_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json', allowEmptyArchive: true
         }}
       }}
     }}
@@ -983,6 +1003,7 @@ fn eval_stage(stage: &EvalStage, first: bool, bootstrap: &str, opts: &JobOpts) -
         );
     }
     let (setup, clear) = if first {
+        let requester = requester_groovy("            ");
         (
             format!(
                 r#"          script {{
@@ -990,6 +1011,7 @@ fn eval_stage(stage: &EvalStage, first: bool, bootstrap: &str, opts: &JobOpts) -
             if (params.RUN_GROUP?.trim()) {{
               currentBuild.description = "shard ${{params.SHARD}}"
             }}
+            {requester}
             try {{
               unstash 'ICODE_RELEASE_FILE'
             }} catch (Throwable t) {{
@@ -1049,6 +1071,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
       steps {{
         script {{
           {display_name}
+          {requester}
           int rollouts = (params.N_ROLLOUTS as Integer)
           int shardSize = (params.SHARD_SIZE as Integer)
           if (rollouts < 1 || shardSize < 1) {{
@@ -1113,6 +1136,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
                   string(name: 'N_ROLLOUTS', value: "${{rollouts}}"),
                   string(name: 'RUN_GROUP', value: env.RUN_GROUP),
                   string(name: 'SHARD', value: note),
+                  string(name: 'REQUESTED_BY', value: env.BUILD_USER ?: ''),
                   string(name: 'ICODE_MODE', value: 'git'),
                 ]
               shardBuilds[name] = run.number
@@ -1167,6 +1191,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             --n-rollouts "${{N_ROLLOUTS:-4}}" \
             --plan "${{WORKSPACE}}/shards/plan.txt" \
             --build-url "${{BUILD_URL:-}}" \
+            --requester-user "${{BUILD_USER:-}}" \
             --out "${{WORKSPACE}}/aggregate"
           python3 "$MAC_K3D_ROOT/pipeline/lib/cost_token_report.py" \
             --run-dir "${{WORKSPACE}}/aggregate" \
@@ -1192,6 +1217,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
 }}
 "#,
         display_name = DISPLAY_NAME_GROOVY,
+        requester = requester_groovy("          "),
         default_label = DEFAULT_AGENT_LABEL,
     )
 }
@@ -1836,6 +1862,7 @@ mod tests {
         assert!(block.contains("hidden(name: 'RUN_GROUP', defaultValue: ''"));
         assert!(block.contains("hidden(name: 'TASK_OFFSET', defaultValue: '0'"));
         assert!(block.contains("hidden(name: 'SHARD', defaultValue: ''"));
+        assert!(block.contains("hidden(name: 'REQUESTED_BY', defaultValue: ''"));
         let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
         assert!(params_block(&full).contains("string(name: 'SHARD_SIZE', defaultValue: '10'"));
         assert!(params_block(&full).contains("string(name: 'N_TASKS', defaultValue: '113'"));
@@ -2060,7 +2087,7 @@ mod tests {
     fn job_params_mark_shard_plumbing_and_developer_fields() {
         let one = job_params("deepswe", JobShape::One);
         let get = |ps: &[JobParam], n: &str| ps.iter().find(|p| p.name == n).cloned().expect(n);
-        for n in ["TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD"] {
+        for n in ["TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD", "REQUESTED_BY"] {
             assert!(!get(&one, n).settable, "{n}");
         }
         assert!(get(&one, "TASK").settable && !get(&one, "TASK").developer);
@@ -2132,7 +2159,15 @@ mod tests {
         ));
         assert!(!jf.contains("'eval-runs/harness/harbor_runs/**'"));
         assert!(jf.contains("eval-runs/selected_tasks.txt"));
+        // The whole suite in byte order, so the merge can name an offset shard that ran nothing.
+        assert!(jf.contains("eval-runs/suite_tasks.txt"));
         assert!(jf.contains("currentBuild.description = \"shard ${params.SHARD}\""));
+        // A direct build names whoever started it; a shard takes the dispatcher's user.
+        let cause = jf.find("currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')").expect("cause");
+        assert!(jf.contains("requester = params.REQUESTED_BY?.trim() ?: 'unknown'"));
+        let set = jf.find("env.BUILD_USER = requester").expect("BUILD_USER");
+        assert!(cause < set && set < jf.find("sh '''").unwrap());
+        assert!(jf.contains("} catch (Throwable t) {\n              echo \"WARNING: could not read who started this build (${t})\""));
         // Copy Artifact refuses cross-job copies unless the source job allows them.
         assert!(jf.contains("copyArtifactPermission('deepswe_some_task,deepswe_full_suite_task')"));
         let xml = eval_job_xml("deepswe", JobShape::One, "d", &opts);
@@ -2162,6 +2197,11 @@ mod tests {
             assert!(write < jf.find("aggregate_runs.py").unwrap());
             assert!(jf.contains(r#"--plan "${WORKSPACE}/shards/plan.txt""#), "{shape:?}");
             assert!(jf.contains(r#"--build-url "${BUILD_URL:-}""#), "{shape:?}");
+            // The user who started the dispatcher reaches every shard and the merged report.
+            let cause = jf.find("currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')").expect("cause");
+            assert!(cause < jf.find("parallel branches").unwrap());
+            assert!(jf.contains("string(name: 'REQUESTED_BY', value: env.BUILD_USER ?: '')"), "{shape:?}");
+            assert!(jf.contains(r#"--requester-user "${BUILD_USER:-}""#), "{shape:?}");
         }
     }
 
