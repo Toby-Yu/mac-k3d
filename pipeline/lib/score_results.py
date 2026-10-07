@@ -739,6 +739,15 @@ def trial_dir_for_reward(path: Path) -> Path:
     return path.parent
 
 
+def _is_job_summary(path: Path) -> bool:
+    """Harbor's job-level result.json (`n_total_trials`, `stats`), not a trial's."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return isinstance(doc, dict) and "n_total_trials" in doc and "trial_name" not in doc
+
+
 def trial_dirs(job_dir: Path | None) -> list[Path]:
     """One dir per Harbor trial, oldest first. Includes trials with no reward.json."""
     if job_dir is None or not job_dir.is_dir():
@@ -774,7 +783,7 @@ def trial_dirs(job_dir: Path | None) -> list[Path]:
                     break
         except OSError:
             nested = False
-        if nested:
+        if nested or _is_job_summary(path):
             continue
         try:
             stamp = path.stat().st_mtime

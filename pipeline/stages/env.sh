@@ -4,7 +4,10 @@
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
-STEPS=(env/host env/compose env/harbor env/model_api)
+STEPS=(env/host env/compose env/harbor env/egress env/model_api)
+
+# Written only by report/render; Jenkins archives whatever it names.
+rm -f "$WORKDIR/last_output.txt"
 
 progress 0 "env: checking this worker (benchmark=$BENCHMARK n=$N_TASKS harness=$HARNESS llm=$LLM)"
 run_steps "${STEPS[@]}"

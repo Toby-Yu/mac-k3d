@@ -1,6 +1,8 @@
 # Question coverage on this worker
 
-Which questions have a Harbor run on this PC, and the Docker memory recorded for each. Product packing rules stay in [optimization.md](../optimization.md). Branch notes: [eval-comparison-report](../eval-comparison-report/README.md).
+Which questions have a Harbor run, and the Docker memory recorded for each. Product packing rules stay in [optimization.md](../optimization.md). Branch notes: [eval-comparison-report](../eval-comparison-report/README.md).
+
+What each run did per question (pass, fail, the error that stopped it, and your fix notes) is in [question-log.md](question-log.md). `mac-k3d eval record` writes it and also sets `status` and `builds` here: a Jenkins build adds its number, a local run adds `local` once. It never touches `peak_gb`, `slots` or `memory_mb`.
 
 Jenkins build numbers are the `jenkins-<n>` trees under each job’s `eval-runs/harness/harbor_runs`. `peak_gb`, `slots`, and `memory_mb` come from that run’s `container_mem.jsonl` after the report phase (copied next to `artifact.json`). Historical builds finished before that file existed, so those cells stay empty.
 
@@ -22,7 +24,7 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 
 | question | status | builds | peak_gb | slots | memory_mb |
 |----------|--------|--------|---------|-------|-----------|
-| `abs-module-cache-flags` | run | 21, 22, 23, 24, 25, 27, 28, 29, 30 | | | |
+| `abs-module-cache-flags` | run | 21, 22, 23, 24, 25, 27, 28, 29, 30, local | | | |
 | `abs-stepped-slices` | run | 23, 24, 25, 28, 29, 30 | | | |
 | `actionlint-action-pinning-lint` | run | 23, 24, 25, 28, 29, 30 | | | |
 | `adaptix-name-mapping-aliases` | run | 23, 24, 29, 30 | | | |

@@ -1,6 +1,7 @@
 mod clean;
 mod config;
 mod eval;
+mod eval_record;
 mod pipeline;
 mod prepare;
 mod set;

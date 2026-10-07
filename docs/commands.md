@@ -116,6 +116,24 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 
 There is no `CPU_LOCK_QTY`, `SHARDS` or `RESUME` parameter. A build locks every core of its worker (one executor per worker), and the dispatcher picks the shard count from `SHARD_SIZE` and the number of online workers. There is no pipeline URL or ref parameter either: the pipeline is the worker binary's, and `scripts/redeploy.sh` is how a commit reaches it.
 
+### `eval record`
+
+Write one row per question of a finished run into [testing/question-log.md](testing/question-log.md), and mark the question `run` in [testing/question-coverage.md](testing/question-coverage.md). Run it from your mac-k3d checkout, since those docs live there.
+
+```bash
+mac-k3d eval record --job deepswe_one_task --build 54   # a Jenkins build, any worker
+mac-k3d eval record                                       # the last local run
+mac-k3d eval record --run eval-runs/output/deepswe/<run folder>
+```
+
+| Flag | Description |
+|------|-------------|
+| `--job JOB --build N` | Reads the build's result, node, start time, `consoleText` and archived `artifact.json` through the Jenkins API. The URL and API user/token come from `jenkins_agent` in the loaded config, else from `~/.config/mac-k3d/worker.yaml`; curl gets the credentials on stdin, never in its arguments or the URL. A build that is still running is refused |
+| `--run DIR` | One local output folder (`artifact.json` inside) |
+| `--workdir PATH` | Where the last local run left `last_output.txt` and `last_console.log` (default `./eval-runs`) |
+
+An `artifact.json` from another run (a reused Jenkins workspace) is ignored. A run that stopped before `report` still gets rows, from the console: the selected questions, the last `== phase/step` and the first `ERROR:` line, masked for keys and tokens. `--local` and `--stage all` copy their console to `eval-runs/last_console.log` and record themselves when they end, passed or failed. Re-recording a run keeps the `fix` column.
+
 ---
 
 ## `pipeline`

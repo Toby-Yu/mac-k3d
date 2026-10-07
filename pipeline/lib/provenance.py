@@ -466,6 +466,23 @@ def record_canary(inputs: Path, summary: Path) -> dict:
     return doc
 
 
+def record_egress_probe(inputs: Path, probe: Path) -> dict:
+    """`harbor_egress.py check` output: which image Harbor's kernel probe ran in."""
+    doc = _load_json(inputs)
+    facts = _load_json(probe)
+    isolation = doc.get("isolation") if isinstance(doc.get("isolation"), dict) else {}
+    isolation["egress_probe"] = {
+        "harbor_default": str(facts.get("harbor_default") or ""),
+        "image": str(facts.get("image") or ""),
+        "substituted": bool(facts.get("substituted")),
+        "reason": str(facts.get("reason") or ""),
+        "sidecar": str(facts.get("sidecar") or ""),
+    }
+    doc["isolation"] = isolation
+    _write_json(inputs, doc)
+    return doc
+
+
 def write_protocol_inputs(
     *,
     out: Path,
@@ -532,6 +549,7 @@ def isolation_view(isolation: object) -> dict | None:
     hits = leak.get("hit_tasks") if isinstance(leak.get("hit_tasks"), list) else []
     canary = isolation.get("canary") if isinstance(isolation.get("canary"), dict) else {}
     allow = isolation.get("network_allowlist") if isinstance(isolation.get("network_allowlist"), dict) else {}
+    egress = isolation.get("egress_probe") if isinstance(isolation.get("egress_probe"), dict) else {}
     count = mount.get("count")
     return {
         "mode": str(isolation.get("mode") or ""),
@@ -553,6 +571,10 @@ def isolation_view(isolation: object) -> dict | None:
         "canary_warn": [str(t) for t in canary.get("warn_tasks") or []],
         "allowlist_version": str(allow.get("version") or ""),
         "allowlist_hosts": [str(h) for h in allow.get("agent_hosts") or []],
+        "egress_default": str(egress.get("harbor_default") or ""),
+        "egress_image": str(egress.get("image") or ""),
+        "egress_substituted": egress.get("substituted") is True,
+        "egress_reason": str(egress.get("reason") or ""),
     }
 
 
@@ -571,6 +593,13 @@ def isolation_lines(view: dict | None) -> list[str]:
         lines.append(
             f"Agent network: {view['allowlist_version']} · allowed {', '.join(view['allowlist_hosts']) or '-'}"
         )
+    if view.get("egress_substituted"):
+        lines.append(
+            f"Egress probe: substituted {view['egress_image']} "
+            f"(Harbor's {view['egress_default']} could not run: {_cell(view['egress_reason'])})"
+        )
+    elif view.get("egress_image"):
+        lines.append(f"Egress probe: Harbor default {view['egress_image']}")
     if view["leak_scanner"]:
         hits = ", ".join(view["leak_hits"]) if view["leak_hits"] else "none"
         lines.append(f"Leak scan: {view['leak_scanner']} · hit tasks {hits} · {_cell(view['leak_statuses'])}")
@@ -728,6 +757,10 @@ def main(argv: list[str] | None = None) -> int:
     canary.add_argument("--inputs", required=True)
     canary.add_argument("--summary", required=True)
 
+    egress = sub.add_parser("record-egress-probe")
+    egress.add_argument("--inputs", required=True)
+    egress.add_argument("--probe", required=True)
+
     res = sub.add_parser("record-resources")
     res.add_argument("--inputs", required=True)
     res.add_argument("--plan", required=True)
@@ -761,6 +794,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "record-canary":
         record_canary(Path(args.inputs), Path(args.summary))
+        return 0
+    if args.cmd == "record-egress-probe":
+        record_egress_probe(Path(args.inputs), Path(args.probe))
         return 0
     if args.cmd == "record-resources":
         record_resources(Path(args.inputs), Path(args.plan))

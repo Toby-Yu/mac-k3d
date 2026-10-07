@@ -2,15 +2,26 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 
+use super::eval_record::{self, LocalOutcome, RecordArgs};
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
 use crate::eval_catalog;
 
+#[derive(Debug, Subcommand)]
+pub enum EvalAction {
+    /// Write one row per question of a finished run into docs/testing/question-log.md
+    /// (--job/--build for a Jenkins build; no flags for the last local run)
+    Record(RecordArgs),
+}
+
 #[derive(Debug, Default, Args)]
 pub struct EvalArgs {
+    #[command(subcommand)]
+    pub action: Option<EvalAction>,
+
     /// Run one phase locally: env, tasks, evaluate, anticheat, score, report,
     /// archive, all, or baseline (the manual LLM-only arm). Omit for the full flow
     #[arg(long)]
@@ -68,6 +79,9 @@ pub struct EvalArgs {
 
 /// Interactive or staged iCode / DeepSeek / DeepSWE evaluation.
 pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
+    if let Some(EvalAction::Record(record)) = args.action {
+        return eval_record::run(record, config);
+    }
     if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
         println!("Warning: could not extract pipeline ({err}).");
     }
@@ -620,7 +634,7 @@ fn discover_icode_release() -> String {
         .unwrap_or_default()
 }
 
-fn discover_repo_root() -> Result<PathBuf> {
+pub(super) fn discover_repo_root() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("MAC_K3D_ROOT") {
         let root = PathBuf::from(p);
         if crate::prepare::eval_assets::looks_like_root(&root) {
@@ -743,8 +757,26 @@ fn run_stage(run: &LocalRun<'_>, stage: &str, config: &MacK3dConfig) -> Result<(
     println!("{}", cpu_lock_note(qty, source));
     let export_qty = (source != "env").then_some(qty);
 
-    let status = Command::new("bash")
-        .arg(&path)
+    // A full run keeps its console for `eval record` and records itself, pass or fail.
+    let records = phase.as_deref() == Some("all");
+    let workdir = if run.workdir.is_absolute() {
+        run.workdir.to_path_buf()
+    } else {
+        run.repo.join(run.workdir)
+    };
+    let started_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut bash = Command::new("bash");
+    if records {
+        std::fs::create_dir_all(&workdir)
+            .map_err(|e| Error::Config(format!("mkdir {}: {e}", workdir.display())))?;
+        bash.args(tee_args(&path, &workdir.join(eval_record::CONSOLE_LOG)));
+    } else {
+        bash.arg(&path);
+    }
+    let status = bash
         .current_dir(run.repo)
         .envs(run.env(phase.as_deref(), export_qty))
         .status()
@@ -752,6 +784,9 @@ fn run_stage(run: &LocalRun<'_>, stage: &str, config: &MacK3dConfig) -> Result<(
             cmd: format!("bash {}", path.display()),
             source: e.into(),
         })?;
+    if records {
+        record_local_run(run.repo, &workdir, status.code(), started_epoch);
+    }
     if !status.success() {
         return Err(Error::CommandFailed {
             cmd: format!("bash {}", path.display()),
@@ -759,6 +794,38 @@ fn run_stage(run: &LocalRun<'_>, stage: &str, config: &MacK3dConfig) -> Result<(
         });
     }
     Ok(())
+}
+
+/// `bash -c` arguments that run `script` with its output also copied to `log`,
+/// keeping the script's exit status.
+fn tee_args(script: &Path, log: &Path) -> Vec<OsString> {
+    vec![
+        "-c".into(),
+        "set -o pipefail; bash \"$1\" 2>&1 | tee \"$2\"".into(),
+        "bash".into(),
+        script.into(),
+        log.into(),
+    ]
+}
+
+fn record_local_run(root: &Path, workdir: &Path, exit_code: Option<i32>, started_epoch: u64) {
+    let repo = match eval_record::docs_repo(root) {
+        Ok(repo) => repo,
+        Err(_) => {
+            println!(
+                "Note: {} is not a mac-k3d checkout, so this run is not in docs/testing/question-log.md.",
+                root.display()
+            );
+            return;
+        }
+    };
+    let outcome = LocalOutcome {
+        exit_code,
+        started_epoch,
+    };
+    if let Err(err) = eval_record::record_local(&repo, workdir, None, Some(&outcome)) {
+        println!("Warning: could not record this run in docs/testing/question-log.md ({err}).");
+    }
 }
 
 fn trigger_jenkins_one_task(
@@ -945,6 +1012,24 @@ fn urlencoding_simple(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tee_keeps_the_stage_exit_code_and_copies_the_console() {
+        let dir = std::env::temp_dir().join(format!("mac-k3d-tee-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("stage.sh");
+        std::fs::write(&script, "echo out\necho err >&2\nexit 7\n").unwrap();
+        let log = dir.join(eval_record::CONSOLE_LOG);
+        let out = Command::new("bash")
+            .args(tee_args(&script, &log))
+            .output()
+            .unwrap();
+        let console = std::fs::read_to_string(&log).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(out.status.code(), Some(7));
+        assert!(console.contains("out") && console.contains("err"), "{console}");
+    }
 
     #[test]
     fn icode_paths_load_empty_without_file() {

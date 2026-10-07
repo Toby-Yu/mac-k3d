@@ -7,6 +7,8 @@ and this lab does not store a GitCode PAT on Jenkins.
 
 from __future__ import annotations
 
+import harbor_probe_override  # noqa: F401  (must run before Harbor creates an environment)
+
 from pathlib import Path
 from typing import override
 

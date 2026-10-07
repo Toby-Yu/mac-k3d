@@ -11,5 +11,6 @@ These pages are **this team’s copy-paste checklists** (cloud IP, this PC, sign
 | [testing-binary-initializer.md](testing-binary-initializer.md) | Bootstrap Task 0–8 |
 | [clean-machine-binary-test.md](clean-machine-binary-test.md) | Wipe or new PC |
 | [question-coverage.md](question-coverage.md) | Questions run on this worker, and Docker memory per question |
+| [question-log.md](question-log.md) | Per-run result of every question, open problems and your fix notes (`mac-k3d eval record`) |
 
 Do not nest a second `testing/` under a branch folder. Branch re-test notes stay in `docs/<branch>/testing.md`.

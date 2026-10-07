@@ -3,6 +3,7 @@
 # _common.sh by evaluate/canary.sh and evaluate/harbor_run.sh; never run alone.
 #
 #   load_eval_state    read what the tasks phase and evaluate/slots left in $WORKDIR
+#   ensure_harbor_egress  re-run env/egress's probe check right before Harbor runs
 #   write_harbor_env   the 0600 --env-file with the model key and settings
 #   build_run_cmd      iCode: every selected task x N_ROLLOUTS trials, one job
 #   build_canary_cmd   canary: one trial with iCode's exact flags, mounts and env
@@ -17,6 +18,7 @@
 unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT MAC_K3D_GIT_TOKEN
 
 declare -a cmd=() TASK_IDS=() AGENT_HOSTS=()
+EGRESS_PROBE_IMAGE=""
 unit_jobs=""
 unit_run_dir=""
 unit_task_path=""
@@ -53,6 +55,17 @@ load_eval_state() {
   CANARY_DIR="$WORKDIR/canary/jenkins-${BUILD_NUMBER:-local}"
   HARBOR_ENV="$WORKDIR/.harbor-env"
   NEEDED=$(( ${#TASK_IDS[@]} * N_ROLLOUTS ))
+}
+
+# The env phase may have run long before the CPU lock was granted, so check
+# again. EGRESS_PROBE_IMAGE is set only when Docker cannot run Harbor's own
+# probe image; run_cmd hands it to harbor_probe_override.py.
+ensure_harbor_egress() {
+  local probe="$WORKDIR/egress_probe.json"
+  python3 "$PIPELINE_LIB/harbor_egress.py" check --out "$probe" \
+    || die "Harbor cannot enforce network isolation on this worker (see the lines above)"
+  python3 "$PIPELINE_LIB/provenance.py" record-egress-probe --inputs "$PROTOCOL_INPUTS" --probe "$probe"
+  EGRESS_PROBE_IMAGE="$(python3 "$PIPELINE_LIB/harbor_egress.py" override --probe "$probe")"
 }
 
 write_harbor_env() {
@@ -205,6 +218,11 @@ run_cmd() {
     cd "$unit_run_dir"
     export PYTHONPATH="$PIPELINE_LIB${PYTHONPATH:+:$PYTHONPATH}"
     export PYTHONUNBUFFERED=1
+    if [ -n "$EGRESS_PROBE_IMAGE" ]; then
+      export MAC_K3D_EGRESS_PROBE_IMAGE="$EGRESS_PROBE_IMAGE"
+    else
+      unset MAC_K3D_EGRESS_PROBE_IMAGE
+    fi
     if command -v stdbuf >/dev/null 2>&1; then
       stdbuf -oL -eL "${cmd[@]}"
     else

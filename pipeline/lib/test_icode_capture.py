@@ -611,6 +611,35 @@ class CaptureReceiptHostTests(unittest.TestCase):
             self.assertIn("icode_deepswe_52/beta__x: beta, datacurve/beta", stray.stderr)
             self.assertNotIn("alpha__x", stray.stderr)
 
+    def test_job_summary_of_a_run_that_crashed_is_not_a_trial(self):
+        """Build 53: Harbor raised before any trial ran, leaving its job result.json and a bare trial.log."""
+        from score_results import trial_dirs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "harness"
+            jobs = harness / "harbor_runs" / "jenkins-53"
+            job = jobs / "icode_deepswe_53"
+            (job / "ipython-session-bundle-replay__x").mkdir(parents=True)
+            (job / "ipython-session-bundle-replay__x" / "trial.log").write_text("ValueError\n", encoding="utf-8")
+            (job / "result.json").write_text(
+                json.dumps({"id": "j", "n_total_trials": 1, "stats": {}}), encoding="utf-8"
+            )
+            (harness / "harbor_jobs_dir.txt").write_text(f"{jobs}\n", encoding="utf-8")
+            self.assertEqual(trial_dirs(jobs), [])
+            selected = Path(tmp) / "selected_tasks.txt"
+            selected.write_text("ipython-session-bundle-replay\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(LIB / "capture_receipt.py"), "check-trials",
+                 "--harness-dir", str(harness), "--task-file", str(selected)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("no task recorded", proc.stderr)
+
+            trial = job / "ipython-session-bundle-replay__x"
+            (trial / "result.json").write_text(json.dumps({"trial_name": "x", "task_name": "t"}), encoding="utf-8")
+            self.assertEqual(trial_dirs(jobs), [trial])
+
     def test_trial_flags_same_check_for_every_suite(self):
         data = b"diff --git a/x b/x\n"
         for suite in SUITES:

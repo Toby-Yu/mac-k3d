@@ -6,6 +6,8 @@ Used by `mac-k3d eval` and the Jenkins eval jobs (all Harbor). The phase and ste
 |------|------|
 | `icode_input.sh` | `tasks/icode` iCode inputs: Jenkins upload / local `*-full-*`, or git clone; leftover `icode-src` wipe via Docker |
 | `icode_harbor_agent.py` | Harbor `ICodeAgent` for all three benchmarks; worker iCode tree bind-mounted at `/opt/icode-host` |
+| `harbor_egress.py` | `check`: runs Harbor's egress-control kernel probe (`env/egress`, and again in both evaluate steps), falling back to a pinned image only when Docker cannot run Harbor's; checks the egress sidecar image; writes `egress_probe.json`. `override`: the image `run_cmd` exports as `MAC_K3D_EGRESS_PROBE_IMAGE` |
+| `harbor_probe_override.py` | Imported first by `icode_harbor_agent.py`: when `MAC_K3D_EGRESS_PROBE_IMAGE` is set, points Harbor's probe at that image and clears Harbor's cached answer. Changes nothing else in Harbor |
 | `agent_mounts.py` | `tasks/isolation`: the one read-only mount (iCode at `/opt/icode-host`) and the check that refuses a tree overlapping a benchmark |
 | `network_allowlist.py` | `hosts`: the agent's `--allow-agent-host` list from `../config/network-allowlist-v1.json`. `check --api-base`: the model API host is on it. `record`: writes version, hosts and file hash into `eval_protocol_inputs.json` |
 | `anticheat_leakscan.py` | `tasks/leakscan`: any selected task's gold patch lines inside the mounted iCode tree |
@@ -30,6 +32,7 @@ Used by `mac-k3d eval` and the Jenkins eval jobs (all Harbor). The phase and ste
 | `cost_token_report.py` | `archive/analysis`: `cost-token-report.md` in the run folder; also by hand for older runs |
 | `archive_run.py` | `archive/backup`: copy the run folder, verdicts and per-trial files (transcripts gzipped and masked), then `tar.gz` |
 | `check_report.py` | Validate required report keys (no network) |
+| `question_log.py` | `record`: one row per question of a run into `docs/testing/question-log.md` (from `artifact.json`, or the console when the run stopped early), the Open problems table, and `status`/`builds` in `question-coverage.md`. Called by `mac-k3d eval record` and at the end of `eval --local` |
 | `testdata/report-min.json` | Fixture for `pipeline/tools/check_report.sh` |
 
 Runtime artifacts go to **`eval-runs/`** and **`output/`** (both gitignored). Each run writes `artifact.json`, `summary.md`, and `report.html` under `eval-runs/output/<benchmark>/<run>/` (`render_report.py`), adds `cost-token-report.md` (`cost_token_report.py`), and stores that folder as `output/<benchmark>/<run>.tar.gz` (`archive_run.py`).

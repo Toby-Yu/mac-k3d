@@ -97,8 +97,27 @@ write_progress() {
     --started-at "$STARTED_AT"
 }
 
+# The last `SomethingError: …` line of a Harbor log, without Rich's box drawing.
+harbor_last_error() {
+  python3 - "$1" <<'PY' || true
+import re, sys
+from pathlib import Path
+
+try:
+    text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+except OSError:
+    text = ""
+hits = [
+    re.sub(r"[│╭╮╰╯─]+", " ", line).strip()
+    for line in text.splitlines()
+    if re.search(r"\b\w+(Error|Exception)\b(:|$)", line)
+]
+print(re.sub(r"\s+", " ", hits[-1])[:300] if hits else "no error line in the log")
+PY
+}
+
 run_harbor() {
-  local tid rc rewards heartbeat_pid
+  local tid rc rewards finished heartbeat_pid
   REPO_CANDIDATES="$(declared_repo_candidates)"
   mkdir -p "$JOBS_DIR"
   printf '%s\n' "$JOBS_DIR" >"$HARNESS_DIR/harbor_jobs_dir.txt"
@@ -132,6 +151,12 @@ run_harbor() {
   LAST_RC="$rc"
   rewards="$(find "$JOBS_DIR" -name reward.json -type f 2>/dev/null | wc -l | tr -d ' ')"
   echo "harbor: ${rewards:-0}/${NEEDED} trials scored (exit $rc)"
+  # A trial's result.json sits at <jobs>/<job>/<trial>/; the job's own one level up.
+  finished="$(find "$JOBS_DIR" -mindepth 3 -maxdepth 3 -name result.json -type f 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$rc" -ne 0 ] && [ "${rewards:-0}" -eq 0 ] && [ "${finished:-0}" -eq 0 ]; then
+    icode_reclaim_host_tree "$HOST_ICODE"
+    die "harbor run exited $rc before any trial finished: $(harbor_last_error "$unit_log") (see $unit_log)"
+  fi
   if [ "${rewards:-0}" -eq 0 ]; then
     echo "WARNING: no reward.json under $JOBS_DIR (unscored / no-response; see $unit_log)"
   elif [ "$rc" -ne 0 ]; then
@@ -166,6 +191,7 @@ if [ "$(canary_mode)" = only ]; then
   exit 0
 fi
 
+ensure_harbor_egress
 warn_docker_mtu
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SECONDS=0

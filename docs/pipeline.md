@@ -34,6 +34,7 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 | `env/host` | Checks `BENCHMARK`, `CANARY`/`OFFICIAL`, bash ≥ `BASH_MIN`, python3 ≥ `PYTHON_MIN`, git, free RAM and disk (`MIN_RAM_GB`, `WORKER_MIN_DISK_GB`; `MAC_K3D_MIN_RAM_GB` / `MAC_K3D_MIN_DISK_GB` override), `docker info`, a VPN MTU smaller than Docker's bridge, that `mac-k3d` lists `eval`, and the agent unit (systemd) or LaunchAgent (macOS) | — |
 | `env/compose` | `docker compose` (v2 plugin) and `docker buildx`: an existing plugin is kept, a missing one is downloaded at the version in `pipeline/config/toolchain.env` (worker `setup` does the same) | — |
 | `env/harbor` | Harbor at `HARBOR_VERSION` from `pipeline/config/toolchain.env` (the same pin `mac-k3d setup` installs). Reinstalls with `uv tool install --force` only when the version differs | `harbor_version.txt` |
+| `env/egress` | Runs Harbor's egress-control kernel probe visibly (Harbor itself only refuses `--allow-agent-host` and `no-network` when it fails). When Docker cannot run Harbor's probe image, the same script runs in a pinned fallback image and the run uses it (see [How Harbor is called](#how-harbor-is-called)). Also checks Harbor's egress sidecar image | `egress_probe.json` |
 | `env/model_api` | `DEEPSEEK_MODEL` is served by `GET /models`. Skipped with a note when no key is set | — |
 | `tasks/benchmark` | Checks out the benchmark (see [Where the benchmarks come from](#where-the-benchmarks-come-from)) | `deep-swe/`, `lolbench/` or `swebenchpro/` |
 | `tasks/select` | Picks the questions from `TASK`, `TASKS`, `N_TASKS` and `TASK_OFFSET`; every later step reads this file | `selected_tasks.txt`, `selected_tasks_offset.txt` |
@@ -45,7 +46,7 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 | `tasks/leakscan` | Searches the mounted iCode tree for any selected task's gold patch. Warns on a smoke run; `OFFICIAL=1` stops | `anticheat_leakscan.json` |
 | `evaluate/slots` | Clears this build's Harbor job and memory samples, then divides `CPU_LOCK_QTY` by each task's declared `cpus`/`memory_mb` into `EVAL_SLOTS`. Refuses a worker that cannot host one trial | `eval_resources.json` |
 | `evaluate/canary` | The isolation canary (see [Anti-cheat](#anti-cheat)) | `canary/jenkins-<N>/` |
-| `evaluate/harbor_run` | One `harbor run` for every selected task × rollout, with a 60 s heartbeat and memory sampling; then `meta.json`, and the iCode tree handed back to the build user | `harness/harbor_runs/jenkins-<N>/`, `harness/harbor.log`, `harness/progress.json`, `harness/meta.json` |
+| `evaluate/harbor_run` | One `harbor run` for every selected task × rollout, with a 60 s heartbeat and memory sampling; then `meta.json`, and the iCode tree handed back to the build user. A Harbor that exits non-zero before any trial finished fails the step with Harbor's last `…Error:` line | `harness/harbor_runs/jenkins-<N>/`, `harness/harbor.log`, `harness/progress.json`, `harness/meta.json` |
 | `anticheat/receipts` | First, every trial in this build's Harbor jobs dir must belong to a selected task (`check-trials`; the build fails otherwise, since that trial would drop out of the score and report). Then, for every trial, the patch the grader read must match the capture receipt, at the task's declared base commit | `<trial>/agent/capture_flags.json` |
 | `anticheat/verdict` | `clean`, `flagged` or `rejected` per rollout | `<trial>/agent/anticheat.json`, `harness/anticheat/` |
 | `score/score` | F2P/P2P per rollout | `results/score-temp.json` |
@@ -104,6 +105,8 @@ harbor run -p <task folder> -i <task> [-i <task> ...] \
 The canary uses the same command with `-a canary_harbor_agent:CanaryAgent`, `--ak spec=<canary_spec.json>` and `--disable-verification`, its own `--job-name`/`--jobs-dir`, and no `-k`/`-r` (one trial). `CANARY_ALLOW_HOST=<host>` adds one `--allow-agent-host` for the canary alone, to prove that it notices.
 
 `MAC_K3D_HARBOR_DRY_RUN=1` prints both commands with secret values masked (`harbor dry-run (cwd …): …` and `canary dry-run (cwd …): …`) and runs nothing.
+
+Harbor 0.22 enforces the allowlist and `no-network` only when its kernel probe (`docker container run` of a pinned `alpine:3.23.4`) succeeds. Both evaluate steps re-run `env/egress`'s check after the CPU lock is granted (`ensure_harbor_egress`) and record it as `eval_protocol.isolation.egress_probe`; `summary.md` and `report.html` show it as an `Egress probe:` line. When Docker cannot run Harbor's image (for example a damaged image store on the host), `run_cmd` exports `MAC_K3D_EGRESS_PROBE_IMAGE` and `harbor_probe_override.py`, imported first by the agent module, points Harbor's probe at the fallback image before Harbor creates the first environment. Only the image that runs the kernel check changes; the sidecar, the allowlist and `no-network` are Harbor's own. A probe that runs and fails is a kernel answer and never falls back.
 
 ## Anti-cheat
 
