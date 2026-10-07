@@ -500,8 +500,9 @@ def write_protocol_inputs(
 ) -> dict:
     prev = _load_json(out)
     prev_images = prev.get("images") if isinstance(prev.get("images"), dict) else {}
-    images = dict(prev_images)
     selected = _selected_ids(selected_file)
+    # The workspace keeps earlier builds' inputs; their other tasks are not this run's.
+    images = {tid: prev_images[tid] for tid in selected if tid in prev_images}
     for tid in selected:
         merge_image(images, tid, inspect_task(tasks_dir / tid))
     doc = model_inputs()
@@ -688,9 +689,20 @@ def shard_views(shards: object) -> list[dict]:
         params = item.get("model_params") if isinstance(item.get("model_params"), dict) else {}
         builds = [str(b) for b in item.get("builds") or []]
         label = f"shard {item.get('shard')}" + (f" {', '.join(builds)}" if builds else "")
+        probe = item.get("egress_probe") if isinstance(item.get("egress_probe"), dict) else {}
+        egress = ""
+        if probe.get("image"):
+            egress = f"{'substituted' if probe.get('substituted') is True else 'Harbor default'} {probe['image']}"
+        not_run = [str(t) for t in item.get("not_run") or []] if isinstance(item.get("not_run"), list) else []
         out.append(
             {
                 "label": label,
+                "has_data": bool(worker or params),
+                "result": str(item.get("result") or ""),
+                "not_run": not_run,
+                "not_run_count": item.get("not_run_count") if isinstance(item.get("not_run_count"), int) else 0,
+                "not_run_offset": item.get("not_run_offset"),
+                "egress": egress,
                 "node": str(worker.get("node") or ""),
                 "nproc": worker.get("nproc"),
                 "memory_kb": worker.get("memory_kb"),
@@ -722,12 +734,35 @@ SHARD_WORKER_FIELDS = (
 )
 
 
+def shard_status(shard: dict) -> list[str]:
+    """Why a shard has no trials, and which questions that leaves unrun."""
+    names = shard.get("not_run") or []
+    count = len(names) or shard.get("not_run_count") or 0
+    result = shard.get("result") or ""
+    parts = []
+    if result and count:
+        parts.append(f"{result} before any trial")
+    elif result and result != "SUCCESS":
+        parts.append(result)
+    plural = "s" if count != 1 else ""
+    if names:
+        parts.append(f"{count} question{plural} not run: {', '.join(names)}")
+    elif count:
+        parts.append(f"{count} question{plural} at offset {_cell(shard.get('not_run_offset'))} not run")
+    return parts
+
+
 def shard_worker_lines(view: dict) -> list[str]:
     """One plain-text `Worker (shard N ...)` line per shard, then a line when the shards differ."""
     lines = []
     for shard in view.get("shards") or []:
-        fields = " · ".join(f"{name} {_cell(shard[key])}" for key, name in SHARD_WORKER_FIELDS)
-        lines.append(f"Worker ({shard['label']}): {fields}")
+        parts = []
+        if shard.get("has_data", True):
+            parts = [f"{name} {_cell(shard[key])}" for key, name in SHARD_WORKER_FIELDS]
+            if shard.get("egress"):
+                parts.append(f"egress probe {shard['egress']}")
+        parts.extend(shard_status(shard))
+        lines.append(f"Worker ({shard['label']}): {' · '.join(parts) or '-'}")
     if view.get("model_params_status") == "mixed":
         detail = "; ".join(f"{k} {v}" for k, v in view.get("model_params_mismatch", {}).items())
         lines.append(f"Shards differ: {detail or 'model params'}. Not one measurement of one iCode setup.")

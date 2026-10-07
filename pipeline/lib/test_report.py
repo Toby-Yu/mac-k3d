@@ -3217,6 +3217,91 @@ class ProvenanceTests(unittest.TestCase):
         iso["canary"]["failed_tasks"] = ["alpha"]
         self.assertTrue(any("canary.status must be pass" in err for err in official_isolation_errors(iso)))
 
+    def test_inputs_keep_image_ids_only_for_this_runs_tasks(self):
+        """deepswe_some_task #5: the reused workspace's image table listed every earlier build's tasks."""
+        from unittest import mock
+
+        import provenance
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = root / "tasks"
+            for tid in ("alpha", "beta"):
+                (tasks / tid).mkdir(parents=True)
+            selected = root / "selected_tasks.txt"
+            selected.write_text("alpha\nbeta\n", encoding="utf-8")
+            out = root / "eval_protocol_inputs.json"
+            out.write_text(
+                json.dumps(
+                    {
+                        "images": {
+                            "alpha": {"image": "alpha:latest", "id": "sha256:alpha"},
+                            "old": {"image": "old:latest", "id": "sha256:old"},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            found = {"beta": "sha256:beta"}
+
+            def inspect(task_dir: Path) -> dict:
+                return {"image": f"{task_dir.name}:latest", "id": found.get(task_dir.name, ""), "repo_digests": []}
+
+            with mock.patch.object(provenance, "inspect_task", side_effect=inspect):
+                doc = provenance.write_protocol_inputs(
+                    out=out,
+                    repo_dir=root / "repo",
+                    tasks_dir=tasks,
+                    selected_file=selected,
+                    overlay=root / "overlay.patch",
+                    applied=False,
+                    workdir=root,
+                    pipeline_root=root,
+                )
+        self.assertEqual(sorted(doc["images"]), ["alpha", "beta"])
+        # A task inspected again without an id keeps the id an earlier build recorded.
+        self.assertEqual(doc["images"]["alpha"]["id"], "sha256:alpha")
+        self.assertEqual(doc["images"]["beta"]["id"], "sha256:beta")
+
+    def test_env_clears_the_files_a_shard_archives_but_keeps_overrides(self):
+        text = (STAGES / "env.sh").read_text(encoding="utf-8")
+        start = text.index('rm -f "$WORKDIR/eval_protocol_inputs.json"')
+        self.assertLess(start, text.index("run_steps"))
+        lines = text[start:].splitlines()
+        end = next(i for i, line in enumerate(lines) if not line.rstrip().endswith("\\"))
+        command = "\n".join(lines[: end + 1])
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "eval-runs"
+            harness = work / "harness"
+            anticheat = harness / "anticheat"
+            anticheat.mkdir(parents=True)
+            per_build = [
+                work / "eval_protocol_inputs.json",
+                work / "eval_resources.json",
+                work / "egress_probe.json",
+                work / "selected_tasks.txt",
+                work / "selected_tasks_offset.txt",
+                anticheat / "summary.json",
+                anticheat / "report.md",
+                anticheat / "anticheat.jsonl",
+            ]
+            for path in per_build:
+                path.write_text("from build 58\n", encoding="utf-8")
+            kept = [harness / "anticheat_overrides.json", harness / "harbor_runs" / "jenkins-58" / "result.json"]
+            for path in kept:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}\n", encoding="utf-8")
+            proc = subprocess.run(
+                ["bash", "-c", command],
+                env={**os.environ, "WORKDIR": str(work), "HARNESS_DIR": str(harness)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual([p.name for p in per_build if p.exists()], [])
+            self.assertTrue(all(p.exists() for p in kept))
+
 
 class AgentIsolationTests(unittest.TestCase):
     SENTINEL_KEY = "sk-sentinel-deepseek-0000"

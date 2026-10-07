@@ -201,26 +201,31 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(len(got["pipelines"]), 2)
 
 
+def run_aggregate(shards: Path, out: Path, rollouts: int = 2, extra: tuple[str, ...] = ()) -> int:
+    argv = sys.argv
+    sys.argv = [
+        "aggregate_runs.py",
+        "--shards",
+        str(shards),
+        "--benchmark",
+        "deepswe",
+        "--run-group",
+        "deepswe_full_suite_task-7",
+        "--n-rollouts",
+        str(rollouts),
+        *extra,
+        "--out",
+        str(out),
+    ]
+    try:
+        return main()
+    finally:
+        sys.argv = argv
+
+
 class CliTests(unittest.TestCase):
     def run_main(self, shards: Path, out: Path, rollouts: int = 2) -> int:
-        argv = sys.argv
-        sys.argv = [
-            "aggregate_runs.py",
-            "--shards",
-            str(shards),
-            "--benchmark",
-            "deepswe",
-            "--run-group",
-            "deepswe_full_suite_task-7",
-            "--n-rollouts",
-            str(rollouts),
-            "--out",
-            str(out),
-        ]
-        try:
-            return main()
-        finally:
-            sys.argv = argv
+        return run_aggregate(shards, out, rollouts)
 
     def test_one_report_covers_every_shard(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -419,6 +424,199 @@ class CliTests(unittest.TestCase):
             self.assertEqual(doc["eval_protocol"]["icode"]["version"], "eea9d66")
             self.assertEqual(doc["eval_protocol"]["shards"][0]["icode_version"], "eea9d66")
             self.assertIn("- iCode version: `eea9d66`", (out / "summary.md").read_text(encoding="utf-8"))
+
+
+SHARD_URL = "http://jenkins:8080/job/deepswe_one_task/{build}/"
+DISPATCHER_URL = "http://jenkins:8080/job/deepswe_some_task/5/"
+DEFAULT_PROBE = "alpine:3.23.4@sha256:5b10"
+SUBSTITUTE_PROBE = "alpine:3.19@sha256:6baf"
+
+
+def shard_inputs(build: str, node: str, probe: str = DEFAULT_PROBE, **extra) -> dict:
+    """What a shard's tasks phase records, naming the build that wrote it."""
+    return {
+        "requester": {"user": "toby", "build_url": SHARD_URL.format(build=build)},
+        "worker": {"node": node, "nproc": 16},
+        "max_tokens": 65536,
+        "max_iterations": 500,
+        "isolation": {
+            "egress_probe": {"harbor_default": DEFAULT_PROBE, "image": probe, "substituted": probe != DEFAULT_PROBE}
+        },
+        **extra,
+    }
+
+
+def set_anticheat(shard: Path, clean: int, attempts: int) -> None:
+    summary = shard / "harness" / "anticheat" / "summary.json"
+    doc = json.loads(summary.read_text(encoding="utf-8"))
+    doc["counts"]["clean"] = clean
+    doc["attempts"] = attempts
+    summary.write_text(json.dumps(doc), encoding="utf-8")
+
+
+class DispatcherPlanTests(unittest.TestCase):
+    """The dispatcher's shards/plan.txt (src/prepare/jenkins_job.rs) and reused shard workspaces."""
+
+    def collect(self, root: Path, build: str, work: Path) -> None:
+        archive_like_a_shard(work, build, root / "shards" / build / "eval-runs")
+
+    def run_plan(self, root: Path, plan: list[str], rollouts: int = 4) -> tuple[int, str]:
+        import contextlib
+        import io
+
+        (root / "shards").mkdir(parents=True, exist_ok=True)
+        (root / "shards" / "plan.txt").write_text("".join(f"{line}\n" for line in plan), encoding="utf-8")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = run_aggregate(
+                root / "shards",
+                root / "aggregate",
+                rollouts,
+                ("--plan", str(root / "shards" / "plan.txt"), "--build-url", DISPATCHER_URL),
+            )
+        return code, err.getvalue()
+
+    def report(self, root: Path) -> tuple[dict, str, str]:
+        out = root / "aggregate"
+        return (
+            json.loads((out / "artifact.json").read_text(encoding="utf-8")),
+            (out / "summary.md").read_text(encoding="utf-8"),
+            (out / "report.html").read_text(encoding="utf-8"),
+        )
+
+    def test_a_shard_that_failed_early_does_not_ship_the_previous_builds_files(self):
+        """deepswe_some_task #5: cloud shard #61 stopped before Harbor and still held build #58's files."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Written before the image table kept only the run's tasks.
+            images = {"Yb43UkF": {"id": "sha256:y"}, "abs-module-cache-flags": {"id": "sha256:old"}}
+            local = make_shard(
+                root / "home", "jenkins-60", {"Yb43UkF": [1.0, 1.0, 1.0, 0.0]},
+                inputs=shard_inputs("60", "mac-Michael-Ubuntu", images=images),
+            )
+            set_anticheat(local, clean=4, attempts=4)
+            self.collect(root, "60", local)
+            stale = make_shard(
+                root / "cloud", "jenkins-58", {"Yb43UkF": [0.0, 0.0]}, commit="a3d2e19",
+                inputs=shard_inputs("58", "mac-iZt4ndd2dff7gqjta7mppaZ", SUBSTITUTE_PROBE, max_tokens=8192),
+            )
+            set_anticheat(stale, clean=2, attempts=2)
+            self.collect(root, "61", stale)
+            code, err = self.run_plan(
+                root,
+                [
+                    "1|60|SUCCESS|0|1|Yb43UkF",
+                    "2|61|FAILURE|1|2|wazero-multi-module-snapshots,ytt-jsonpath-query-api",
+                ],
+            )
+            self.assertEqual(code, 0, err)
+            doc, md, page = self.report(root)
+
+            self.assertIn(f"WARNING: shard 2 #61 holds files from {SHARD_URL.format(build='58')}; ignored", err)
+            self.assertEqual(doc["anticheat"]["counts"]["clean"], 4)
+            self.assertEqual(doc["anticheat"]["attempts"], 4)
+            self.assertEqual(doc["pipeline_status"], "same")
+            protocol = doc["eval_protocol"]
+            self.assertEqual(protocol["model_params_status"], "same")
+            self.assertNotIn("Shards differ", md)
+            self.assertEqual(doc["shards"], 2)
+            tasks = {row["id"]: row for row in doc["icode"]["tasks"]}
+            self.assertEqual((tasks["Yb43UkF"]["c"], tasks["Yb43UkF"]["n_scored"]), (3, 4))
+            for tid in ("wazero-multi-module-snapshots", "ytt-jsonpath-query-api"):
+                self.assertEqual((tasks[tid]["c"], tasks[tid]["n_scored"], tasks[tid]["unscored"]), (0, 0, 4))
+            self.assertIn("(missing/excluded: 2)", md)
+            failed = protocol["shards"][1]
+            self.assertEqual(failed["builds"], ["jenkins-61"])
+            self.assertEqual(failed["result"], "FAILURE")
+            self.assertEqual(failed["worker"], {})
+            self.assertEqual(failed["not_run"], ["wazero-multi-module-snapshots", "ytt-jsonpath-query-api"])
+            line = (
+                "Worker (shard 2 jenkins-61): FAILURE before any trial · "
+                "2 questions not run: wazero-multi-module-snapshots, ytt-jsonpath-query-api"
+            )
+            self.assertIn(f"- {line}", md)
+            self.assertIn(line, page)
+            self.assertIn("- Worker (shard 1 jenkins-60): node mac-Michael-Ubuntu", md)
+            self.assertIn(f"egress probe Harbor default {DEFAULT_PROBE}", md)
+            self.assertNotIn(SUBSTITUTE_PROBE, md)
+            self.assertIn(f"- Requester: `toby` `{DISPATCHER_URL}`", md)
+            self.assertEqual(doc["model"], "openai/deepseek-flash")
+            self.assertEqual(sorted(protocol["images"]), ["Yb43UkF"])
+            self.assertNotIn("abs-module-cache-flags", md)
+            # Only the shard's own trials were merged; the stale shard archived none.
+            runs = sorted(p.name for p in (root / "aggregate" / "harness" / "harbor_runs").iterdir())
+            self.assertEqual(runs, ["shard1-jenkins-60"])
+
+    def test_a_shard_that_archived_nothing_still_gets_a_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = make_shard(root / "home", "jenkins-60", {"alpha": [1.0]}, inputs=shard_inputs("60", "a"))
+            self.collect(root, "60", local)
+            code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha", "2|61|ABORTED|1|1|beta"], rollouts=1)
+            self.assertEqual(code, 0, err)
+            doc, md, _ = self.report(root)
+            self.assertEqual(doc["n_tasks"], 2)
+            self.assertIn("- Worker (shard 2 jenkins-61): ABORTED before any trial · 1 question not run: beta", md)
+
+    def test_an_offset_shard_that_did_not_run_is_counted_not_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = make_shard(root / "home", "jenkins-60", {"alpha": [1.0]}, inputs=shard_inputs("60", "a"))
+            self.collect(root, "60", local)
+            code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|", "2|61|FAILURE|1|5|"], rollouts=1)
+            self.assertEqual(code, 0, err)
+            doc, md, _ = self.report(root)
+            failed = doc["eval_protocol"]["shards"][1]
+            self.assertEqual((failed["not_run_count"], failed["not_run_offset"]), (5, 1))
+            self.assertIn("- Worker (shard 2 jenkins-61): FAILURE before any trial · 5 questions at offset 1 not run", md)
+            self.assertIn("its 5 questions at offset 1 are not named, so the report does not count them", err)
+
+    def test_a_fresh_shard_from_its_own_build_counts_in_full(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for build, task, node in (("60", "alpha", "home"), ("61", "beta", "cloud")):
+                work = make_shard(root / node, f"jenkins-{build}", {task: [1.0, 0.0]}, inputs=shard_inputs(build, node))
+                self.collect(root, build, work)
+            code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha", "2|61|SUCCESS|1|1|beta"], rollouts=2)
+            self.assertEqual(code, 0, err)
+            self.assertNotIn("WARNING", err)
+            doc, md, _ = self.report(root)
+            self.assertEqual({row["id"] for row in doc["icode"]["tasks"]}, {"alpha", "beta"})
+            self.assertEqual(doc["anticheat"]["attempts"], 4)
+            self.assertNotIn("not run", md)
+            self.assertIn("- Worker (shard 2 jenkins-61): node cloud", md)
+            self.assertIn(f"- Egress probe: Harbor default {DEFAULT_PROBE}", md)
+
+    def test_shards_with_different_egress_probes_each_name_their_own(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for build, task, node, probe in (
+                ("60", "alpha", "home", DEFAULT_PROBE),
+                ("61", "beta", "cloud", SUBSTITUTE_PROBE),
+            ):
+                work = make_shard(root / node, f"jenkins-{build}", {task: [1.0]}, inputs=shard_inputs(build, node, probe))
+                self.collect(root, build, work)
+            code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha", "2|61|SUCCESS|1|1|beta"], rollouts=1)
+            self.assertEqual(code, 0, err)
+            doc, md, _ = self.report(root)
+            self.assertNotIn("egress_probe", doc["eval_protocol"].get("isolation") or {})
+            self.assertNotIn("- Egress probe:", md)
+            lines = [line for line in md.splitlines() if line.startswith("- Worker (shard")]
+            self.assertTrue(lines[0].startswith("- Worker (shard 1 jenkins-60): node home · nproc 16"), lines[0])
+            self.assertIn(f"egress probe Harbor default {DEFAULT_PROBE}", lines[0])
+            self.assertIn(f"egress probe substituted {SUBSTITUTE_PROBE}", lines[1])
+
+    def test_without_a_plan_every_archived_shard_counts_as_before(self):
+        """An older dispatcher passes no --plan; nothing is dropped."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stale = make_shard(root / "cloud", "jenkins-58", {"alpha": [1.0]}, inputs=shard_inputs("58", "cloud"))
+            archive_like_a_shard(stale, "58", root / "shards" / "61" / "eval-runs")
+            self.assertEqual(run_aggregate(root / "shards", root / "aggregate", 1), 0)
+            doc, _, _ = self.report(root)
+            self.assertEqual(doc["n_tasks"], 1)
+            self.assertEqual(doc["anticheat"]["counts"]["clean"], 1)
+            self.assertEqual(doc["eval_protocol"]["requester"]["build_url"], SHARD_URL.format(build="58"))
 
 
 class EmptyPatchP2PTests(unittest.TestCase):

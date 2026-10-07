@@ -1086,6 +1086,8 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
           echo "RUN_GROUP=${{env.RUN_GROUP}} total=${{total}} shards=${{shards}} shard_size=${{shardSize}} workers=${{workers}} [${{counted}}] rollouts=${{rollouts}}"
 
           Map<String, Integer> shardBuilds = [:]
+          // index|build|result|offset|count|tasks, for the Aggregate stage.
+          Map<Integer, String> shardPlan = [:]
           List<String> notOk = []
           Map<String, Closure> branches = [:]
           for (int i = 0; i < shards; i++) {{
@@ -1114,6 +1116,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
                   string(name: 'ICODE_MODE', value: 'git'),
                 ]
               shardBuilds[name] = run.number
+              shardPlan[index] = "${{index + 1}}|${{run.number}}|${{run.result}}|${{from}}|${{shardCount}}|${{shardTasks}}"
               if (run.result != 'SUCCESS') {{
                 notOk << "${{name}} #${{run.number}} ${{run.result}}"
               }}
@@ -1121,6 +1124,11 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
           }}
           parallel branches
           env.SHARD_BUILDS = shardBuilds.values().join(',')
+          List<String> planLines = []
+          for (int i = 0; i < shards; i++) {{
+            if (shardPlan[i] != null) {{ planLines << shardPlan[i] }}
+          }}
+          env.SHARD_PLAN = planLines.join(';')
           if (notOk) {{
             unstable "Shards that did not succeed: ${{notOk.join(', ')}}. The report merges the rest."
           }}
@@ -1144,6 +1152,8 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
               flatten: false,
               optional: true
           }}
+          // A shard that stopped early archives nothing; the plan still names it.
+          writeFile file: 'shards/plan.txt', text: (env.SHARD_PLAN ?: '').replace(';', '\n') + '\n'
         }}
         sh '''
           set -euo pipefail
@@ -1155,6 +1165,8 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             --benchmark "$BENCHMARK" \
             --run-group "$RUN_GROUP" \
             --n-rollouts "${{N_ROLLOUTS:-4}}" \
+            --plan "${{WORKSPACE}}/shards/plan.txt" \
+            --build-url "${{BUILD_URL:-}}" \
             --out "${{WORKSPACE}}/aggregate"
           python3 "$MAC_K3D_ROOT/pipeline/lib/cost_token_report.py" \
             --run-dir "${{WORKSPACE}}/aggregate" \
@@ -2128,6 +2140,29 @@ mod tests {
         assert!(xml.contains("<string>deepswe_full_suite_task</string>"));
         let some = eval_job_xml("deepswe", JobShape::Some_, "d", &opts);
         assert!(!some.contains("CopyArtifactPermissionProperty"));
+    }
+
+    #[test]
+    fn the_dispatcher_tells_the_merge_which_shards_ran() {
+        let opts = deepswe_opts(Vec::new());
+        for shape in [JobShape::Some_, JobShape::FullSuite] {
+            let jf = eval_jenkinsfile("deepswe", shape, &opts);
+            // One line per shard, recorded beside its build number, in shard order.
+            assert!(jf.contains(
+                "shardPlan[index] = \"${index + 1}|${run.number}|${run.result}|${from}|${shardCount}|${shardTasks}\""
+            ));
+            assert!(jf.find("shardPlan[index] =").unwrap() < jf.find("parallel branches").unwrap());
+            assert!(jf.contains("if (shardPlan[i] != null) { planLines << shardPlan[i] }"));
+            assert!(jf.contains("env.SHARD_PLAN = planLines.join(';')"));
+            // Written after copyArtifacts, so a shard that archived nothing is still named.
+            let write = jf
+                .find("writeFile file: 'shards/plan.txt', text: (env.SHARD_PLAN ?: '').replace(';', '\\n') + '\\n'")
+                .expect("plan.txt");
+            assert!(jf.find("copyArtifacts").unwrap() < write);
+            assert!(write < jf.find("aggregate_runs.py").unwrap());
+            assert!(jf.contains(r#"--plan "${WORKSPACE}/shards/plan.txt""#), "{shape:?}");
+            assert!(jf.contains(r#"--build-url "${BUILD_URL:-}""#), "{shape:?}");
+        }
     }
 
     #[test]
