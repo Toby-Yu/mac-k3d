@@ -253,7 +253,7 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `default_deepseek_model` | *(empty → `deepseek-flash`)* | Catalog Chat Completions id (`mac-k3d set --model`; also `deepseek-v4-pro`) |
 | `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench` \| `swebenchpro`) |
 | `ui_profile` | `user` | `user` hides developer parameters (pins, canary, `SHARD_SIZE`) as hidden parameters that keep their defaults; `developer` shows them. `mac-k3d set --ui-profile`, then `config --skip-secrets` |
-| `default_shard_size` | `10` | Default `SHARD_SIZE` (questions per shard) for `some_task` / `full_suite_task` (`mac-k3d set --shard-size`) |
+| `default_shard_size` | `2` | Default `SHARD_SIZE` (questions per shard) for `some_task` / `full_suite_task` (`mac-k3d set --shard-size`) |
 
 ## Environment variables
 

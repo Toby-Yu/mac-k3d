@@ -136,7 +136,7 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 | `AGENT_LABEL` | `lolbench` | label a worker must carry (every worker has `lolbench`). On a dispatcher, a label no online worker carries fails the build at once, naming the online workers |
 | `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF`, `ICODE_EXPECT_SHA` | pinned | `env` (Harbor, default from `pipeline/config/toolchain.env`) and `tasks` (benchmark and iCode) pins |
 | `OFFICIAL`, `CANARY`, `CANARY_ALLOW_HOST` | `0`, `official`, empty | provenance gate and isolation canary |
-| `SHARD_SIZE` | `default_shard_size` (10) | `some_task` / `full_suite_task`: questions per shard for the whole run, not per worker. Shards = ceil(questions / `SHARD_SIZE`), raised to at least the number of online workers |
+| `SHARD_SIZE` | `default_shard_size` (2) | `some_task` / `full_suite_task`: questions per shard for the whole run, not per worker. Shards = ceil(questions / `SHARD_SIZE`), raised to at least the number of online workers |
 | `N_TASKS` | suite size | `full_suite_task` only: lower it for a rehearsal |
 
 **Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`. A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API.
@@ -399,7 +399,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--tasks a,b` | Explicit comma-separated ids |
 | `--icode-release PATH` | Worker `*-full-*` drop; writes `~/.config/mac-k3d/icode-paths.yaml` |
 | `--ui-profile user\|developer` | Jenkins job pages: `user` shows each shape's short list; `developer` shows the same list followed by `AGENT_LABEL`, the pins, canary and `SHARD_SIZE`. Apply with `config --skip-secrets` on the controller |
-| `--shard-size N` | Questions per shard when `some_task` / `full_suite_task` split work across workers (default 10) |
+| `--shard-size N` | Questions per shard when `some_task` / `full_suite_task` split work across workers (default 2) |
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.
 

@@ -1610,7 +1610,7 @@ mod tests {
             default_n_tasks: 1,
             default_n_rollouts: 4,
             default_tasks: Vec::new(),
-            default_shard_size: 10,
+            default_shard_size: 2,
             ui_profile: UiProfile::Developer,
             credential_ids: vec!["deepseek-api-key".into(), "gitcode-pat".into()],
         }
@@ -1632,7 +1632,7 @@ mod tests {
             default_n_tasks: 1,
             default_n_rollouts: 4,
             default_tasks: Vec::new(),
-            default_shard_size: 10,
+            default_shard_size: 2,
             ui_profile: UiProfile::User,
             credential_ids,
         }
@@ -1855,7 +1855,7 @@ mod tests {
         let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
         assert!(params_block(&one).contains("string(name: 'TASK'"));
         let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
-        assert!(params_block(&full).contains("hidden(name: 'SHARD_SIZE', defaultValue: '10'"));
+        assert!(params_block(&full).contains("hidden(name: 'SHARD_SIZE', defaultValue: '2'"));
     }
 
     #[test]
@@ -1872,7 +1872,7 @@ mod tests {
         assert!(block.contains("hidden(name: 'SHARD', defaultValue: ''"));
         assert!(block.contains("hidden(name: 'REQUESTED_BY', defaultValue: ''"));
         let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
-        assert!(params_block(&full).contains("string(name: 'SHARD_SIZE', defaultValue: '10'"));
+        assert!(params_block(&full).contains("string(name: 'SHARD_SIZE', defaultValue: '2'"));
         assert!(params_block(&full).contains("string(name: 'N_TASKS', defaultValue: '113'"));
     }
 
@@ -2330,7 +2330,7 @@ mod tests {
         assert_eq!(opts.default_icode_git_ref_kind, "pr");
         assert_eq!(opts.default_n_rollouts, 4);
         assert_eq!(opts.ui_profile, UiProfile::User);
-        assert_eq!(opts.default_shard_size, 10);
+        assert_eq!(opts.default_shard_size, 2);
         assert_eq!(
             opts.default_icode_git_url,
             "https://gitcode.com/michaelling/jiuwenicode"

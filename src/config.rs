@@ -289,7 +289,7 @@ fn default_ui_profile() -> String {
 }
 
 fn default_shard_size() -> u32 {
-    10
+    2
 }
 
 fn default_n_tasks_one() -> u32 {
@@ -903,7 +903,7 @@ mod tests {
     fn ui_profile_defaults_to_user_and_roundtrips() {
         let omitted: MacK3dConfig = serde_yaml::from_str("role: controller\n").unwrap();
         assert_eq!(omitted.jenkins_job.ui_profile, "user");
-        assert_eq!(omitted.jenkins_job.default_shard_size, 10);
+        assert_eq!(omitted.jenkins_job.default_shard_size, 2);
 
         let mut cfg = MacK3dConfig::default();
         cfg.jenkins_job.ui_profile = "developer".into();

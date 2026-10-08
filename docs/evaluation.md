@@ -32,7 +32,7 @@ Three jobs per suite, nine in total:
 | `<suite>_some_task` | `TASKS` list, or first `N_TASKS` | 4, editable | comparing a handful of questions against a known-good result |
 | `<suite>_full_suite_task` | whole suite | 4, editable | the real run |
 
-`<suite>_one_task` is the only job that evaluates. `some_task` and `full_suite_task` are dispatchers on `agent none`: they split the questions into contiguous shards of `SHARD_SIZE` (default 10, at least one shard per online worker), queue every shard as a `<suite>_one_task` build with its own `TASKS` or `TASK_OFFSET` and a shared `RUN_GROUP`, and wait. Each worker has one executor, so a worker that finishes a shard takes the next one from the queue, and a faster worker simply runs more of them. A shard build's description reads `shard 3/12 of deepswe_full_suite_task #7`.
+`<suite>_one_task` is the only job that evaluates. `some_task` and `full_suite_task` are dispatchers on `agent none`: they split the questions into contiguous shards of `SHARD_SIZE` (default 2, at least one shard per online worker), queue every shard as a `<suite>_one_task` build with its own `TASKS` or `TASK_OFFSET` and a shared `RUN_GROUP`, and wait. Each worker has one executor, so a worker that finishes a shard takes the next one from the queue, and a faster worker simply runs more of them. A shard build's description reads `shard 3/12 of deepswe_full_suite_task #7`.
 
 When the shards are done, the same dispatcher build runs an `Aggregate` stage on a worker: it copies each shard's archived trials by build number and merges them. A shard archives only its own build's trials (`eval-runs/harness/harbor_runs/jenkins-<n>/`) and its anti-cheat verdicts (`eval-runs/harness/anticheat/`), not the earlier builds its workspace still holds.
 
