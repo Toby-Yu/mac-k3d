@@ -21,6 +21,8 @@ from canary_verdict import (  # noqa: E402
     CHECKS,
     FACT_FILES,
     build_spec,
+    content_fingerprint,
+    gold_content_hashes,
     load_config,
     load_facts,
     main,
@@ -252,6 +254,39 @@ class SpecTests(unittest.TestCase):
         self.assertNotIn(GOLD_LINE, text)
         self.assertNotIn(GOLD_LINE, json.dumps(spec))
         self.assertNotIn("README.md", text)
+        self.assertTrue(spec["hashes"])
+        self.assertIn(f"hash {spec['hashes'][0]}\n", text)
+        for digest in spec["hashes"]:
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
+    def test_a_copied_gold_file_hashes_and_a_same_name_does_not(self):
+        body = "func Diff() int {\n    return 1\n"
+        patch = (
+            "diff --git a/pkg/diff/diff.go b/pkg/diff/diff.go\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            "+++ b/pkg/diff/diff.go\n"
+            "@@ -0,0 +1,2 @@\n"
+            "+func Diff() int {\n"
+            "+    return 1\n"
+        )
+        globs = []
+        digest = content_fingerprint(body)
+        self.assertEqual(digest, content_fingerprint("func Diff() int {\n    return 1\n"))
+        self.assertIn(digest, gold_content_hashes(patch, globs))
+        self.assertNotIn(content_fingerprint("package diff\nfunc somethingElse() {}\n"), gold_content_hashes(patch, globs))
+        with tempfile.TemporaryDirectory() as tmp:
+            task = Path(tmp) / "etree-xml-diff-patch"
+            (task / "solution").mkdir(parents=True)
+            (task / "task.toml").write_text('docker_image = "x"\n', encoding="utf-8")
+            (task / "solution" / "solution.patch").write_text(patch, encoding="utf-8")
+            spec = build_spec(task, "deepswe", load_config())
+            rendered = render_spec(spec)
+        self.assertIn(digest, spec["hashes"])
+        self.assertIn(f"hash {digest}\n", rendered)
+        self.assertNotIn("func Diff()", rendered)
+        self.assertNotIn("func Diff()", json.dumps(spec))
+        self.assertNotIn("return 1", rendered)
 
     def test_spec_probes_the_allowed_host_once_as_a_source(self):
         config = load_config()
@@ -397,6 +432,11 @@ class CanaryStepTests(unittest.TestCase):
         self.assertIn("printf '%s\\t%s\\n' \"$tid\" \"$why\" >>\"$FALLBACK\"", loop)
         self.assertIn('--fallback-file "$FALLBACK"', text)
         self.assertIn("so isolation is not proven; the run stops here", text)
+        harbor = (LIB.parent / "stages" / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
+        rollout = harbor[harbor.index("build_run_cmd()"):harbor.index("build_canary_cmd()")]
+        canary = harbor[harbor.index("build_canary_cmd()"):harbor.index("append_agent_flags()")]
+        self.assertNotIn("spec=", rollout)
+        self.assertIn('--ak "spec=$spec"', canary)
         # A probe that ran and found a breach stops the build at once.
         self.assertIn('[ "$rc" = 0 ] || die "isolation canary failed', text)
         proc = subprocess.run(["bash", "-n", str(self.STEP)], capture_output=True, text=True, check=False)
@@ -529,11 +569,26 @@ exit 35
 
     def test_planted_gold_patch_fails_filesystem(self):
         (self.root / "tmp").mkdir()
-        (self.root / "tmp" / "solution.patch").write_text("planted\n", encoding="utf-8")
+        planted = self.root / "tmp" / "solution.patch"
+        planted.write_text(GOLD_PATCH, encoding="utf-8")
         result = self._run_all()
         self.assertEqual(result["status"], "fail")
         self.assertEqual(result["checks"]["filesystem"]["status"], "fail")
-        self.assertIn(str(self.root / "tmp" / "solution.patch"), result["checks"]["filesystem"]["detail"])
+        self.assertIn(str(planted), result["checks"]["filesystem"]["detail"])
+        recorded = (self.logs / "canary.json").read_text(encoding="utf-8")
+        self.assertNotIn(GOLD_LINE, recorded)
+        self.assertNotIn("hash ", recorded)
+
+    def test_same_name_with_different_bytes_is_not_a_hit(self):
+        (self.root / "tmp").mkdir()
+        (self.root / "tmp" / "solution.patch").write_text("planted\n", encoding="utf-8")
+        (self.root / "usr" / "local" / "go" / "src" / "internal" / "diff").mkdir(parents=True)
+        (self.root / "usr" / "local" / "go" / "src" / "internal" / "diff" / "diff.go").write_text(
+            "package diff\nfunc somethingElse() {}\n", encoding="utf-8"
+        )
+        result = self._run_all()
+        self.assertEqual(result["checks"]["filesystem"]["status"], "pass", result["checks"]["filesystem"])
+        self.assertEqual(json.loads((self.logs / "canary.json").read_text(encoding="utf-8"))["filesystem"]["hits"], [])
 
     def test_writable_mount_and_extra_ref_fail(self):
         self.mounts_file.write_text(f"/dev/vda1 {self.mount} ext4 rw,relatime 0 0\n", encoding="utf-8")

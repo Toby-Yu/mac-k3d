@@ -5,8 +5,10 @@
 # Runs inside the Harbor task container and needs only bash, coreutils, find,
 # git and curl. CanaryAgent uploads it to /installed-agent/canary_probe.sh with
 # the rendered spec (canary_spec.txt: "host <kind> <name>", "name <glob>",
-# "path <glob>", "prune <path>", "timeout <curl|model|find|git> <seconds>",
-# "attempts model <n>").
+# "path <glob>", "hash <sha256>", "prune <path>",
+# "timeout <curl|model|find|git> <seconds>", "attempts model <n>").
+# A name match is recorded only when the file's stripped lines hash to one
+# of those sha256 values. The spec carries hashes, never gold text.
 #
 #   canary_probe.sh home <tag>   iCode home state -> canary_home_<tag>.json
 #   canary_probe.sh probe        As the agent user: egress, filesystem search,
@@ -34,6 +36,7 @@ MAX_HITS=50
 HOSTS=()
 NAMES=()
 PATHS=()
+HASHES=()
 PRUNE=()
 
 json_str() {
@@ -108,6 +111,7 @@ load_spec() {
       host) [ -n "$b" ] && HOSTS+=("$a $b") ;;
       name) [ -n "$a" ] && NAMES+=("$a") ;;
       path) [ -n "$a" ] && PATHS+=("$a") ;;
+      hash) [ -n "$a" ] && HASHES+=("$a") ;;
       prune) [ -n "$a" ] && PRUNE+=("$a") ;;
       timeout)
         case "$a:$b" in
@@ -204,12 +208,32 @@ probe_network() {
   rm -f "$errf"
 }
 
+# sha256 of non-empty stripped lines joined by newlines, matching
+# canary_verdict.content_fingerprint. Prints nothing and returns 1 when the
+# file has no such lines. Never prints the file body.
+file_fingerprint() {
+  local file="$1" payload
+  [ -f "$file" ] && [ -r "$file" ] || return 1
+  payload=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$file" | sed '/^$/d' | paste -sd '\n' -)
+  [ -n "$payload" ] || return 1
+  printf '%s' "$payload" | sha256sum | awk '{print $1}'
+}
+
+hash_kept() {
+  local want="$1" have
+  for have in ${HASHES[@]+"${HASHES[@]}"}; do
+    [ "$have" = "$want" ] && return 0
+  done
+  return 1
+}
+
 # find <root> \( -path P1 -o ... \) -prune -o \( -name N1 -o -path T1 ... \) -print
 probe_filesystem() {
-  local repo="$1" hits pruned rc=0 timed_out=0 p first
+  local repo="$1" hits pruned kept rc=0 timed_out=0 p first digest
   local -a expr=() prune=()
   hits=$(mktemp)
   pruned=$(mktemp)
+  kept=$(mktemp)
   prune=(${PRUNE[@]+"${PRUNE[@]}"})
   [ -n "$repo" ] && prune+=("$repo")
   printf '%s\n' ${prune[@]+"${prune[@]}"} >"$pruned"
@@ -242,11 +266,19 @@ probe_filesystem() {
     rc=${PIPESTATUS[0]}
   fi
   [ "$rc" = 124 ] && timed_out=1
+  # Keep a path only when its contents match a gold hash. A shared name is not enough.
+  if [ -s "$hits" ]; then
+    while IFS= read -r p || [ -n "$p" ]; do
+      [ -n "$p" ] || continue
+      digest=$(file_fingerprint "$p") || continue
+      hash_kept "$digest" && printf '%s\n' "$p" >>"$kept"
+    done <"$hits"
+  fi
   printf '{"root": %s, "pruned": %s, "patterns": %s, "hits": %s, "max_hits": %s, "exit_code": %s, "timed_out": %s}' \
     "$(json_str "$SEARCH_ROOT")" "$(json_lines "$pruned")" \
-    "$(( ${#NAMES[@]} + ${#PATHS[@]} ))" "$(json_lines "$hits")" "$MAX_HITS" \
+    "$(( ${#NAMES[@]} + ${#PATHS[@]} ))" "$(json_lines "$kept")" "$MAX_HITS" \
     "$(json_int_or_null "$rc")" "$(json_bool "$timed_out")"
-  rm -f "$hits" "$pruned"
+  rm -f "$hits" "$pruned" "$kept"
 }
 
 probe_mount() {

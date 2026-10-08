@@ -5,7 +5,7 @@ canary_probe.sh records facts inside the task container; this module turns them
 into pass, warn, fail or skip per check, and pass or fail per task. Rules live in
 pipeline/config/canary-v1.json. Stdlib only, so the unit tests need no Harbor.
 
-Spec for one task (host lists and gold file names, never gold content):
+Spec for one task (host lists, gold file names, and content hashes, never gold text):
     canary_verdict.py spec --task-dir T --benchmark B --out spec.json
 
 Verdict of every canary trial under a jobs dir (<jobs>/<task>/<job>/<trial>/agent):
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import re
 import socket
@@ -90,6 +91,37 @@ def _declared_hosts(task_dir: Path) -> list[str]:
     return [str(h).strip().lower() for h in hosts if str(h).strip()] if isinstance(hosts, list) else []
 
 
+def content_fingerprint(text: str) -> str:
+    """sha256 of the non-empty stripped lines, joined by newlines.
+
+    The same rule runs in canary_probe.sh. An empty result means there is
+    nothing to match, so a blank file is not a copy of the answer.
+    """
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
+
+
+def gold_content_hashes(gold_text: str, globs: list[str]) -> list[str]:
+    """Hashes of the answer, never the answer text.
+
+    One hash for each new non-test file the patch creates, plus one for the
+    patch text itself so a copied solution.patch still matches.
+    """
+    hashes: set[str] = set()
+    whole = content_fingerprint(gold_text)
+    if whole:
+        hashes.add(whole)
+    for path, info in parse_patch(gold_text).items():
+        if not info["new"] or is_test_path(path) or is_generated(path, globs):
+            continue
+        digest = content_fingerprint("\n".join(info["added"]))
+        if digest:
+            hashes.add(digest)
+    return sorted(hashes)
+
+
 def gold_file_patterns(gold_text: str, globs: list[str]) -> tuple[list[str], list[str]]:
     """find -name / -path patterns for files the gold patch creates (last two path parts)."""
     names: set[str] = set()
@@ -120,7 +152,8 @@ def build_spec(task_dir: Path, benchmark: str, config: dict | None = None, allow
         if host not in skip and host not in sources and "*" not in host:
             hosts.append({"kind": "declared", "host": host})
     globs = generated_globs(load_anticheat_config(), benchmark)
-    gold_names, gold_paths = gold_file_patterns(_gold_text(task_dir), globs)
+    gold = _gold_text(task_dir)
+    gold_names, gold_paths = gold_file_patterns(gold, globs)
     return {
         "version": config.get("version", ""),
         "task": task_dir.name,
@@ -128,6 +161,7 @@ def build_spec(task_dir: Path, benchmark: str, config: dict | None = None, allow
         "hosts": hosts,
         "names": sorted(set(config.get("gold_names") or []) | set(gold_names)),
         "paths": sorted(set(config.get("gold_paths") or []) | set(gold_paths)),
+        "hashes": gold_content_hashes(gold, globs),
         "prune": list(config.get("prune") or []),
         "mount": config.get("mount", "/opt/icode-host"),
         "timeouts": dict(config.get("timeouts") or {}),
@@ -141,6 +175,7 @@ def render_spec(spec: dict) -> str:
     lines = [f"host {h['kind']} {h['host']}" for h in spec.get("hosts") or []]
     lines += [f"name {n}" for n in spec.get("names") or []]
     lines += [f"path {p}" for p in spec.get("paths") or []]
+    lines += [f"hash {h}" for h in spec.get("hashes") or []]
     lines += [f"prune {p}" for p in spec.get("prune") or []]
     lines += [f"timeout {k} {int(v)}" for k, v in sorted((spec.get("timeouts") or {}).items())]
     lines.append(f"attempts model {int(spec.get('model_attempts') or 1)}")
