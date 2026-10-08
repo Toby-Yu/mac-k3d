@@ -134,6 +134,7 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 | Parameter | Default | Meaning |
 |---|---|---|
 | `AGENT_LABEL` | `lolbench` | label a worker must carry (every worker has `lolbench`). On a dispatcher, a label no online worker carries fails the build at once, naming the online workers |
+| `AGGREGATE_LABEL` | empty | `some_task` / `full_suite_task`: label of the worker that runs the `Aggregate` stage (merge, cost report, combined archive). Empty means `AGENT_LABEL`. Shards ignore it |
 | `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF`, `ICODE_EXPECT_SHA` | pinned | `env` (Harbor, default from `pipeline/config/toolchain.env`) and `tasks` (benchmark and iCode) pins |
 | `OFFICIAL`, `CANARY`, `CANARY_ALLOW_HOST` | `0`, `official`, empty | provenance gate and isolation canary |
 | `SHARD_SIZE` | `default_shard_size` (2) | `some_task` / `full_suite_task`: questions per shard for the whole run, not per worker. Shards = ceil(questions / `SHARD_SIZE`), raised to at least the number of online workers |
@@ -398,7 +399,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |
 | `--tasks a,b` | Explicit comma-separated ids |
 | `--icode-release PATH` | Worker `*-full-*` drop; writes `~/.config/mac-k3d/icode-paths.yaml` |
-| `--ui-profile user\|developer` | Jenkins job pages: `user` shows each shape's short list; `developer` shows the same list followed by `AGENT_LABEL`, the pins, canary and `SHARD_SIZE`. Apply with `config --skip-secrets` on the controller |
+| `--ui-profile user\|developer` | Jenkins job pages: `user` shows each shape's short list; `developer` shows the same list followed by `AGENT_LABEL`, `AGGREGATE_LABEL` (dispatchers), the pins, canary and `SHARD_SIZE`. Apply with `config --skip-secrets` on the controller |
 | `--shard-size N` | Questions per shard when `some_task` / `full_suite_task` split work across workers (default 2) |
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.

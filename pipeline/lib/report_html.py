@@ -351,7 +351,7 @@ def _empty_patch_html(arm: dict) -> str:
 
 
 def _provenance_html(doc: dict) -> str:
-    from provenance import coverage_line, isolation_lines, provenance_view, shard_worker_lines
+    from provenance import isolation_lines, provenance_view, shard_worker_lines
 
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
     view = provenance_view(protocol)
@@ -378,9 +378,6 @@ def _provenance_html(doc: dict) -> str:
         f"Pipeline {_esc(cell(view['commit']))} dirty {_esc(cell(view['dirty']))}",
     ]
     if view["shards"]:
-        coverage = coverage_line(doc.get("coverage"))
-        if coverage:
-            items.append(_esc(coverage))
         items.extend(_esc(line) for line in shard_worker_lines(view))
     else:
         items.append(
@@ -389,6 +386,8 @@ def _provenance_html(doc: dict) -> str:
             f" kernel {_esc(cell(view['kernel']))}, cpu {_esc(cell(view['cpu_model']))}"
         )
     items.append(f"Requester {_esc(cell(view['user']))} {_esc(cell(view['build_url']))}")
+    if view["transcripts"]:
+        items.append(_esc(view["transcripts"]))
     items.extend(_esc(line) for line in isolation_lines(view["isolation"]))
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
     release = icode.get("release") if isinstance(icode.get("release"), dict) else None
@@ -520,6 +519,9 @@ def report_html(doc: dict) -> str:
         )
     if isinstance(arm.get("cut_off_rollouts"), int) and not isinstance(arm.get("cut_off_rollouts"), bool):
         clauses.append(f"Cut-off replies (last reply hit max_tokens) {arm['cut_off_rollouts']}.")
+    oom = arm.get("oom_killed_rollouts")
+    if isinstance(oom, int) and not isinstance(oom, bool) and oom > 0:
+        clauses.append(f"OOM-killed rollouts {oom}.")
     anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else None
     if anticheat and anticheat.get("status") == "ok":
         counts = anticheat.get("counts") if isinstance(anticheat.get("counts"), dict) else {}
@@ -734,24 +736,37 @@ def report_html(doc: dict) -> str:
     if not unscored_tasks:
         unscored_html = ""
     else:
+        from render_report import questions_without_score, skipped_reasons, unscored_notes
+
+        skipped = skipped_reasons(doc)
         u_rows = []
         for row in unscored_tasks:
-            notes = row.get("notes")
+            notes = unscored_notes(row, skipped)
             u_rows.append(
                 [
                     str(row.get("id") or ""),
                     f"{row.get('unscored')}/{row.get('n')}",
-                    "" if notes in (None, "", "-") else str(notes),
+                    "" if notes == "-" else notes,
                 ]
             )
+        no_score = questions_without_score(doc)
+        no_score_html = ""
+        if no_score:
+            names = " · ".join(f"{tid} ({why})" for tid, why in no_score)
+            no_score_html = f'<p class="source">Questions without a score: {len(no_score)} ({_esc(names)})</p>'
         unscored_html = (
             "<h2>Unscored / no-response (not in Pass@k as a scored fail)</h2>"
             "<p class=\"source\">Tasks with at least one attempt that returned no reward. High rates here can move padded Pass@k.</p>"
+            + no_score_html
             + _scroll(_table(["Task", "unscored/n", "notes"], u_rows, "unscored"), len(u_rows))
         )
 
     empty_html = _empty_patch_html(arm)
     provenance_html = _provenance_html(doc)
+    from provenance import coverage_line
+
+    coverage = coverage_line(doc.get("coverage"))
+    coverage_html = f'<p class="source">{_esc(coverage)}</p>' if coverage else ""
     chip_html = "".join(f'<span class="chip">{_esc(chip)}</span>' for chip in chips)
     kpi_html = "".join(
         f'<div class="kpi"><div class="num">{_esc(number)}</div><div class="cap">{_esc(caption)}</div></div>'
@@ -817,7 +832,7 @@ table.outcomes th, table.outcomes td {{ white-space: nowrap; }}
 <div class="chips">{chip_html}</div>
 <p>{_esc(headline)}</p>
 <div class="kpis">{kpi_html}</div>
-{provenance_html}
+{coverage_html}
 <h2>Pass@k ladder</h2>
 <p class="source">Pass@1..k (padded, missing=fail): missing attempt counts as not resolved; n is N_ROLLOUTS. Pass@1..k (scored-only, missing omitted): only attempts with reward.json. Pass@1 is the first rollout of each question on its own; Macro Pass@1 = mean of c/n (padded) or c_scored/n_scored, which averages every rollout and is the number to compare across runs.</p>
 <div class="card">
@@ -853,6 +868,7 @@ table.outcomes th, table.outcomes td {{ white-space: nowrap; }}
 </div>
 {empty_html}
 {unscored_html}
+{provenance_html}
 </main>
 </body>
 </html>

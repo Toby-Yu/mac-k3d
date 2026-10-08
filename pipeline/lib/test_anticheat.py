@@ -8,11 +8,13 @@ LoLBench build 21 runs only when that run and its transcripts are on this machin
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import shutil
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -313,6 +315,68 @@ class LivePipelineTests(unittest.TestCase):
             for rel in ("agent/anticheat.json", "trial.log"):
                 self.assertTrue((attempt / rel).is_file(), rel)
             self.assertTrue((dest / "anticheat" / "summary.json").is_file())
+
+    def test_a_shard_gzips_its_transcripts_in_place_and_the_backup_keeps_them(self):
+        from anticheat_verdict import run_live
+        from archive_run import backup_run, compress_transcripts
+        from archive_run import main as archive_main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness = root / "harness"
+            tasks = root / "tasks"
+            (tasks / "alpha" / "solution").mkdir(parents=True)
+            shutil.copy(FIX / "gold.patch", tasks / "alpha" / "solution" / "solution.patch")
+            _trial(harness, "alpha", 1, (FIX / "near_copy.patch").read_text(encoding="utf-8"), FIX / "pip_install.jsonl")
+            _trial(harness, "alpha", 2, (FIX / "independent.patch").read_text(encoding="utf-8"), FIX / "web_search.jsonl")
+            secret = "sk-" + "q1w2e3r4" * 4
+            first = next(harness.rglob("alpha_icode_9_a01/*/agent/icode-project/sessions/cli-1/events.jsonl"))
+            first.write_text(first.read_text(encoding="utf-8") + json.dumps({"note": secret}) + "\n", encoding="utf-8")
+            jobs = harness / "harbor_runs" / "jenkins-9"
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(archive_main(["compress", "--jobs-dir", str(jobs)]), 0)
+            self.assertIn(f"compress: 2 transcripts gzipped and masked under {jobs}", out.getvalue())
+            self.assertEqual(list(harness.rglob("events.jsonl")), [])
+            packed = sorted(harness.rglob("events.jsonl.gz"))
+            self.assertEqual(len(packed), 2)
+            self.assertEqual(list(harness.rglob("*.tmp")), [])
+            text = gzip.open(first.with_name("events.jsonl.gz"), "rt", encoding="utf-8").read()
+            self.assertIn("pip install requests", text)
+            self.assertNotIn(secret, text)
+            # Packing twice changes nothing.
+            self.assertEqual(compress_transcripts(jobs), (0, []))
+
+            # Anti-cheat reads the gzipped transcripts the same way.
+            task_file = root / "tasks.txt"
+            task_file.write_text("alpha\n", encoding="utf-8")
+            args = type("A", (), {"harness_dir": str(harness), "tasks_dir": str(tasks), "task_file": str(task_file), "benchmark": "deepswe"})
+            run_live(args)
+            verdicts = sorted(
+                json.loads(p.read_text(encoding="utf-8"))["verdict"] for p in harness.rglob("agent/anticheat.json")
+            )
+            self.assertEqual(verdicts, ["clean", "rejected"])
+
+            report_dir = root / "report"
+            report_dir.mkdir()
+            dest = backup_run(
+                backup_root=root / "backup",
+                suite="deepswe",
+                task_ids=["alpha"],
+                report_dir=report_dir,
+                run_folder="jenkins-9-x",
+                harness_dir=harness,
+            )
+            archived = dest / "icode" / "alpha" / "attempt-01" / "agent" / "icode-project" / "sessions" / "cli-1"
+            self.assertEqual(sorted(p.name for p in archived.iterdir()), ["events.jsonl.gz"])
+            self.assertEqual(
+                (archived / "events.jsonl.gz").read_bytes(), first.with_name("events.jsonl.gz").read_bytes()
+            )
+
+        backup = (ROOT / "pipeline" / "stages" / "archive" / "backup.sh").read_text(encoding="utf-8")
+        self.assertIn('compress --jobs-dir "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}"', backup)
+        self.assertLess(backup.index(" compress --jobs-dir"), backup.index("--report-dir"))
 
     def test_a_rollout_harbor_never_started_is_not_run_not_clean(self):
         from anticheat_verdict import run_live

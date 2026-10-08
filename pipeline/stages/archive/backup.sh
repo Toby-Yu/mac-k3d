@@ -9,6 +9,11 @@ source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 
 ART_DIR="$(report_dir)"
 BACKUP_ROOT="${MAC_K3D_BACKUP_ROOT:-${MAC_K3D_OUTPUT_ROOT:-$ROOT/output}}"
+# The iCode transcript is most of a trial's size, and a shard archives this
+# build's trials for its dispatcher. Anti-cheat has read them by now, so they
+# are gzipped and masked in place (anticheat_verdict reads .gz too).
+python3 "$PIPELINE_LIB/archive_run.py" compress --jobs-dir "$HARNESS_DIR/harbor_runs/jenkins-${BUILD_NUMBER:-local}" \
+  || echo "WARNING: could not compress this build's transcripts; they are archived as they are"
 python3 "$PIPELINE_LIB/archive_run.py" \
   --report-dir "$ART_DIR" \
   --harness-dir "$HARNESS_DIR" \

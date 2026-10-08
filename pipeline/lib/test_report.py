@@ -3149,6 +3149,15 @@ class ProvenanceTests(unittest.TestCase):
             self.assertIn("Provenance", page)
             self.assertIn("sha256:image", page)
             self.assertIn(f"runtime sha256 {'b' * 64}", page)
+            # Provenance closes both files, after the results and the Unscored section.
+            results_end = max(text.find("unscored rollouts: 0"), text.find("## Unscored"))
+            self.assertGreater(text.index("### Provenance"), results_end)
+            self.assertTrue(text.rstrip().endswith("| alpha | sha256:image | tomlhash | testshash |"), text[-300:])
+            self.assertGreater(page.index("<h2>Provenance</h2>"), page.index("<h2>Pass fraction</h2>"))
+            doc["anticheat"] = {"status": "ok", "version": "v1", "counts": {"clean": 4}}
+            last = summary_markdown(doc).rstrip().splitlines()[-1]
+            self.assertTrue(last.startswith("- Anti-cheat `v1`: clean **4**"), last)
+            self.assertIn("(metrics in this summary are official; see anticheat/report.md)", last)
 
     def test_official_missing_harbor_version_fails_check(self):
         from render_report import demo_artifact
@@ -3232,7 +3241,16 @@ class ProvenanceTests(unittest.TestCase):
             self.assertTrue(any("one read-only mount" in err for err in official_isolation_errors(iso)), mount)
         iso = valid_isolation()
         iso["leak_scan"]["hit_tasks"] = ["cpython_5"]
-        self.assertTrue(any("hit_tasks must be empty" in err for err in official_isolation_errors(iso)))
+        # OFFICIAL=1 skipped the hit question: it has no trial, so nothing leaked.
+        skipped = {"icode": {"tasks": [{"id": "cpython_5", "n_scored": 0, "rollouts": []}]}}
+        self.assertEqual(official_isolation_errors(iso, skipped), [])
+        ran = {"icode": {"tasks": [{"id": "cpython_5", "n_scored": 0, "rollouts": [{"trial": "cpython_5__a"}]}]}}
+        self.assertIn(
+            "eval_protocol.isolation.leak_scan: hit questions have trials (cpython_5)",
+            official_isolation_errors(iso, ran),
+        )
+        scored = {"icode": {"tasks": [{"id": "cpython_5", "n_scored": 4}]}}
+        self.assertTrue(any("hit questions have trials" in err for err in official_isolation_errors(iso, scored)))
         iso = valid_isolation()
         del iso["leak_scan"]
         self.assertTrue(any("missing eval_protocol.isolation.leak_scan" in err for err in official_isolation_errors(iso)))
@@ -3248,6 +3266,23 @@ class ProvenanceTests(unittest.TestCase):
         iso["canary"]["status"] = "fail"
         iso["canary"]["failed_tasks"] = ["alpha"]
         self.assertTrue(any("canary.status must be pass" in err for err in official_isolation_errors(iso)))
+
+    def test_a_merged_report_carries_each_shards_hashes_in_its_rows(self):
+        from check_report import official_isolation_errors
+
+        iso = valid_isolation()
+        del iso["leak_scan"]["report_sha256"]
+        del iso["canary"]["summary_sha256"]
+        rows = [
+            {"shard": 1, "leak_scan_sha256": "a", "canary": {"status": "pass", "summary_sha256": "c"}},
+            {"shard": 2, "leak_scan_sha256": "b", "canary": {"status": "pass", "summary_sha256": "d"}},
+            {"shard": 3, "result": "FAILURE", "not_run": ["gamma"]},
+        ]
+        doc = {"eval_protocol": {"shards": rows}}
+        self.assertEqual(official_isolation_errors(iso, doc), [])
+        del rows[1]["leak_scan_sha256"]
+        self.assertIn("missing eval_protocol.isolation.leak_scan", official_isolation_errors(iso, doc))
+        self.assertIn("missing eval_protocol.isolation.leak_scan", official_isolation_errors(iso))
 
     def test_inputs_keep_image_ids_only_for_this_runs_tasks(self):
         """deepswe_some_task #5: the reused workspace's image table listed every earlier build's tasks."""
@@ -3749,6 +3784,91 @@ class AgentIsolationTests(unittest.TestCase):
             )
             self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
 
+    def test_an_official_leak_hit_skips_only_that_question(self):
+        gold = [f"    value_{i} = compute_distinctive_thing({i}, alpha, beta)" for i in range(40)]
+        patch = (
+            "diff --git a/pkg/mod.py b/pkg/mod.py\nnew file mode 100644\n--- /dev/null\n+++ b/pkg/mod.py\n"
+            "@@ -0,0 +1,40 @@\n" + "".join(f"+{line}\n" for line in gold)
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = root / "work"
+            tasks = work / "deep-swe" / "tasks"
+            self._write(tasks / "big" / "solution" / "solution.patch", patch)
+            (tasks / "fine" / "tests").mkdir(parents=True)
+            tree = root / "icode"
+            self._write(tree / "lib" / "mod.py", "\n".join(gold) + "\n")
+            self._write(work / "icode_host_root.txt", f"{tree}\n")
+            self._write(work / "eval_protocol_inputs.json", "{}\n")
+            skipped = work / "skipped_tasks.txt"
+
+            def leakscan(task_list: str, official: str) -> subprocess.CompletedProcess:
+                env = {**os.environ, "MAC_K3D_EVAL_WORKDIR": str(work), "BENCHMARK": "deepswe", "TASKS": task_list}
+                env.update({"TASK": "", "TASK_OFFSET": "0", "OFFICIAL": official})
+                return subprocess.run(
+                    ["bash", str(STAGES / "tasks" / "leakscan.sh")], capture_output=True, text=True, check=False, env=env
+                )
+
+            proc = leakscan("big,fine", "1")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("WARNING: leak scan found task gold for 1 of 2 questions (big;", proc.stdout)
+            self.assertIn("OFFICIAL=1 skips those questions", proc.stdout)
+            self.assertEqual(skipped.read_text(encoding="utf-8"), "big\tleak scan hit\n")
+            recorded = json.loads((work / "eval_protocol_inputs.json").read_text(encoding="utf-8"))
+            self.assertEqual(recorded["isolation"]["leak_scan"]["hit_tasks"], ["big"])
+
+            proc = leakscan("big", "1")
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("leak scan found task gold for every selected question (big;", proc.stdout + proc.stderr)
+
+            # A smoke run warns and skips nothing; the earlier build's list is gone.
+            proc = leakscan("big,fine", "0")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Smoke run continues", proc.stdout)
+            self.assertFalse(skipped.exists())
+
+    def test_the_evaluate_phase_leaves_skipped_questions_out_of_harbor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = root / "work"
+            for tid in ("alpha", "beta", "gamma"):
+                (work / "deep-swe" / "tasks" / tid).mkdir(parents=True)
+            self._write(work / "selected_tasks.txt", "alpha\nbeta\ngamma\n")
+            self._write(work / "selected_tasks_offset.txt", "0\n")
+            self._write(work / "skipped_tasks.txt", "beta\tleak scan hit\n")
+            self._write(work / "agent_mounts.json", "[]\n")
+            self._write(work / "eval_resources.json", "{}\n")
+            self._write(work / "icode_host_root.txt", f"{root / 'icode'}\n")
+            bin_dir = root / "bin"
+            self._write(bin_dir / "harbor", "#!/bin/sh\nexit 0\n")
+            (bin_dir / "harbor").chmod(0o755)
+            env = {
+                **os.environ,
+                "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                "MAC_K3D_EVAL_WORKDIR": str(work),
+                "BENCHMARK": "deepswe",
+                "TASKS": "alpha,beta,gamma",
+                "TASK": "",
+                "TASK_OFFSET": "0",
+                "N_ROLLOUTS": "4",
+                "CPU_LOCK_QTY": "8",
+                "DEEPSEEK_API_KEY": "placeholder-not-a-token",
+            }
+            proc = subprocess.run(
+                [
+                    "bash", "-c",
+                    'source "$1"; source "$2"; load_eval_state; echo "ids=${TASK_IDS[*]} needed=$NEEDED"',
+                    "_", str(STAGES / "_common.sh"), str(STAGES / "evaluate" / "harbor_cmd.sh"),
+                ],
+                capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("ids=alpha gamma needed=8", proc.stdout)
+            self.assertIn("evaluate: skipping 1 questions from", proc.stderr)
+            self.assertIn("skipped_tasks.txt: beta", proc.stderr)
+            # The report still counts it: it stays selected.
+            self.assertEqual((work / "selected_tasks.txt").read_text(encoding="utf-8"), "alpha\nbeta\ngamma\n")
+
     def test_agent_mounts_read_only_and_allowlist(self):
         from agent_mounts import ICODE_TARGET, build_mounts, check_mounts
 
@@ -4163,6 +4283,42 @@ class UnscoredRolloutTests(unittest.TestCase):
                 printed.getvalue().strip(),
                 "WARNING: 8 of 20 rollouts have no score (Docker network pool exhausted 8); see Unscored in summary.md",
             )
+
+    def test_questions_without_a_score_are_named_with_their_cause(self):
+        """A leak-skipped question and one whose image never pulled, beside a scored one."""
+        from render_report import build_artifact, questions_without_score, summary_markdown
+        from report_html import report_html
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness = root / "harness"
+            job = harness / "harbor_runs" / "jenkins-8" / "icode_deepswe_8"
+            for n in range(2):
+                self._scored(job, "etree", n, 4)
+                self._never_ran(job, "ytt", n, "Error response from daemon: pull access denied for ytt")
+            doc = build_artifact(
+                suite="deepswe", model="m", api_base="b", task_ids=["etree", "httpx", "ytt"], harness_dir=harness,
+                baseline_dir=root / "baseline", n_rollouts=2, concurrency=2, cpus_each=1, run_id="jenkins-8",
+            )
+            doc["skipped_questions"] = ["httpx: leak scan hit"]
+            self.assertEqual(
+                questions_without_score(doc),
+                [("httpx", "skipped: leak scan hit"), ("ytt", "image pull failed (2/2)")],
+            )
+            md = summary_markdown(doc)
+            self.assertIn(
+                "- Questions without a score: **2** — httpx (skipped: leak scan hit) · ytt (image pull failed (2/2))", md
+            )
+            self.assertNotIn("Skipped questions", md)
+            unscored = md[md.index("## Unscored"):]
+            self.assertRegex(unscored, r"\| httpx +\| 2/2 +\| skipped: leak scan hit +\|")
+            self.assertRegex(unscored, r"\| ytt +\| 2/2 +\| missing reward.json \(2/2\); infra: image pull failed \(2/2\) +\|")
+            page = report_html(doc)
+            self.assertIn("Questions without a score: 2 (httpx (skipped: leak scan hit) · ytt (image pull failed (2/2)))", page)
+            self.assertIn("<td>skipped: leak scan hit</td>", page)
+            # A question that simply never got a trial (its shard stopped) says so.
+            doc["skipped_questions"] = []
+            self.assertIn("- Questions without a score: **2** — httpx (no trial (2/2)) · ytt", summary_markdown(doc))
 
     def test_a_fully_scored_run_writes_0_and_warns_nothing(self):
         from render_report import report_unscored

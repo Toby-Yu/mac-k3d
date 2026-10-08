@@ -116,8 +116,27 @@ print(re.sub(r"\s+", " ", hits[-1])[:300] if hits else "no error line in the log
 PY
 }
 
+# Trials whose iCode the kernel killed (exit 137) or whose container Harbor
+# reported out of memory, one trial name per line.
+oom_trials() {
+  python3 - "$JOBS_DIR" "$PIPELINE_LIB" <<'PY' || true
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[2])
+from icode_usage import icode_exit_code
+from score_results import OOM_CAUSE, infra_cause, trial_exception
+
+for result in sorted(Path(sys.argv[1]).glob("*/*/result.json")):
+    trial = result.parent
+    exception = trial_exception(trial)
+    if icode_exit_code(trial) == 137 or (exception is not None and infra_cause(exception) == OOM_CAUSE):
+        print(trial.name)
+PY
+}
+
 run_harbor() {
-  local tid rc rewards finished heartbeat_pid
+  local tid rc rewards finished heartbeat_pid oom
   REPO_CANDIDATES="$(declared_repo_candidates)"
   mkdir -p "$JOBS_DIR"
   printf '%s\n' "$JOBS_DIR" >"$HARNESS_DIR/harbor_jobs_dir.txt"
@@ -162,7 +181,11 @@ run_harbor() {
   elif [ "$rc" -ne 0 ]; then
     echo "WARNING: harbor run exited $rc. Rewards are present; treating them as scores."
   fi
-  if grep -Eiq \
+  oom="$(oom_trials)"
+  if [ -n "$oom" ]; then
+    echo "WARNING: $(printf '%s\n' "$oom" | wc -l | tr -d ' ') trials ran out of memory (iCode exit 137 or the container OOM-killed): $(printf '%s' "$oom" | tr '\n' ' ')"
+    echo "  Each stays that rollout's own result. EVAL_SLOTS=$EVAL_SLOTS came from CPU_LOCK_QTY and the declared memory; lower CPU_LOCK_QTY or give the worker more RAM."
+  elif grep -Eiq \
     'out of memory|Cannot allocate memory|oom-kill|oom_kill|exit(ed)?[[:space:]]+(with[[:space:]]+)?(status|code)[[:space:]]*137([^0-9]|$)|ExitCode[=:[:space:]]*137([^0-9]|$)' \
     "$unit_log"; then
     echo "WARNING: a trial hit the memory ceiling. EVAL_SLOTS=$EVAL_SLOTS came from CPU_LOCK_QTY and the declared memory; lower CPU_LOCK_QTY or give the worker more RAM."

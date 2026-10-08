@@ -26,6 +26,7 @@ const DESC_SHARD_TASKS: &str = "Set by some_task or full_suite_task on a shard b
 const DESC_SHARD_N_TASKS: &str = "Set by some_task or full_suite_task on a shard build: how many sorted ids to take after TASK_OFFSET. 1 on a direct build.";
 const DESC_TASK_OFFSET: &str = "Set by some_task or full_suite_task on a shard build: sorted ids to skip before taking N_TASKS. 0 on a direct build.";
 const DESC_AGENT_LABEL: &str = "Label a worker must carry to run this build or its shards.";
+const DESC_AGGREGATE_LABEL: &str = "Label of the worker that merges the shards into one report. Empty means AGENT_LABEL.";
 /// Every worker registers with this label, so it means any online worker.
 const DEFAULT_AGENT_LABEL: &str = "lolbench";
 /// Starts the help text of every developer-only field, so the developer page
@@ -724,8 +725,11 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
     if shape.is_dispatcher() {
         p.push(text_param("SHARD_SIZE", opts.default_shard_size.max(1), DESC_SHARD_SIZE, Developer));
     }
+    p.push(text_param("AGENT_LABEL", DEFAULT_AGENT_LABEL, DESC_AGENT_LABEL, Developer));
+    if shape.is_dispatcher() {
+        p.push(text_param("AGGREGATE_LABEL", "", DESC_AGGREGATE_LABEL, Developer));
+    }
     p.extend([
-        text_param("AGENT_LABEL", DEFAULT_AGENT_LABEL, DESC_AGENT_LABEL, Developer),
         text_param(
             "HARBOR_VERSION",
             crate::prepare::toolchain::harbor_version(),
@@ -957,15 +961,21 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
         // can merge them. The workspace keeps every earlier build's trials too.
         if (params.RUN_GROUP?.trim()) {{
           archiveArtifacts artifacts: "eval-runs/harness/harbor_runs/jenkins-${{env.BUILD_NUMBER}}/**, eval-runs/harness/anticheat/**", allowEmptyArchive: true
-          archiveArtifacts artifacts: 'eval-runs/selected_tasks.txt, eval-runs/suite_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json', allowEmptyArchive: true
+          archiveArtifacts artifacts: 'eval-runs/selected_tasks.txt, eval-runs/suite_tasks.txt, eval-runs/skipped_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json, eval-runs/harness/container_mem.jsonl', allowEmptyArchive: true
         }}
-        // report/render counts the rollouts that have no score. Above 0 the
-        // run measured fewer rollouts than it asked for.
+        // report/render counts the rollouts that have no score and prints their
+        // causes. Each stays in the report as that rollout's own failure; the
+        // build result does not change.
         if (fileExists('eval-runs/unscored_rollouts.txt')) {{
           String lost = readFile('eval-runs/unscored_rollouts.txt').trim()
           if (lost ==~ /\d+/ && (lost as Integer) > 0) {{
-            unstable "${{lost}} rollouts have no score (see Unscored in summary.md)"
+            echo "WARNING: ${{lost}} rollouts have no score (causes above; see Unscored in summary.md)"
           }}
+        }}
+        // The dispatcher reads this through run.buildVariables: a shard that
+        // failed before its Harbor job dir existed spent no model tokens.
+        if (fileExists("eval-runs/harness/harbor_runs/jenkins-${{env.BUILD_NUMBER}}")) {{
+          env.HARBOR_STARTED = '1'
         }}
       }}
     }}
@@ -1120,6 +1130,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
           // index|build|result|offset|count|tasks, for the Aggregate stage.
           Map<Integer, String> shardPlan = [:]
           List<String> notOk = []
+          List<String> retried = []
           Map<String, Closure> branches = [:]
           for (int i = 0; i < shards; i++) {{
             int index = i
@@ -1132,10 +1143,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             String name = "shard-${{index + 1}}"
             String note = "${{index + 1}}/${{shards}} of ${{env.JOB_NAME}} #${{env.BUILD_NUMBER}}"
             branches[name] = {{
-              def run = build job: '{shard_job}',
-                wait: true,
-                propagate: false,
-                parameters: [
+              List shardParams = [
 {forwarded}
                   string(name: 'TASK', value: ''),
                   string(name: 'TASKS', value: shardTasks),
@@ -1147,9 +1155,29 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
                   string(name: 'REQUESTED_BY', value: env.BUILD_USER ?: ''),
                   string(name: 'ICODE_MODE', value: 'git'),
                 ]
+              def run = build job: '{shard_job}', wait: true, propagate: false, parameters: shardParams
+              // A shard sets HARBOR_STARTED once its Harbor job dir exists. One that
+              // failed before that spent no model tokens, so it is queued once more.
+              // An abort, or a failure after Harbor started, is never retried.
+              if (run.result == 'FAILURE') {{
+                String started = ''
+                try {{
+                  started = run.buildVariables?.HARBOR_STARTED ?: ''
+                }} catch (Throwable t) {{
+                  started = 'unknown'
+                  echo "WARNING: cannot read ${{name}} #${{run.number}}'s variables (${{t}}); not retrying it"
+                }}
+                if (!started) {{
+                  echo "${{name}} #${{run.number}} failed before Harbor started; queueing it once more"
+                  retried << "${{name}} #${{run.number}}"
+                  run = build job: '{shard_job}', wait: true, propagate: false, parameters: shardParams
+                }}
+              }}
               shardBuilds[name] = run.number
               shardPlan[index] = "${{index + 1}}|${{run.number}}|${{run.result}}|${{from}}|${{shardCount}}|${{shardTasks}}"
-              if (run.result != 'SUCCESS') {{
+              // Trial and question failures stay in the report; only a shard that
+              // did not finish makes the run UNSTABLE.
+              if (['FAILURE', 'ABORTED', 'NOT_BUILT'].contains(run.result)) {{
                 notOk << "${{name}} #${{run.number}} ${{run.result}}"
               }}
             }}
@@ -1161,6 +1189,9 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             if (shardPlan[i] != null) {{ planLines << shardPlan[i] }}
           }}
           env.SHARD_PLAN = planLines.join(';')
+          if (retried) {{
+            echo "Retried once after failing before Harbor started: ${{retried.join(', ')}}"
+          }}
           if (notOk) {{
             unstable "Shards that did not succeed: ${{notOk.join(', ')}}. The report merges the rest."
           }}
@@ -1169,17 +1200,20 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
     }}
 
     stage('Aggregate') {{
-      agent {{ label params.AGENT_LABEL }}
+      agent {{ label "${{params.AGGREGATE_LABEL?.trim() ?: params.AGENT_LABEL}}" }}
       steps {{
         script {{
           deleteDir()
           if (!env.SHARD_BUILDS?.trim()) {{
             error 'No shard build started, so there is nothing to merge.'
           }}
+          // The iCode transcripts are most of a trial's size and no metric reads
+          // them; they stay in each shard build's artifacts.
           for (String n : env.SHARD_BUILDS.split(',')) {{
             copyArtifacts projectName: '{shard_job}',
               selector: specific(n),
               filter: 'eval-runs/**',
+              excludes: 'eval-runs/harness/harbor_runs/**/agent/icode-project/**',
               target: "shards/${{n}}",
               flatten: false,
               optional: true
@@ -1200,6 +1234,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             --plan "${{WORKSPACE}}/shards/plan.txt" \
             --build-url "${{BUILD_URL:-}}" \
             --requester-user "${{BUILD_USER:-}}" \
+            --shard-job '{shard_job}' \
             --out "${{WORKSPACE}}/aggregate"
           python3 "$MAC_K3D_ROOT/pipeline/lib/cost_token_report.py" \
             --run-dir "${{WORKSPACE}}/aggregate" \
@@ -1216,7 +1251,8 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
       }}
       post {{
         always {{
-          archiveArtifacts artifacts: 'aggregate/**', allowEmptyArchive: true
+          // aggregate/harness is a second copy of the shards' trials.
+          archiveArtifacts artifacts: 'aggregate/**', excludes: 'aggregate/harness/**', allowEmptyArchive: true
           archiveArtifacts artifacts: 'backup/**', allowEmptyArchive: true
         }}
       }}
@@ -2009,7 +2045,9 @@ mod tests {
         assert!(jf.contains("string(name: 'ICODE_MODE', value: 'git')"));
         assert!(jf.contains("unstable \"Shards that did not succeed"));
         // The merge runs in this build, on a worker, from the shard build numbers.
-        assert!(jf.contains("stage('Aggregate') {\n      agent { label params.AGENT_LABEL }"));
+        assert!(jf.contains(
+            "stage('Aggregate') {\n      agent { label \"${params.AGGREGATE_LABEL?.trim() ?: params.AGENT_LABEL}\" }"
+        ));
         assert!(jf.contains("copyArtifacts projectName: 'deepswe_one_task'"));
         assert!(jf.contains("selector: specific(n)"));
         assert!(jf.contains("env.SHARD_BUILDS = shardBuilds.values().join(',')"));
@@ -2021,7 +2059,29 @@ mod tests {
     }
 
     #[test]
-    fn one_task_is_unstable_when_rollouts_have_no_score() {
+    fn the_aggregate_leaves_transcripts_and_trial_copies_in_the_shard_builds() {
+        for shape in [JobShape::Some_, JobShape::FullSuite] {
+            let jf = eval_jenkinsfile("deepswe", shape, &deepswe_opts(Vec::new()));
+            let stage = &jf[jf.find("stage('Aggregate')").unwrap()..];
+            assert!(stage.contains(
+                "filter: 'eval-runs/**',\n              excludes: 'eval-runs/harness/harbor_runs/**/agent/icode-project/**',"
+            ));
+            assert!(stage.contains(
+                "archiveArtifacts artifacts: 'aggregate/**', excludes: 'aggregate/harness/**', allowEmptyArchive: true"
+            ));
+            assert!(stage.contains("archiveArtifacts artifacts: 'backup/**'"));
+            // The report names the shard builds that keep the transcripts.
+            assert!(stage.contains("--shard-job 'deepswe_one_task'"));
+            assert!(params_block(&jf).contains("hidden(name: 'AGGREGATE_LABEL', defaultValue: ''"));
+            // Not forwarded: a shard always runs on AGENT_LABEL.
+            assert!(!jf.contains("string(name: 'AGGREGATE_LABEL', value:"));
+        }
+        let one = eval_jenkinsfile("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
+        assert!(!one.contains("AGGREGATE_LABEL"));
+    }
+
+    #[test]
+    fn one_task_warns_when_rollouts_have_no_score() {
         let opts = deepswe_opts(Vec::new());
         for bench in EVAL_BENCHMARKS {
             let jf = eval_jenkinsfile(bench, JobShape::One, &opts);
@@ -2029,16 +2089,38 @@ mod tests {
             assert!(post.contains("if (fileExists('eval-runs/unscored_rollouts.txt')) {"), "{bench}");
             assert!(post.contains("String lost = readFile('eval-runs/unscored_rollouts.txt').trim()"));
             assert!(post.contains(r"if (lost ==~ /\d+/ && (lost as Integer) > 0) {"));
-            assert!(post.contains("unstable \"${lost} rollouts have no score (see Unscored in summary.md)\""));
-            // The report and the shard's trials are archived before the build is marked.
-            let marked = post.find("unscored_rollouts.txt").unwrap();
-            assert!(post.find("last_output.txt").unwrap() < marked);
-            assert!(post.find("harbor_runs/jenkins-").unwrap() < marked);
+            assert!(post.contains(
+                "echo \"WARNING: ${lost} rollouts have no score (causes above; see Unscored in summary.md)\""
+            ));
+            // A rollout's own failure never changes the build result.
+            assert!(!jf.contains("unstable"), "{bench}");
+            // The dispatcher's retry rule reads this.
+            assert!(post.contains(
+                "if (fileExists(\"eval-runs/harness/harbor_runs/jenkins-${env.BUILD_NUMBER}\")) {\n          env.HARBOR_STARTED = '1'"
+            ));
+            let warned = post.find("unscored_rollouts.txt").unwrap();
+            assert!(post.find("last_output.txt").unwrap() < warned);
+            assert!(post.find("harbor_runs/jenkins-").unwrap() < warned);
         }
-        // An unstable shard is one the dispatcher lists as not succeeded.
-        let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
+    }
+
+    #[test]
+    fn some_task_is_unstable_only_for_a_shard_that_did_not_finish() {
+        let some = eval_jenkinsfile("deepswe", JobShape::Some_, &deepswe_opts(Vec::new()));
         assert!(!some.contains("unscored_rollouts.txt"));
+        assert!(some.contains("if (['FAILURE', 'ABORTED', 'NOT_BUILT'].contains(run.result)) {"));
+        assert!(!some.contains("run.result != 'SUCCESS'"));
         assert!(some.contains("unstable \"Shards that did not succeed"));
+        // One retry, only for a FAILURE before Harbor started.
+        assert!(some.contains("if (run.result == 'FAILURE') {"));
+        assert!(some.contains("started = run.buildVariables?.HARBOR_STARTED ?: ''"));
+        let retry = some.find("if (!started) {").unwrap();
+        let launches: Vec<_> = some.match_indices("build job: 'deepswe_one_task'").map(|(i, _)| i).collect();
+        assert_eq!(launches.len(), 2);
+        assert!(launches[0] < retry && retry < launches[1]);
+        assert_eq!(some.matches("parameters: shardParams").count(), 2);
+        // An unreadable variable map means no retry: tokens are never spent twice.
+        assert!(some.contains("started = 'unknown'"));
     }
 
     #[test]
@@ -2125,6 +2207,8 @@ mod tests {
         assert!(get(&some, "TASKS").settable && !get(&some, "TASKS").developer);
         assert!(get(&some, "SHARD_SIZE").settable && get(&some, "SHARD_SIZE").developer);
         assert!(get(&some, "AGENT_LABEL").developer);
+        assert!(get(&some, "AGGREGATE_LABEL").settable && get(&some, "AGGREGATE_LABEL").developer);
+        assert!(!one.iter().any(|p| p.name == "AGGREGATE_LABEL"));
         assert!(some.iter().all(|p| p.settable));
         let full = job_params("deepswe", JobShape::FullSuite);
         assert!(get(&full, "N_TASKS").developer);

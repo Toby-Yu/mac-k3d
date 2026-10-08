@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# evaluate/canary: the isolation canary. One CanaryAgent trial per target task,
-# with iCode's exact flags, mounts and env, probes what the agent can reach and
-# read. A failure stops the build before any rollout. Never calls the model.
+# evaluate/canary: the isolation canary. A CanaryAgent trial with iCode's exact
+# flags, mounts and env probes what the agent can reach and read: on the first
+# question whose trial starts (CANARY=only: on every question). A failure stops
+# the build before any rollout. Never calls the model.
 set -euo pipefail
 # shellcheck source=../_common.sh
 source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
@@ -39,18 +40,16 @@ ensure_harbor_egress
 ensure_trial_network
 teardown_on_exit "$CANARY_DIR"
 warn_docker_mtu
-if [ "$CANARY_MODE" = only ]; then
-  targets=("${TASK_IDS[@]}")
-else
-  targets=("${TASK_IDS[0]}")
-fi
 rm -rf "$CANARY_DIR"
 mkdir -p "$CANARY_DIR"
+FALLBACK="$CANARY_DIR/fallback.tsv"
+: >"$FALLBACK"
 if [ -n "${CANARY_ALLOW_HOST:-}" ]; then
   echo "WARNING: CANARY_ALLOW_HOST=$CANARY_ALLOW_HOST opens that host for the canary only; the canary must fail"
 fi
-expect=()
-for tid in "${targets[@]}"; do
+
+run_canary() {
+  local tid="$1" spec rc
   spec="$(canary_spec "$tid")"
   build_canary_cmd "$tid" "$spec"
   echo "canary: task=$tid -a canary_harbor_agent:CanaryAgent (iCode's flags, mounts and env) log=$unit_log"
@@ -61,12 +60,39 @@ for tid in "${targets[@]}"; do
   if [ "$rc" -ne 0 ]; then
     echo "WARNING: canary harbor run exited $rc for $tid (see $unit_log)"
   fi
-  expect+=(--task "$tid")
-done
+}
+
+expect=()
+if [ "$CANARY_MODE" = only ]; then
+  for tid in "${TASK_IDS[@]}"; do
+    run_canary "$tid"
+    expect+=(--task "$tid")
+  done
+else
+  # The first question whose trial reaches the probe proves isolation. A trial
+  # that never started (image pull, compose) shows nothing about isolation, so
+  # the next question takes its place. A probe that finds a breach still fails.
+  for tid in "${TASK_IDS[@]}"; do
+    run_canary "$tid"
+    set +e
+    why="$(python3 "$PIPELINE_LIB/canary_verdict.py" started --jobs-dir "$CANARY_DIR" --task "$tid")"
+    started_rc=$?
+    set -e
+    if [ "$started_rc" = 0 ]; then
+      expect=(--task "$tid")
+      break
+    fi
+    [ "$started_rc" = 3 ] || die "canary verdict failed (exit $started_rc)"
+    echo "WARNING: canary trial for $tid did not start ($why); trying the next question"
+    printf '%s\t%s\n' "$tid" "$why" >>"$FALLBACK"
+    expect+=(--task "$tid")
+  done
+fi
 set +e
 python3 "$PIPELINE_LIB/canary_verdict.py" summarize \
   --jobs-dir "$CANARY_DIR" \
   --out-dir "$CANARY_DIR" \
+  --fallback-file "$FALLBACK" \
   "${expect[@]}"
 rc=$?
 set -e
@@ -75,5 +101,8 @@ case "$rc" in
   *) die "canary verdict failed (exit $rc)" ;;
 esac
 python3 "$PIPELINE_LIB/provenance.py" record-canary --inputs "$PROTOCOL_INPUTS" --summary "$CANARY_DIR/summary.json"
+if [ "$rc" != 0 ] && [ "$CANARY_MODE" != only ] && [ "$(wc -l <"$FALLBACK" | tr -d ' ')" -ge "${#TASK_IDS[@]}" ]; then
+  die "no question's canary trial started (see $CANARY_DIR/report.md), so isolation is not proven; the run stops here"
+fi
 [ "$rc" = 0 ] || die "isolation canary failed (see $CANARY_DIR/report.md); the run stops here"
-echo "canary: pass (${#targets[@]} tasks, report $CANARY_DIR/report.md)"
+echo "canary: pass ($(( ${#expect[@]} / 2 )) tasks, report $CANARY_DIR/report.md)"

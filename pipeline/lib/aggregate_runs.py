@@ -15,6 +15,9 @@ With ``--plan`` (the dispatcher's ``shards/plan.txt``) every shard the dispatche
 started gets a row, including one that archived nothing, and a shard's files
 count only when its own build wrote them: a workspace is reused, so a build that
 stopped early still holds the previous build's inputs and verdicts.
+
+The dispatcher copies the trials without the iCode transcripts; the report's
+Provenance names the shard builds that keep them.
 """
 
 from __future__ import annotations
@@ -28,7 +31,15 @@ from pathlib import Path
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
-from render_report import _thinking_type, build_artifact, eval_model_label, write_report  # noqa: E402
+from render_report import (  # noqa: E402
+    SKIPPED_TASKS,
+    _thinking_type,
+    build_artifact,
+    container_mem_peak,
+    eval_model_label,
+    read_skipped_tasks,
+    write_report,
+)
 from score_results import load_json  # noqa: E402
 from task_resources import cpu_count  # noqa: E402
 
@@ -131,6 +142,17 @@ def trial_network_of(protocol: dict) -> dict | None:
     return record if isinstance(record, dict) and record.get("mode") else None
 
 
+def isolation_record_of(protocol: dict, key: str) -> dict | None:
+    isolation = protocol.get("isolation") if isinstance(protocol.get("isolation"), dict) else {}
+    record = isolation.get(key)
+    return record if isinstance(record, dict) else None
+
+
+def node_of(protocol: dict | None, index: int) -> str:
+    worker = (protocol or {}).get("worker") if isinstance((protocol or {}).get("worker"), dict) else {}
+    return str(worker.get("node") or f"shard {index}")
+
+
 def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
     icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
     row = {
@@ -147,32 +169,204 @@ def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
     network = trial_network_of(protocol)
     if network is not None:
         row["trial_network"] = {key: network.get(key) for key in ("mode", "pool", "prefix", "free", "total", "need")}
+    leak = isolation_record_of(protocol, "leak_scan")
+    if leak is not None and leak.get("report_sha256"):
+        row["leak_scan_sha256"] = str(leak["report_sha256"])
+    canary = isolation_record_of(protocol, "canary")
+    if canary is not None:
+        row["canary"] = {"status": str(canary.get("status") or ""), "summary_sha256": str(canary.get("summary_sha256") or "")}
     return row
 
 
-def merge_protocols(protocols: list[dict]) -> dict:
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def merge_leak_scans(records: list[dict]) -> dict:
+    """The shards' leak scans as one: each shard scanned only its own questions."""
+    statuses: dict[str, int] = {}
+    for record in records:
+        for name, num in (record.get("statuses") if isinstance(record.get("statuses"), dict) else {}).items():
+            statuses[str(name)] = statuses.get(str(name), 0) + _count(num)
+    return {
+        "scanner": ", ".join(sorted({str(r.get("scanner")) for r in records if r.get("scanner")})),
+        "hit_tasks": sorted({str(t) for r in records for t in r.get("hit_tasks") or []}),
+        "statuses": dict(sorted(statuses.items())),
+        "shards": len(records),
+    }
+
+
+def merge_canaries(ran: list[dict | None], stopped: list[dict]) -> dict | None:
+    """The shards' canaries as one.
+
+    ``ran`` holds the record (or None) of every shard that ran Harbor, ``stopped``
+    the records of shards that stopped before it. Any failed canary fails the
+    merge; a shard that ran Harbor without a canary makes it ``missing``.
+    """
+    records = [r for r in ran if r] + stopped
+    if not records:
+        return None
+    statuses = {str(r.get("status") or "") for r in records}
+    if "fail" in statuses:
+        status = "fail"
+    elif len([r for r in ran if r]) < len(ran) or statuses != {"pass"}:
+        status = "missing"
+    else:
+        status = "pass"
+    counts: dict[str, int] = {}
+    for record in records:
+        for name, num in (record.get("counts") if isinstance(record.get("counts"), dict) else {}).items():
+            counts[str(name)] = counts.get(str(name), 0) + _count(num)
+    out = {
+        "version": ", ".join(sorted({str(r.get("version")) for r in records if r.get("version")})),
+        "status": status,
+        "nodes": sorted({str(r.get("node")) for r in records if r.get("node")}),
+        "tasks": sorted({str(t) for r in records for t in r.get("tasks") or []}),
+        "failed_tasks": sorted({str(t) for r in records for t in r.get("failed_tasks") or []}),
+        "warn_tasks": sorted({str(t) for r in records for t in r.get("warn_tasks") or []}),
+        "counts": counts,
+        "shards": len(records),
+    }
+    fallback = [item for r in records for item in r.get("fallback_from") or [] if isinstance(item, dict)]
+    if fallback:
+        out["fallback_from"] = fallback
+    return out
+
+
+def merge_trial_networks(records: list[dict]) -> dict:
+    """Shards on one subnet pool: the smallest free count and every shard's need."""
+    out = dict(records[0])
+    frees = [r["free"] for r in records if isinstance(r.get("free"), int) and not isinstance(r.get("free"), bool)]
+    if frees:
+        out["free"] = min(frees)
+    needs = [r.get("need") for r in records]
+    if len(records) > 1:
+        out["need_by_shard"] = needs
+        out["need"] = max((n for n in needs if isinstance(n, int)), default=None)
+    out.pop("checked_at", None)
+    return out
+
+
+def node_resources(entries: list[tuple[str, dict]]) -> dict:
+    """protocol.resources per node. One node runs its shards one after another, so
+    it counts once, with its largest plan; different nodes run side by side."""
+    by_node: dict[str, dict] = {}
+    for node, res in entries:
+        prev = by_node.get(node)
+        if prev is None or _count(res.get("concurrency")) > _count(prev.get("concurrency")):
+            by_node[node] = {key: res.get(key) for key in ("cpu_lock_qty", "concurrency", "cpus_each")}
+    return by_node
+
+
+def merge_resources(base: dict, entries: list[tuple[str, dict]]) -> dict:
+    by_node = node_resources(entries)
+    if not by_node:
+        return base
+    out = dict(base)
+    out["concurrency"] = sum(_count(r.get("concurrency")) for r in by_node.values()) or base.get("concurrency")
+    out["cpu_lock_qty"] = sum(_count(r.get("cpu_lock_qty")) for r in by_node.values()) or base.get("cpu_lock_qty")
+    cpus = {cpu_count(r.get("cpus_each")) for r in by_node.values() if r.get("cpus_each")}
+    out["cpus_each"] = cpus.pop() if len(cpus) == 1 else None
+    if len(by_node) > 1:
+        out["by_node"] = by_node
+    return out
+
+
+def merge_resource_plans(plans: list[tuple[str, dict]]) -> dict | None:
+    """The shards' eval_resources.json as one: declared per question, applied per node."""
+    if not plans:
+        return None
+    if len(plans) == 1:
+        return plans[0][1]
+    per_task: dict = {}
+    peak: dict = {}
+    declared_count = 0
+    for _, doc in plans:
+        declared = doc.get("declared") if isinstance(doc.get("declared"), dict) else {}
+        if isinstance(declared.get("per_task"), dict):
+            per_task.update(declared["per_task"])
+        for key, value in (declared.get("peak") if isinstance(declared.get("peak"), dict) else {}).items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                peak[key] = max(peak.get(key, value), value)
+        declared_count += _count(declared.get("tasks"))
+    applied_by_node: dict[str, dict] = {}
+    host_by_node: dict[str, dict] = {}
+    for node, doc in plans:
+        applied = doc.get("applied") if isinstance(doc.get("applied"), dict) else {}
+        prev = applied_by_node.get(node)
+        if prev is None or _count(applied.get("slots")) > _count(prev.get("slots")):
+            applied_by_node[node] = applied
+            if isinstance(doc.get("host"), dict):
+                host_by_node[node] = doc["host"]
+    out = json.loads(json.dumps(plans[0][1]))
+    out["declared"] = {
+        **(out.get("declared") if isinstance(out.get("declared"), dict) else {}),
+        "per_task": per_task,
+        "peak": peak,
+        "tasks": declared_count,
+        "declared_tasks": len(per_task),
+    }
+    applied = dict(out.get("applied") if isinstance(out.get("applied"), dict) else {})
+    applied["slots"] = sum(_count(a.get("slots")) for a in applied_by_node.values())
+    applied["cpu_lock_qty"] = sum(_count(a.get("cpu_lock_qty")) for a in applied_by_node.values())
+    cpus = {cpu_count(a.get("cpus_each")) for a in applied_by_node.values() if a.get("cpus_each")}
+    applied["cpus_each"] = cpus.pop() if len(cpus) == 1 else None
+    out["applied"] = applied
+    out["by_node"] = {node: {"applied": a, "host": host_by_node.get(node, {})} for node, a in applied_by_node.items()}
+    out["reasons"] = [reason for _, doc in plans for reason in doc.get("reasons") or []]
+    return out
+
+
+def merge_protocols(
+    protocols: list[dict],
+    ran: list[tuple[str, dict]] | None = None,
+    stopped: list[dict] | None = None,
+) -> dict:
     """The first shard's protocol, with every shard's per-task image and benchmark pins.
 
+    ``ran`` lists ``(node, protocol)`` for the shards whose own build ran Harbor,
+    ``stopped`` the protocols of shards that stopped before it. Their leak scans,
+    canaries, trial networks and resources are merged into one record each.
     When the shards' egress probes or trial network pools differ, the merged
     protocol names none of them; each shard's row keeps its own.
     """
     if not protocols:
         return {}
     out = json.loads(json.dumps(protocols[0]))
+    ran = ran if ran is not None else [(node_of(p, i), p) for i, p in enumerate(protocols, start=1)]
+    isolation = out.get("isolation") if isinstance(out.get("isolation"), dict) else None
     probes = {
         (str(p.get("image")), p.get("substituted") is True)
         for p in (egress_probe_of(protocol) for protocol in protocols)
         if p is not None
     }
-    if len(probes) > 1 and isinstance(out.get("isolation"), dict):
-        out["isolation"].pop("egress_probe", None)
-    pools = {
-        (str(n.get("mode")), str(n.get("pool") or ""), n.get("prefix"))
-        for n in (trial_network_of(protocol) for protocol in protocols)
-        if n is not None
-    }
-    if len(pools) > 1 and isinstance(out.get("isolation"), dict):
-        out["isolation"].pop("trial_network", None)
+    if len(probes) > 1 and isolation is not None:
+        isolation.pop("egress_probe", None)
+    networks = [n for n in (trial_network_of(protocol) for protocol in protocols) if n is not None]
+    pools = {(str(n.get("mode")), str(n.get("pool") or ""), n.get("prefix")) for n in networks}
+    if len(pools) > 1 and isolation is not None:
+        isolation.pop("trial_network", None)
+    elif networks and isolation is not None:
+        isolation["trial_network"] = merge_trial_networks(networks)
+    if isolation is not None and len(protocols) > 1:
+        leaks = [r for r in (isolation_record_of(p, "leak_scan") for _, p in ran) if r is not None]
+        if leaks:
+            isolation["leak_scan"] = merge_leak_scans(leaks)
+        else:
+            isolation.pop("leak_scan", None)
+        canary = merge_canaries(
+            [isolation_record_of(p, "canary") for _, p in ran],
+            [r for r in (isolation_record_of(p, "canary") for p in stopped or []) if r is not None],
+        )
+        if canary is not None:
+            isolation["canary"] = canary
+        else:
+            isolation.pop("canary", None)
+    if len(protocols) > 1:
+        out["resources"] = merge_resources(
+            out.get("resources") if isinstance(out.get("resources"), dict) else {},
+            [(node, p["resources"]) for node, p in ran if isinstance(p.get("resources"), dict)],
+        )
     images = out.get("images") if isinstance(out.get("images"), dict) else {}
     bench = out.get("benchmark") if isinstance(out.get("benchmark"), dict) else None
     pins = bench.get("tasks") if bench is not None and isinstance(bench.get("tasks"), dict) else None
@@ -303,7 +497,13 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
     suites: list[list[str]] = []
     ran_tasks: set[str] = set()
     first_inputs: dict | None = None
-    resources: dict | None = None
+    first_resources: dict | None = None
+    ran_protocols: list[tuple[str, dict]] = []
+    stopped_protocols: list[dict] = []
+    resource_plans: list[tuple[str, dict]] = []
+    memory: list[dict] = []
+    skipped: dict[str, str] = {}
+    transcript_builds: list[str] = []
     for index, shard, entry in planned_shards(shards, plan or []):
         build = entry["build"] if entry else None
         own_run = f"jenkins-{build}" if build else None
@@ -316,6 +516,8 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
             shutil.copytree(run, target, symlinks=True)
         names = [run.name for run in builds]
         ran = own_run in names if own_run else bool(names)
+        if ran:
+            transcript_builds.extend([build] if build else [n.removeprefix("jenkins-") for n in names])
         got = load_json(shard / "eval_protocol_inputs.json") if shard else None
         inputs = got if isinstance(got, dict) else {}
         trusted = shard is not None and (build is None or built_by(inputs, build))
@@ -364,6 +566,10 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
             )
         if protocol is not None:
             protocols.append(protocol)
+            if ran:
+                ran_protocols.append((node_of(protocol, index), protocol))
+            else:
+                stopped_protocols.append(protocol)
         row_builds = [own_run] if own_run else names
         if protocol is not None or entry is not None:
             row = shard_row(index, row_builds, protocol or {})
@@ -376,10 +582,24 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
                         row["not_run_count"] = entry["count"]
                         row["not_run_offset"] = entry["offset"]
             rows.append(row)
-        if resources is None and trusted:
+        if trusted:
             got = load_json(shard / "eval_resources.json")
             if isinstance(got, dict):
-                resources = got
+                first_resources = first_resources or got
+                if ran:
+                    resource_plans.append((node_of(protocol, index), got))
+        if trusted and ran:
+            mem_file = shard / "harness" / "container_mem.jsonl"
+            if container_mem_peak(mem_file) is not None:
+                for line in mem_file.read_text(encoding="utf-8").splitlines():
+                    try:
+                        got = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(got, dict):
+                        memory.append({**got, "shard": index})
+            for tid, why in read_skipped_tasks(shard / SKIPPED_TASKS).items():
+                skipped.setdefault(tid, why)
     for tid in name_offset_shards(rows, suites, ran_tasks):
         if tid not in tasks:
             tasks.append(tid)
@@ -391,13 +611,16 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
     return {
         "harness": harness,
         "tasks": sorted(tasks),
-        "protocol": merge_protocols(protocols),
+        "protocol": merge_protocols(protocols, ran_protocols, stopped_protocols),
         "inputs": first_inputs or {},
         "shard_rows": rows,
-        "resources": resources,
+        "resources": merge_resource_plans(resource_plans) or first_resources,
         "anticheat": merged,
         "pipelines": pipelines,
         "shards": len(plan) if plan else len(shards),
+        "memory": memory,
+        "skipped": skipped,
+        "transcript_builds": sorted(set(transcript_builds), key=lambda b: (not b.isdigit(), int(b) if b.isdigit() else 0, b)),
     }
 
 
@@ -468,6 +691,7 @@ def main() -> int:
     ap.add_argument("--plan", default="", help="the dispatcher's shards/plan.txt (index|build|result|offset|count|tasks)")
     ap.add_argument("--build-url", default="", help="the dispatcher build's URL, the merged report's requester")
     ap.add_argument("--requester-user", default="", help="the Jenkins user who started the dispatcher build")
+    ap.add_argument("--shard-job", default="", help="the shard job, whose builds keep the iCode transcripts")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -516,6 +740,8 @@ def main() -> int:
         protocol["requester"] = requester = {**requester, "build_url": args.build_url}
     if args.requester_user.strip():
         protocol["requester"] = {**requester, "user": args.requester_user.strip()}
+    if merged["transcript_builds"]:
+        protocol["transcripts"] = {"job": args.shard_job.strip(), "builds": merged["transcript_builds"]}
     if rows:
         protocol["shards"] = rows
         mismatched = shard_mismatches(rows)
@@ -547,6 +773,17 @@ def main() -> int:
     doc["shards"] = merged["shards"]
     if merged["resources"]:
         doc["resources"] = merged["resources"]
+    peaks = [float(row["peak_gb"]) for row in merged["memory"] if isinstance(row.get("peak_gb"), (int, float))]
+    doc["container_mem_max_gb"] = max((gb for gb in peaks if gb > 0), default=None)
+    doc["skipped_questions"] = [f"{tid}: {why}" for tid, why in sorted(merged["skipped"].items())]
+    if merged["memory"]:
+        (out / "container_mem.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in merged["memory"]), encoding="utf-8"
+        )
+    if doc["skipped_questions"]:
+        (out / "skipped_questions.txt").write_text(
+            "".join(f"{item}\n" for item in doc["skipped_questions"]), encoding="utf-8"
+        )
     status = pipeline_status(merged["pipelines"])
     if status:
         doc.update(status)

@@ -62,10 +62,34 @@ def _present_int(value: object) -> bool:
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def official_isolation_errors(isolation: object) -> list[str]:
-    """The same isolation protocol must hold for every benchmark and model (docs/evaluation.md)."""
+def tasks_with_trials(doc: dict) -> set[str]:
+    """Questions with at least one trial in the report."""
+    arm = doc.get("icode") if isinstance(doc.get("icode"), dict) else {}
+    out = set()
+    for row in arm.get("tasks") or []:
+        if not isinstance(row, dict):
+            continue
+        rollouts = [a for a in row.get("rollouts") or [] if isinstance(a, dict)]
+        if row.get("n_scored") or any(a.get("trial") for a in rollouts):
+            out.add(str(row.get("id")))
+    return out
+
+
+def _ran_shards(protocol: dict) -> list[dict]:
+    shards = protocol.get("shards") if isinstance(protocol.get("shards"), list) else []
+    return [s for s in shards if isinstance(s, dict) and not s.get("not_run") and not s.get("not_run_count")]
+
+
+def official_isolation_errors(isolation: object, doc: dict | None = None) -> list[str]:
+    """The same isolation protocol must hold for every benchmark and model (docs/evaluation.md).
+
+    A merged report keeps each shard's leak scan and canary hashes in its shard rows.
+    """
     if not isinstance(isolation, dict):
         return ["missing eval_protocol.isolation"]
+    doc = doc or {}
+    protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else {}
+    ran = _ran_shards(protocol)
     errors: list[str] = []
     loc = "eval_protocol.isolation"
     if isolation.get("mode") != "git":
@@ -83,12 +107,25 @@ def official_isolation_errors(isolation: object) -> list[str]:
     if mount.get("count") != 1 or mount.get("target") != "/opt/icode-host" or mount.get("read_only") is not True:
         errors.append(f"{loc}.mount must be one read-only mount at /opt/icode-host")
     leak = isolation.get("leak_scan") if isinstance(isolation.get("leak_scan"), dict) else {}
-    if not _nonempty_str(leak.get("scanner")) or not _nonempty_str(leak.get("report_sha256")):
+    leak_hashed = _nonempty_str(leak.get("report_sha256")) or (
+        bool(ran) and all(_nonempty_str(s.get("leak_scan_sha256")) for s in ran)
+    )
+    hits = leak.get("hit_tasks")
+    if not _nonempty_str(leak.get("scanner")) or not leak_hashed:
         errors.append(f"missing {loc}.leak_scan")
-    elif leak.get("hit_tasks") != []:
-        errors.append(f"{loc}.leak_scan.hit_tasks must be empty")
+    elif not isinstance(hits, list):
+        errors.append(f"{loc}.leak_scan.hit_tasks must be a list")
+    else:
+        # OFFICIAL=1 skips a hit question (tasks/leakscan); one with trials leaked.
+        leaked = sorted({str(t) for t in hits} & tasks_with_trials(doc))
+        if leaked:
+            errors.append(f"{loc}.leak_scan: hit questions have trials ({', '.join(leaked)})")
     canary = isolation.get("canary") if isinstance(isolation.get("canary"), dict) else {}
-    if not _nonempty_str(canary.get("version")) or not _nonempty_str(canary.get("summary_sha256")):
+    canary_hashed = _nonempty_str(canary.get("summary_sha256")) or (
+        bool(ran)
+        and all(isinstance(s.get("canary"), dict) and _nonempty_str(s["canary"].get("summary_sha256")) for s in ran)
+    )
+    if not _nonempty_str(canary.get("version")) or not canary_hashed:
         errors.append(f"missing {loc}.canary (evaluate/canary isolation canary)")
     elif canary.get("status") != "pass":
         errors.append(f"{loc}.canary.status must be pass")
@@ -140,7 +177,7 @@ def official_provenance_errors(doc: dict) -> list[str]:
         errors.append("eval_protocol.pipeline.dirty: an official run needs a clean pipeline commit")
     if doc.get("pipeline_status") == "mixed":
         errors.append("pipeline_status mixed: the shards ran different pipeline builds")
-    errors.extend(official_isolation_errors(protocol.get("isolation")))
+    errors.extend(official_isolation_errors(protocol.get("isolation"), doc))
     anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else {}
     if anticheat.get("status") != "ok" or not _nonempty_str(anticheat.get("version")):
         errors.append("anticheat must have run (anticheat/verdict)")

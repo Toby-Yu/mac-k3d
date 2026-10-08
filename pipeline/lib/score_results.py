@@ -805,11 +805,16 @@ def trial_patch_bytes(trial: Path) -> int | None:
     return got if isinstance(got, int) and not isinstance(got, bool) else None
 
 
+OOM_CAUSE = "out of memory (OOM-killed)"
 # Matched in order against Harbor's exception message, lowercased.
 INFRA_CAUSES = (
     (("fully subnetted",), "Docker network pool exhausted"),
     (("extraction snapshot", "missing parent", "parent snapshot"), "Docker image store damaged"),
     (("pull access denied", "manifest unknown", "error pulling", "failed to pull", "toomanyrequests"), "image pull failed"),
+    (
+        ("oomkilled", "out of memory", "cannot allocate memory", "oom-kill", "oom_kill", "(exit 137)", "exit code 137"),
+        OOM_CAUSE,
+    ),
     (("docker compose command failed",), "docker compose failed"),
 )
 

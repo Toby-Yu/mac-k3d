@@ -421,7 +421,7 @@ def canary_record(summary: Path) -> dict:
     doc = _load_json(summary)
     counts = doc.get("counts") if isinstance(doc.get("counts"), dict) else {}
     tasks = doc.get("tasks") if isinstance(doc.get("tasks"), dict) else {}
-    return {
+    record = {
         "version": str(doc.get("config_version") or ""),
         "status": str(doc.get("status") or ""),
         "node": str(doc.get("node") or ""),
@@ -431,6 +431,14 @@ def canary_record(summary: Path) -> dict:
         "counts": {k: v for k, v in counts.items() if isinstance(v, int) and not isinstance(v, bool)},
         "summary_sha256": sha256_file(summary) if summary.is_file() else "",
     }
+    fallback = [
+        {"task": str(item.get("task") or ""), "reason": str(item.get("reason") or "")}
+        for item in doc.get("fallback_from") or []
+        if isinstance(item, dict) and item.get("task")
+    ]
+    if fallback:
+        record["fallback_from"] = fallback
+    return record
 
 
 def record_resources(inputs: Path, plan: Path) -> dict:
@@ -581,9 +589,14 @@ def trial_network_text(record: object, short: bool = False) -> str:
     prefix = _cell(record.get("prefix"))
     if short:
         return f"{record['pool']} /{prefix} ({_cell(record.get('free'))} free)"
+    by_shard = record.get("need_by_shard")
+    if isinstance(by_shard, list) and len(by_shard) > 1:
+        need = " · ".join(_cell(n) for n in by_shard) + " (by shard)"
+    else:
+        need = _cell(record.get("need"))
     return (
         f"own /{prefix} subnets from {record['pool']} · {_cell(record.get('free'))} of "
-        f"{_cell(record.get('total'))} free at check · need {_cell(record.get('need'))}"
+        f"{_cell(record.get('total'))} free at check · need {need}"
     )
 
 
@@ -616,6 +629,11 @@ def isolation_view(isolation: object) -> dict | None:
         "canary_tasks": [str(t) for t in canary.get("tasks") or []],
         "canary_failed": [str(t) for t in canary.get("failed_tasks") or []],
         "canary_warn": [str(t) for t in canary.get("warn_tasks") or []],
+        "canary_fallback": [
+            f"{item.get('task')} ({item.get('reason') or 'did not start'})"
+            for item in canary.get("fallback_from") or []
+            if isinstance(item, dict) and item.get("task")
+        ],
         "allowlist_version": str(allow.get("version") or ""),
         "allowlist_hosts": [str(h) for h in allow.get("agent_hosts") or []],
         "egress_default": str(egress.get("harbor_default") or ""),
@@ -657,10 +675,13 @@ def isolation_lines(view: dict | None) -> list[str]:
         tasks = ", ".join(view["canary_tasks"]) or "-"
         failed = ", ".join(view["canary_failed"]) or "none"
         warned = ", ".join(view["canary_warn"]) or "none"
-        lines.append(
+        line = (
             f"Canary: {view['canary_version']} · {_cell(view['canary_status'])} · tasks {tasks} · "
             f"failed {failed} · warnings {warned}"
         )
+        if view.get("canary_fallback"):
+            line += f" · did not start: {', '.join(view['canary_fallback'])}"
+        lines.append(line)
     return lines
 
 
@@ -718,11 +739,31 @@ def provenance_view(protocol: dict | None) -> dict | None:
         "build_url": str(requester.get("build_url") or ""),
         "tasks": rows,
         "shards": shard_views(protocol.get("shards")),
+        "transcripts": transcripts_line(protocol.get("transcripts")),
         "model_params_status": str(protocol.get("model_params_status") or ""),
         "model_params_mismatch": (
             protocol.get("model_params_mismatch") if isinstance(protocol.get("model_params_mismatch"), dict) else {}
         ),
     }
+
+
+def transcripts_line(record: object) -> str:
+    """Where a merged report's iCode transcripts are; empty for a single build.
+
+    The dispatcher copies the shards' trials without them, so they stay in the
+    artifacts of the shard builds that ran Harbor.
+    """
+    if not isinstance(record, dict):
+        return ""
+    builds = [str(b) for b in record.get("builds") or [] if str(b)]
+    if not builds:
+        return ""
+    job = str(record.get("job") or "").strip()
+    where = f"{job} " if job else ""
+    return (
+        f"Transcripts: in the shard builds' artifacts ({where}{', '.join(f'#{b}' for b in builds)}), "
+        "gzipped under eval-runs/harness/harbor_runs/*/*/agent/icode-project"
+    )
 
 
 def shard_views(shards: object) -> list[dict]:
@@ -870,6 +911,8 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
             f"cpu `{_cell(view['cpu_model'])}`"
         )
     lines.append(f"- Requester: `{_cell(view['user'])}` `{_cell(view['build_url'])}`")
+    if view["transcripts"]:
+        lines.append(f"- {view['transcripts']}")
     for line in isolation_lines(view["isolation"]):
         lines.append(f"- {line}")
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}

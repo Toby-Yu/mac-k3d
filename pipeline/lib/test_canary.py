@@ -325,6 +325,83 @@ class SummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(summarize(Path(tmp) / "none", load_config())["status"], "fail")
 
+    def test_a_trial_that_never_started_hands_the_canary_to_the_next_question(self):
+        """An image pull failure stops the trial before the probe: no isolation fact either way."""
+        from provenance import canary_record, isolation_lines, isolation_view
+
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = Path(tmp) / "canary"
+            trial = jobs / "cpython_5" / "cpython_5_canary_7" / "cpython_5__abc"
+            (trial / "agent").mkdir(parents=True)
+            (trial / "result.json").write_text(
+                json.dumps(
+                    {
+                        "exception_info": {
+                            "exception_type": "RuntimeError",
+                            "exception_message": "docker compose command failed (exit 1)\nError: pull access denied",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self._trial(jobs, "flink_7", "pass")
+            rc, out = self._main(["started", "--jobs-dir", str(jobs), "--task", "cpython_5"])
+            self.assertEqual(rc, 3)
+            why = out.strip()
+            self.assertEqual(why, "RuntimeError: exit 1: Error: pull access denied")
+            self.assertEqual(self._main(["started", "--jobs-dir", str(jobs), "--task", "flink_7"]), (0, ""))
+            self.assertEqual(self._main(["started", "--jobs-dir", str(jobs), "--task", "absent"]), (3, "no canary trial\n"))
+
+            fallback = jobs / "fallback.tsv"
+            fallback.write_text(f"cpython_5\t{why}\n", encoding="utf-8")
+            argv = ["summarize", "--jobs-dir", str(jobs), "--out-dir", str(jobs), "--fallback-file", str(fallback)]
+            rc, out = self._main(argv + ["--task", "flink_7"])
+            self.assertEqual(rc, 0, out)
+            self.assertIn("canary: cpython_5 did not start (RuntimeError: exit 1: Error: pull access denied)", out)
+            summary = json.loads((jobs / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "pass")
+            self.assertEqual(summary["fallback_from"], [{"task": "cpython_5", "reason": why}])
+            self.assertIn("## Questions whose canary trial did not start", (jobs / "report.md").read_text(encoding="utf-8"))
+
+            record = canary_record(jobs / "summary.json")
+            self.assertEqual(record["tasks"], ["flink_7"])
+            self.assertEqual(record["fallback_from"], [{"task": "cpython_5", "reason": why}])
+            line = next(ln for ln in isolation_lines(isolation_view({"canary": record})) if ln.startswith("Canary:"))
+            self.assertIn(f"· pass · tasks flink_7 · failed none · warnings none · did not start: cpython_5 ({why})", line)
+
+    def test_when_no_question_starts_every_one_fails_and_none_is_a_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = Path(tmp) / "canary"
+            jobs.mkdir()
+            fallback = jobs / "fallback.tsv"
+            fallback.write_text("alpha\tno canary trial\nbeta\tno canary trial\n", encoding="utf-8")
+            argv = ["summarize", "--jobs-dir", str(jobs), "--out-dir", str(jobs), "--fallback-file", str(fallback)]
+            rc, _ = self._main(argv + ["--task", "alpha", "--task", "beta"])
+            self.assertEqual(rc, 2)
+            summary = json.loads((jobs / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["failed_tasks"], ["alpha", "beta"])
+            self.assertNotIn("fallback_from", summary)
+
+
+class CanaryStepTests(unittest.TestCase):
+    """evaluate/canary's question loop, read from the script."""
+
+    STEP = LIB.parent / "stages" / "evaluate" / "canary.sh"
+
+    def test_the_canary_moves_on_only_when_a_trial_did_not_start(self):
+        text = self.STEP.read_text(encoding="utf-8")
+        loop = text[text.index('for tid in "${TASK_IDS[@]}"; do\n    run_canary "$tid"\n    set +e'):]
+        self.assertIn('canary_verdict.py" started --jobs-dir "$CANARY_DIR" --task "$tid"', loop)
+        self.assertIn('if [ "$started_rc" = 0 ]; then\n      expect=(--task "$tid")\n      break', loop)
+        self.assertIn('[ "$started_rc" = 3 ] || die', loop)
+        self.assertIn("printf '%s\\t%s\\n' \"$tid\" \"$why\" >>\"$FALLBACK\"", loop)
+        self.assertIn('--fallback-file "$FALLBACK"', text)
+        self.assertIn("so isolation is not proven; the run stops here", text)
+        # A probe that ran and found a breach stops the build at once.
+        self.assertIn('[ "$rc" = 0 ] || die "isolation canary failed', text)
+        proc = subprocess.run(["bash", "-n", str(self.STEP)], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
 
 class ProbeScriptTests(unittest.TestCase):
     """canary_probe.sh on the host: stub curl, stub read-only touch, temp repo and search root."""

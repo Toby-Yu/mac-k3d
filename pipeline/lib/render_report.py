@@ -24,7 +24,7 @@ from eval_metrics import (
     pass_total,
     summarize_arm,
 )
-from score_results import infra_cause, load_json, parse_reward_value, rates_for_trial, trial_exception
+from score_results import OOM_CAUSE, infra_cause, load_json, parse_reward_value, rates_for_trial, trial_exception
 from icode_usage import find_icode_usage, icode_exit_code, icode_log_text, provider_error_marker
 from task_resources import cpu_count
 
@@ -146,10 +146,18 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None, max_tokens: int |
             row["empty_patch_cause"] = "cut_off"
         else:
             row["empty_patch_cause"] = "no_edit"
+    # 137 = SIGKILL, in a trial almost always the container's memory limit.
+    # The grader's result stands; the note says why iCode stopped.
+    if row["icode_exit"] == 137:
+        row["oom_killed"] = True
+        row["notes"] = _add_note(row["notes"], "iCode killed (exit 137, likely out of memory)")
     exception = trial_exception(trial) if not has_reward else None
     if exception is not None:
         row["infra_failure"] = True
-        row["notes"] = _add_note(row["notes"], f"infra: {infra_cause(exception)}")
+        cause = infra_cause(exception)
+        if cause == OOM_CAUSE:
+            row["oom_killed"] = True
+        row["notes"] = _add_note(row["notes"], f"infra: {cause}")
     if isinstance(started, str):
         row["started_at"] = started
     if isinstance(finished, str):
@@ -462,7 +470,7 @@ def anticheat_line(doc: dict) -> str | None:
         f"- Anti-cheat `{block.get('version') or '-'}`: clean **{counts.get('clean', 0)}** · "
         f"flagged **{counts.get('flagged', 0)}** · rejected **{counts.get('rejected', 0)}** · "
         f"not run **{counts.get('not_run', 0)}** · macro Pass@1 raw **{_pct(block.get('macro_pass@1_raw'))}** → official "
-        f"**{_pct(block.get('macro_pass@1_official'))}** (metrics below are official; see anticheat/report.md)"
+        f"**{_pct(block.get('macro_pass@1_official'))}** (metrics in this summary are official; see anticheat/report.md)"
     )
 
 
@@ -655,15 +663,16 @@ def summary_markdown(doc: dict) -> str:
             f"concurrency `{resources.get('concurrency')}` · "
             f"cpus_each `{resources.get('cpus_each')}`"
         )
+        by_node = resources.get("by_node") if isinstance(resources.get("by_node"), dict) else {}
+        for node, res in sorted(by_node.items()):
+            res = res if isinstance(res, dict) else {}
+            lines.append(
+                f"  - node `{node}`: cpu_lock_qty `{res.get('cpu_lock_qty')}` · "
+                f"concurrency `{res.get('concurrency')}` · cpus_each `{res.get('cpus_each')}`"
+            )
         note = resources.get("harbor_agent_timeout_note")
         if isinstance(note, str) and note.strip():
             lines.append(f"- Agent timeout: {note}")
-        from provenance import provenance_markdown
-
-        lines.extend(provenance_markdown(protocol))
-    ac_line = anticheat_line(doc)
-    if ac_line:
-        lines.append(ac_line)
     lines.append("")
     arm = doc.get("icode")
     if isinstance(arm, dict):
@@ -722,6 +731,11 @@ def summary_markdown(doc: dict) -> str:
             )
         if isinstance(arm.get("cut_off_rollouts"), int):
             lines.append(f"- Cut-off replies (last reply hit max_tokens): **{arm['cut_off_rollouts']}** rollouts")
+        if isinstance(arm.get("oom_killed_rollouts"), int):
+            lines.append(
+                f"- OOM-killed rollouts (iCode exit 137 or the container ran out of memory): "
+                f"**{arm['oom_killed_rollouts']}**"
+            )
         macro = arm.get("macro") or {}
         micro = arm.get("micro") or {}
         lines.append(
@@ -753,11 +767,14 @@ def summary_markdown(doc: dict) -> str:
         mem_peak = doc.get("container_mem_max_gb")
         if isinstance(mem_peak, (int, float)) and not isinstance(mem_peak, bool):
             lines.append(f"- Container memory — max peak: **{float(mem_peak):.2f} GB**")
-        skipped = doc.get("skipped_questions")
-        if isinstance(skipped, list) and skipped:
-            lines.append("- Skipped questions: " + ", ".join(str(item) for item in skipped))
+        no_score = questions_without_score(doc)
+        if no_score:
+            lines.append(
+                f"- Questions without a score: **{len(no_score)}** — "
+                + " · ".join(f"{tid} ({why})" for tid, why in no_score).replace("|", "/")
+            )
         else:
-            lines.append("- Skipped questions: none")
+            lines.append("- Questions without a score: **0**")
         lines.append(f"- Median best-attempt duration: **{_dur_label(timing.get('median_best_attempt_s'))}**")
         expected = metrics_n * k if isinstance(metrics_n, int) else None
         wall_txt = _span_label(timing.get("wall_seconds"))
@@ -823,50 +840,86 @@ def summary_markdown(doc: dict) -> str:
             lines.append("Tasks with at least one attempt that returned no reward. High rates here can move padded Pass@k.")
             lines.append("")
             u_rows = []
+            skipped = skipped_reasons(doc)
             for row in unscored_tasks:
                 u_rows.append(
                     [
                         str(row.get("id") or ""),
                         f"{row.get('unscored')}/{row.get('n')}",
-                        str(row.get("notes") or "-").replace("|", "/"),
+                        unscored_notes(row, skipped).replace("|", "/"),
                     ]
                 )
             lines.extend(_md_table(["Task", "unscored/n", "notes"], u_rows))
             lines.append("")
-    return "\n".join(lines) + "\n"
+    if isinstance(protocol, dict):
+        from provenance import provenance_markdown
+
+        prov = provenance_markdown(protocol)
+        lines.extend(prov[1:] if prov and lines[-1] == "" else prov)
+    ac_line = anticheat_line(doc)
+    if ac_line:
+        if lines[-1] != "":
+            lines.append("")
+        lines.append(ac_line)
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def memory_sidecar(harness_dir: Path) -> tuple[float | None, list[str]]:
+# Written by tasks/leakscan in $WORKDIR: one `<task>\t<reason>` line per
+# question the build keeps out of Harbor.
+SKIPPED_TASKS = "skipped_tasks.txt"
+
+
+def read_skipped_tasks(path: Path) -> dict[str, str]:
+    """Questions a build kept out of Harbor, with the reason, by task id."""
+    out: dict[str, str] = {}
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            tid, _, why = line.strip().partition("\t")
+            if tid.strip():
+                out[tid.strip()] = why.strip() or "skipped"
+    return out
+
+
+def container_mem_peak(jsonl: Path) -> float | None:
+    """The largest ``peak_gb`` in a build's container_mem.jsonl, or None."""
     peak = None
-    jsonl = harness_dir / "container_mem.jsonl"
-    if jsonl.is_file():
-        for line in jsonl.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
+    if not jsonl.is_file():
+        return None
+    for line in jsonl.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            raw = row.get("peak_gb")
+            if raw is None:
                 continue
-            try:
-                row = json.loads(line)
-                raw = row.get("peak_gb")
-                if raw is None:
-                    continue
-                gb = float(raw)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                continue
-            if gb <= 0:
-                continue
-            peak = gb if peak is None else max(peak, gb)
+            gb = float(raw)
+        except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+            continue
+        if gb <= 0:
+            continue
+        peak = gb if peak is None else max(peak, gb)
+    return peak
+
+
+def memory_sidecar(harness_dir: Path, workdir: Path | None = None) -> tuple[float | None, list[str]]:
+    peak = container_mem_peak(harness_dir / "container_mem.jsonl")
     skipped_path = harness_dir / "skipped_questions.txt"
     skipped: list[str] = []
     if skipped_path.is_file():
         skipped = [ln.strip() for ln in skipped_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if workdir is not None:
+        skipped.extend(f"{tid}: {why}" for tid, why in read_skipped_tasks(workdir / SKIPPED_TASKS).items())
     return peak, skipped
 
 
-def copy_memory_sidecars(harness_dir: Path, out_dir: Path) -> None:
-    for name in ("container_mem.jsonl", "skipped_questions.txt"):
-        src = harness_dir / name
-        if src.is_file():
-            (out_dir / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+def copy_memory_sidecars(harness_dir: Path, out_dir: Path, skipped: list[str] | None = None) -> None:
+    src = harness_dir / "container_mem.jsonl"
+    if src.is_file():
+        (out_dir / "container_mem.jsonl").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    if skipped:
+        (out_dir / "skipped_questions.txt").write_text("".join(f"{item}\n" for item in skipped), encoding="utf-8")
 
 
 def write_report(doc: dict, out_dir: Path) -> Path:
@@ -897,6 +950,47 @@ def unscored_causes(arm: dict) -> dict[str, int]:
         if missing > 0:
             causes["no trial"] = causes.get("no trial", 0) + missing
     return causes
+
+
+def skipped_reasons(doc: dict) -> dict[str, str]:
+    """doc["skipped_questions"] (`<task>: <reason>`) by task id."""
+    out: dict[str, str] = {}
+    for item in doc.get("skipped_questions") or []:
+        tid, _, why = str(item).partition(": ")
+        if tid.strip():
+            out[tid.strip()] = why.strip() or "skipped"
+    return out
+
+
+def questions_without_score(doc: dict) -> list[tuple[str, str]]:
+    """``(question, cause)`` for every question with no scored rollout.
+
+    The cause is the skip reason (an OFFICIAL leak hit), else the rollouts' own
+    causes, such as an `infra:` note or `no trial`.
+    """
+    arm = doc.get("icode") if isinstance(doc.get("icode"), dict) else {}
+    skipped = skipped_reasons(doc)
+    out = []
+    for row in arm.get("tasks") or []:
+        if not isinstance(row, dict) or row.get("n_scored"):
+            continue
+        tid = str(row.get("id") or "")
+        if tid in skipped:
+            out.append((tid, f"skipped: {skipped[tid]}"))
+            continue
+        n = row.get("n") or 0
+        causes = sorted(unscored_causes({"tasks": [row]}).items(), key=lambda kv: (-kv[1], kv[0]))
+        out.append((tid, "; ".join(f"{why} ({k}/{n})" for why, k in causes) or "no score"))
+    return out
+
+
+def unscored_notes(row: dict, skipped: dict[str, str]) -> str:
+    """An Unscored table row's notes; a skipped question says why it never ran."""
+    tid = str(row.get("id") or "")
+    if tid in skipped:
+        return f"skipped: {skipped[tid]}"
+    notes = row.get("notes")
+    return "-" if notes in (None, "") else str(notes)
 
 
 def report_unscored(doc: dict, out: Path | None) -> int:
@@ -997,8 +1091,8 @@ def main() -> int:
     run_id = args.run_id
     if run_id not in ("local",) and not str(run_id).startswith(("jenkins-", "local-")):
         run_id = f"jenkins-{run_id}"
-    mem_peak, skipped = memory_sidecar(Path(args.harness_dir))
     workdir = Path(args.workdir) if args.workdir else None
+    mem_peak, skipped = memory_sidecar(Path(args.harness_dir), workdir)
     protocol = build_eval_protocol(
         workdir=workdir,
         model=args.model,
@@ -1029,7 +1123,7 @@ def main() -> int:
     if out.name != folder:
         out = out / folder
     path = write_report(doc, out)
-    copy_memory_sidecars(Path(args.harness_dir), out)
+    copy_memory_sidecars(Path(args.harness_dir), out, skipped)
     print(f"wrote {path}")
     report_unscored(doc, Path(args.unscored_out) if args.unscored_out else None)
     return 0

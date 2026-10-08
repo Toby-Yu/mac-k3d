@@ -4,6 +4,9 @@
 The backup holds the report files, the anti-cheat verdicts and, per trial,
 the files listed below. Transcripts are gzipped with key-shaped values and
 this process's secret env values masked; ``.harbor-env`` is never copied.
+
+``archive_run.py compress --jobs-dir D`` does the same gzip and masking in
+place for one build's trials, before a shard archives them.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import gzip
 import os
 import re
 import shutil
+import sys
 import tarfile
 from pathlib import Path
 
@@ -70,10 +74,36 @@ def archive_transcript(src: Path, target: Path) -> None:
             out.write(_KEY_SHAPED.sub("***", line))
 
 
+def compress_transcripts(jobs_dir: Path) -> tuple[int, list[str]]:
+    """Gzip and mask every transcript under one build's jobs dir, in place.
+
+    A shard archives its trials for the dispatcher; the transcript is most of a
+    trial's size. Returns how many were packed and the ones that could not be.
+    """
+    packed = 0
+    failed: list[str] = []
+    if not jobs_dir.is_dir():
+        return packed, failed
+    for path in sorted(jobs_dir.rglob("*")):
+        if path.name not in _GZIP_TRIAL_FILES or not path.is_file():
+            continue
+        tmp = path.with_name(f".{path.name}.gz.tmp")
+        try:
+            archive_transcript(path, tmp)
+            tmp.replace(path.with_name(path.name + ".gz"))
+            path.unlink()
+            packed += 1
+        except OSError as exc:
+            tmp.unlink(missing_ok=True)
+            failed.append(f"{path.relative_to(jobs_dir)}: {exc.strerror or exc}")
+    return packed, failed
+
+
 def _copy_trial_files(trial: Path, dest: Path) -> None:
     if not trial.is_dir():
         return
     dest.mkdir(parents=True, exist_ok=True)
+    gzipped = {f"{name}.gz" for name in _GZIP_TRIAL_FILES}
     for path in trial.rglob("*"):
         if not path.is_file():
             continue
@@ -84,6 +114,11 @@ def _copy_trial_files(trial: Path, dest: Path) -> None:
             target = target.with_name(target.name + ".gz")
             target.parent.mkdir(parents=True, exist_ok=True)
             archive_transcript(path, target)
+            continue
+        if path.name in gzipped:
+            # Already masked and packed by `compress` (archive/backup).
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
             continue
         if path.name not in _TRIAL_FILES and path.suffix != ".patch":
             continue
@@ -138,7 +173,21 @@ def compress_backup(dest: Path) -> Path:
     return archive
 
 
+def compress_main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="archive_run.py compress", description=compress_transcripts.__doc__)
+    ap.add_argument("--jobs-dir", required=True, help="this build's harbor_runs/jenkins-<N>")
+    args = ap.parse_args(argv)
+    packed, failed = compress_transcripts(Path(args.jobs_dir))
+    for item in failed:
+        print(f"WARNING: transcript left as it is: {item}")
+    print(f"compress: {packed} transcripts gzipped and masked under {args.jobs_dir}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["compress"]:
+        return compress_main(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--report-dir", required=True, help="run folder the report phase wrote")
     ap.add_argument("--harness-dir", required=True)

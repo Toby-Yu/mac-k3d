@@ -100,8 +100,10 @@ SHARD_ARCHIVE = (
     "harness/anticheat",
     "selected_tasks.txt",
     "suite_tasks.txt",
+    "skipped_tasks.txt",
     "eval_protocol_inputs.json",
     "eval_resources.json",
+    "harness/container_mem.jsonl",
 )
 
 
@@ -232,8 +234,9 @@ class CliTests(unittest.TestCase):
     def test_one_report_covers_every_shard(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            make_shard(root, "101", {"alpha": [1.0, 0.0]})
-            make_shard(root, "102", {"beta": [1.0, 1.0]})
+            # One worker ran both shards, one after the other.
+            make_shard(root, "101", {"alpha": [1.0, 0.0]}, inputs={"worker": {"node": "mac-cloud"}})
+            make_shard(root, "102", {"beta": [1.0, 1.0]}, inputs={"worker": {"node": "mac-cloud"}})
             out = root / "aggregate"
             self.assertEqual(self.run_main(root, out), 0)
             doc = json.loads((out / "artifact.json").read_text(encoding="utf-8"))
@@ -708,6 +711,193 @@ class DispatcherPlanTests(unittest.TestCase):
                     self.assertIn(merged, md)
                 else:
                     self.assertNotIn("- Trial networks:", md)
+
+    def seven_shard(self, root: Path, build: str, node: str, tasks: dict[str, list[float]], **facts) -> Path:
+        """One shard of deepswe_some_task #7, with what its own build recorded."""
+        inputs = shard_inputs(build, node)
+        isolation = inputs["isolation"]
+        isolation["trial_network"] = {
+            "mode": "subnets", "pool": "10.213.0.0/16", "prefix": 28, "free": facts["free"], "total": 4096,
+            "need": facts["need"], "checked_at": "2026-10-07T00:00:00Z",
+        }
+        isolation["leak_scan"] = {
+            "scanner": "mac-k3d-leakscan-v1", "hit_tasks": facts.get("hits", []), "statuses": facts["statuses"],
+            "report_sha256": f"leak{build}",
+        }
+        if facts.get("canary", True):
+            isolation["canary"] = {
+                "version": "mac-k3d-canary-v1", "status": facts.get("canary_status", "pass"), "node": node,
+                "tasks": [facts["canary_task"]], "failed_tasks": [], "warn_tasks": facts.get("warn", []),
+                "counts": {"tasks": 1, "pass": 1, "fail": 0}, "summary_sha256": f"canary{build}",
+            }
+        inputs.update({"cpu_lock_qty": 16, "concurrency": facts["slots"], "cpus_each": 2})
+        work = make_shard(root / node, f"jenkins-{build}", tasks, inputs=inputs)
+        (work / "eval_resources.json").write_text(
+            json.dumps(
+                {
+                    "declared": {
+                        "per_task": {tid: {"memory_gb": 8, "cpus": 2} for tid in tasks},
+                        "peak": {"memory_gb": 8, "cpus": facts.get("peak_cpus", 2)},
+                        "tasks": len(tasks),
+                        "declared_tasks": len(tasks),
+                    },
+                    "applied": {"slots": facts["slots"], "cpus_each": 2, "cpu_lock_qty": 16},
+                    "host": {"mem_total_gb": facts["mem_total"]},
+                    "reasons": [f"{node}: {facts['slots']} slots"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (work / "harness" / "container_mem.jsonl").write_text(
+            "".join(json.dumps({"question": tid, "peak_gb": facts["mem_gb"], "slots": facts["slots"]}) + "\n" for tid in tasks),
+            encoding="utf-8",
+        )
+        if facts.get("skipped"):
+            (work / "skipped_tasks.txt").write_text(
+                "".join(f"{tid}\tleak scan hit\n" for tid in facts["skipped"]), encoding="utf-8"
+            )
+        self.collect(root, build, work)
+        return work
+
+    def test_the_merged_report_covers_every_shard_not_only_the_first(self):
+        """deepswe_some_task #7: the leak scan, canary, resources and memory came from shard 1 alone."""
+        cloud, home = "mac-iZt4ndd2dff7gqjta7mppaZ", "mac-Michael-Ubuntu"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seven_shard(
+                root, "67", cloud, {"helm-unified-manifest-stream": [1.0], "httpx-streaming-json-iteration": [1.0]},
+                slots=8, need=8, free=4090, statuses={"clean": 2}, canary_task="helm-unified-manifest-stream",
+                mem_total=182.4, mem_gb=1.848,
+            )
+            self.seven_shard(
+                root, "68", home,
+                {"cattrs-partial-structuring-recovery": [0.0], "drizzle-orm-window-function-builders": [1.0]},
+                slots=1, need=1, free=4093, statuses={"clean": 2, "hit": 1}, hits=["etree-xml-diff-patch"],
+                canary_task="cattrs-partial-structuring-recovery", warn=["cattrs-partial-structuring-recovery"],
+                mem_total=14.8, mem_gb=1.571, skipped=["etree-xml-diff-patch"], peak_cpus=4,
+            )
+            code, err = self.run_plan(
+                root,
+                [
+                    "1|67|SUCCESS|0|2|helm-unified-manifest-stream,httpx-streaming-json-iteration",
+                    "2|68|SUCCESS|2|3|cattrs-partial-structuring-recovery,drizzle-orm-window-function-builders,"
+                    "etree-xml-diff-patch",
+                ],
+                rollouts=1,
+            )
+            self.assertEqual(code, 0, err)
+            doc, md, page = self.report(root)
+            protocol = doc["eval_protocol"]
+            isolation = protocol["isolation"]
+
+            leak = isolation["leak_scan"]
+            self.assertEqual(leak["statuses"], {"clean": 4, "hit": 1})
+            self.assertEqual(leak["hit_tasks"], ["etree-xml-diff-patch"])
+            self.assertNotIn("report_sha256", leak)
+            self.assertEqual([row["leak_scan_sha256"] for row in protocol["shards"]], ["leak67", "leak68"])
+            self.assertIn("- Leak scan: mac-k3d-leakscan-v1 · hit tasks etree-xml-diff-patch · clean 4, hit 1", md)
+
+            canary = isolation["canary"]
+            self.assertEqual(canary["status"], "pass")
+            self.assertEqual(canary["tasks"], ["cattrs-partial-structuring-recovery", "helm-unified-manifest-stream"])
+            self.assertEqual(canary["warn_tasks"], ["cattrs-partial-structuring-recovery"])
+            self.assertEqual(canary["nodes"], sorted([cloud, home]))
+            self.assertEqual(canary["counts"], {"tasks": 2, "pass": 2, "fail": 0})
+
+            network = isolation["trial_network"]
+            self.assertEqual((network["need_by_shard"], network["free"]), ([8, 1], 4090))
+            self.assertIn("- Trial networks: own /28 subnets from 10.213.0.0/16 · 4090 of 4096 free at check · need 8 · 1 (by shard)", md)
+
+            self.assertEqual(protocol["resources"]["concurrency"], 9)
+            self.assertEqual(protocol["resources"]["cpu_lock_qty"], 32)
+            self.assertEqual(doc["concurrency"], 9)
+            self.assertIn("- Resources: cpu_lock_qty `32` · concurrency `9` · cpus_each `2`", md)
+            self.assertIn(f"  - node `{cloud}`: cpu_lock_qty `16` · concurrency `8` · cpus_each `2`", md)
+            self.assertIn(f"  - node `{home}`: cpu_lock_qty `16` · concurrency `1` · cpus_each `2`", md)
+            self.assertIn("concurrency: **9**", md)
+            self.assertIn("concurrency 9", page)
+
+            declared = doc["resources"]["declared"]
+            self.assertEqual(len(declared["per_task"]), 4)
+            self.assertEqual((declared["tasks"], declared["declared_tasks"]), (4, 4))
+            self.assertEqual(declared["peak"], {"memory_gb": 8, "cpus": 4})
+            self.assertEqual(doc["resources"]["applied"]["slots"], 9)
+            self.assertEqual(doc["resources"]["by_node"][home]["host"], {"mem_total_gb": 14.8})
+
+            self.assertAlmostEqual(doc["container_mem_max_gb"], 1.848)
+            self.assertIn("- Container memory — max peak: **1.85 GB**", md)
+            rows = (root / "aggregate" / "container_mem.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual([json.loads(line)["shard"] for line in rows], [1, 1, 2, 2])
+            self.assertEqual(doc["skipped_questions"], ["etree-xml-diff-patch: leak scan hit"])
+            self.assertEqual(
+                (root / "aggregate" / "skipped_questions.txt").read_text(encoding="utf-8"),
+                "etree-xml-diff-patch: leak scan hit\n",
+            )
+
+    def test_a_shard_without_a_canary_or_with_a_failed_one_shows_in_the_merge(self):
+        for second, status in (({"canary": False}, "missing"), ({"canary_status": "fail"}, "fail")):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                common = dict(slots=1, need=1, free=4090, statuses={"clean": 1}, mem_total=14.8, mem_gb=1.0)
+                self.seven_shard(root, "60", "home", {"alpha": [1.0]}, canary_task="alpha", **common)
+                self.seven_shard(root, "61", "cloud", {"beta": [1.0]}, canary_task="beta", **common, **second)
+                code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha", "2|61|SUCCESS|1|1|beta"], rollouts=1)
+                self.assertEqual(code, 0, err)
+                doc, md, _ = self.report(root)
+                self.assertEqual(doc["eval_protocol"]["isolation"]["canary"]["status"], status)
+                self.assertIn(f"· {status} · tasks", md)
+
+    def test_a_shard_that_stopped_before_harbor_adds_no_slots_or_leak_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seven_shard(
+                root, "60", "home", {"alpha": [1.0]}, slots=1, need=1, free=4090,
+                statuses={"clean": 1}, canary_task="alpha", mem_total=14.8, mem_gb=1.0,
+            )
+            stopped = self.seven_shard(
+                root / "stopped", "61", "cloud", {"beta": [1.0]}, slots=8, need=8, free=4090,
+                statuses={"clean": 1}, canary_task="beta", canary_status="fail", mem_total=182.4, mem_gb=3.0,
+            )
+            shutil.rmtree(root / "stopped" / "shards" / "61" / "eval-runs" / "harness" / "harbor_runs")
+            shutil.copytree(root / "stopped" / "shards" / "61", root / "shards" / "61")
+            del stopped
+            code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha", "2|61|FAILURE|1|1|beta"], rollouts=1)
+            self.assertEqual(code, 0, err)
+            doc, _, _ = self.report(root)
+            isolation = doc["eval_protocol"]["isolation"]
+            self.assertEqual(isolation["leak_scan"]["statuses"], {"clean": 1})
+            # Its failed canary still fails the merge: one worker could not prove isolation.
+            self.assertEqual(isolation["canary"]["status"], "fail")
+            self.assertEqual(doc["concurrency"], 1)
+            self.assertAlmostEqual(doc["container_mem_max_gb"], 1.0)
+
+    def test_the_report_names_the_shard_builds_that_keep_the_transcripts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            common = dict(slots=1, need=1, free=4090, statuses={"clean": 1}, mem_total=14.8, mem_gb=1.0)
+            self.seven_shard(root, "70", "home", {"alpha": [1.0]}, canary_task="alpha", **common)
+            self.seven_shard(root, "9", "cloud", {"beta": [1.0]}, canary_task="beta", **common)
+            code, err = self.run_plan(
+                root,
+                ["1|70|SUCCESS|0|1|alpha", "2|9|SUCCESS|1|1|beta", "3|71|FAILURE|2|1|gamma"],
+                rollouts=1,
+                extra=("--shard-job", "deepswe_one_task"),
+            )
+            self.assertEqual(code, 0, err)
+            doc, md, page = self.report(root)
+            # Shard 3 never ran Harbor, so it has no transcripts to point at.
+            self.assertEqual(doc["eval_protocol"]["transcripts"], {"job": "deepswe_one_task", "builds": ["9", "70"]})
+            where = "(deepswe_one_task #9, #70), gzipped under eval-runs/harness/harbor_runs/*/*/agent/icode-project"
+            line = next(ln for ln in md.splitlines() if ln.startswith("- Transcripts:"))
+            self.assertTrue(line.endswith(where), line)
+            self.assertGreater(md.index(line), md.index("### Provenance"))
+            self.assertIn(where, page)
+            self.assertGreater(page.index(where), page.index("<h2>Provenance</h2>"))
+
+        # A single build keeps its own transcripts; the line is for merged reports.
+        from provenance import provenance_markdown
+
+        self.assertFalse(any("Transcripts" in ln for ln in provenance_markdown(shard_inputs("58", "cloud"))))
 
     def test_without_a_plan_every_archived_shard_counts_as_before(self):
         """An older dispatcher passes no --plan; nothing is dropped."""

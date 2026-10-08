@@ -22,7 +22,7 @@
 # environment to docker compose, so none of them may reach a trial.
 unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT MAC_K3D_GIT_TOKEN
 
-declare -a cmd=() TASK_IDS=() AGENT_HOSTS=()
+declare -a cmd=() TASK_IDS=() SKIPPED_IDS=() AGENT_HOSTS=()
 EGRESS_PROBE_IMAGE=""
 unit_jobs=""
 unit_run_dir=""
@@ -39,11 +39,25 @@ load_eval_state() {
   [ -n "${DEEPSEEK_API_KEY:-}" ] || die "$(missing_deepseek_key_hint)"
   have harbor || die "harbor not on PATH (run the env phase)"
   ensure_selected_tasks
-  local line
+  local line skip_list=""
+  # tasks/leakscan lists the questions OFFICIAL=1 keeps out of Harbor. They
+  # stay in selected_tasks.txt, so the report counts them as not scored.
+  if [ -s "$WORKDIR/skipped_tasks.txt" ]; then
+    skip_list="$(cut -f1 "$WORKDIR/skipped_tasks.txt")"
+  fi
   TASK_IDS=()
+  SKIPPED_IDS=()
   while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in *[![:space:]]*) TASK_IDS+=("$line") ;; esac
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    if [ -n "$skip_list" ] && printf '%s\n' "$skip_list" | grep -Fxq -- "$line"; then
+      SKIPPED_IDS+=("$line")
+    else
+      TASK_IDS+=("$line")
+    fi
   done <"$WORKDIR/selected_tasks.txt"
+  if [ "${#SKIPPED_IDS[@]}" -gt 0 ]; then
+    echo "evaluate: skipping ${#SKIPPED_IDS[@]} questions from $WORKDIR/skipped_tasks.txt: ${SKIPPED_IDS[*]}" >&2
+  fi
   [ "${#TASK_IDS[@]}" -gt 0 ] || die "no task under $TASKS_DIR (wanted ${TASK:-<empty>})"
   [ -s "$WORKDIR/agent_mounts.json" ] || die "run tasks/isolation first (missing $WORKDIR/agent_mounts.json)"
   MOUNTS_JSON="$(cat "$WORKDIR/agent_mounts.json")"

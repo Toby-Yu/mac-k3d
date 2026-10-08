@@ -9,7 +9,10 @@ Spec for one task (host lists and gold file names, never gold content):
     canary_verdict.py spec --task-dir T --benchmark B --out spec.json
 
 Verdict of every canary trial under a jobs dir (<jobs>/<task>/<job>/<trial>/agent):
-    canary_verdict.py summarize --jobs-dir D --out-dir O
+    canary_verdict.py summarize --jobs-dir D --out-dir O [--fallback-file F]
+
+Whether one task's canary trial ran the probe at all (exit 3 and the reason if not):
+    canary_verdict.py started --jobs-dir D --task T
 
 Exit codes: 0 pass, 2 a task failed, 1 error. Output names hosts, paths and
 variable names only, never values.
@@ -400,7 +403,36 @@ def canary_trials(task_dir: Path) -> list[Path]:
     return sorted(found, key=lambda p: p.stat().st_mtime)
 
 
-def summarize(jobs_dir: Path, config: dict | None = None, tasks: list[str] | None = None) -> dict:
+def probe_started(task_dir: Path) -> tuple[bool, str]:
+    """Whether the newest canary trial under <jobs>/<task> ran the probe; if not, why.
+
+    A trial that stopped before the probe (image pull, compose) proves nothing
+    about isolation either way, so evaluate/canary moves on to the next question.
+    """
+    trials = canary_trials(task_dir)
+    if not trials:
+        return False, "no canary trial"
+    facts = load_facts(trials[-1] / "agent")
+    if isinstance(facts.get("probe"), dict):
+        return True, ""
+    return False, facts.get("trial_error") or "canary.json missing or unreadable"
+
+
+def read_fallback(path: Path | None) -> list[dict]:
+    """evaluate/canary's `<task>\\t<reason>` lines for questions whose trial never started."""
+    if path is None or not path.is_file():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        tid, _, why = line.partition("\t")
+        if tid.strip():
+            out.append({"task": tid.strip(), "reason": why.strip() or "trial did not start"})
+    return out
+
+
+def summarize(
+    jobs_dir: Path, config: dict | None = None, tasks: list[str] | None = None, fallback: list[dict] | None = None
+) -> dict:
     config = config or load_config()
     ids = tasks if tasks else sorted(p.name for p in jobs_dir.iterdir() if p.is_dir()) if jobs_dir.is_dir() else []
     results: dict[str, dict] = {}
@@ -415,7 +447,7 @@ def summarize(jobs_dir: Path, config: dict | None = None, tasks: list[str] | Non
         results[tid] = {"status": result["status"], "trial": str(trial), "checks": result["checks"]}
     counts = Counter(r["status"] for r in results.values())
     warned = sorted(t for t, r in results.items() if any(c["status"] == "warn" for c in r["checks"].values()))
-    return {
+    summary = {
         "schema": SCHEMA,
         "config_version": config.get("version", ""),
         "node": socket.gethostname(),
@@ -426,6 +458,10 @@ def summarize(jobs_dir: Path, config: dict | None = None, tasks: list[str] | Non
         "warn_tasks": warned,
         "tasks": results,
     }
+    skipped = [item for item in fallback or [] if item.get("task") not in results]
+    if skipped:
+        summary["fallback_from"] = skipped
+    return summary
 
 
 def report_markdown(summary: dict) -> str:
@@ -451,6 +487,10 @@ def report_markdown(summary: dict) -> str:
                 notes.append(f"- `{tid}` {name} **{check['status']}**: {check.get('detail') or '-'}")
     if notes:
         lines += ["", "## Failures and warnings", "", *notes]
+    fallback = summary.get("fallback_from") or []
+    if fallback:
+        lines += ["", "## Questions whose canary trial did not start", ""]
+        lines += [f"- `{item.get('task')}`: {item.get('reason') or '-'}" for item in fallback]
     return "\n".join(lines) + "\n"
 
 
@@ -467,8 +507,17 @@ def main(argv: list[str] | None = None) -> int:
     summ.add_argument("--jobs-dir", required=True)
     summ.add_argument("--out-dir", required=True)
     summ.add_argument("--task", action="append", default=[], help="expected task id (default: every dir)")
+    summ.add_argument("--fallback-file", default="", help="<task>\\t<reason> per question whose trial never started")
     summ.add_argument("--config", default="")
+    started = sub.add_parser("started", help="exit 0 when the task's canary trial ran the probe, 3 when not")
+    started.add_argument("--jobs-dir", required=True)
+    started.add_argument("--task", required=True)
     args = parser.parse_args(argv)
+    if args.cmd == "started":
+        ok, why = probe_started(Path(args.jobs_dir) / args.task)
+        if not ok:
+            print(why)
+        return 0 if ok else 3
     try:
         config = load_config(Path(args.config) if args.config else None)
         if args.cmd == "spec":
@@ -480,7 +529,8 @@ def main(argv: list[str] | None = None) -> int:
             doc = build_spec(task_dir, args.benchmark, config, args.allow_host)
             out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
             return 0
-        summary = summarize(Path(args.jobs_dir), config, args.task or None)
+        fallback = read_fallback(Path(args.fallback_file) if args.fallback_file else None)
+        summary = summarize(Path(args.jobs_dir), config, args.task or None, fallback)
         out_dir = Path(args.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -495,6 +545,8 @@ def main(argv: list[str] | None = None) -> int:
             noted = [("all", noted[0][1])]
         for name, check in noted:
             print(f"CANARY {check['status'].upper()} task={tid} check={name}: {check['detail']}")
+    for item in summary.get("fallback_from") or []:
+        print(f"canary: {item['task']} did not start ({item['reason']}); the next question took its place")
     counts = summary["counts"]
     print(
         f"canary {summary['status']}: tasks={counts['tasks']} pass={counts['pass']} fail={counts['fail']} "

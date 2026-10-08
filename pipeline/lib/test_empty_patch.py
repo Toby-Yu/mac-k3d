@@ -171,6 +171,80 @@ class CauseTests(unittest.TestCase):
         self.assertIsNone(row["icode_exit"])
 
 
+class OomTests(unittest.TestCase):
+    """iCode killed by the kernel (exit 137): the grader's result stands, the note says why."""
+
+    def test_exit_137_is_tagged_and_keeps_its_score(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = attempt(tmp, exit_code=137, max_tokens=65536, patch_bytes=900, last_out=500, reward=SOLVED_REWARD)
+        self.assertTrue(row["oom_killed"])
+        self.assertIn("iCode killed (exit 137, likely out of memory)", row["notes"])
+        self.assertTrue(row["resolved"])
+        self.assertTrue(attempt_is_scored(row))
+
+    def test_exit_1_is_not_oom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = attempt(tmp, exit_code=1, max_tokens=65536, last_out=500)
+        self.assertNotIn("oom_killed", row)
+        self.assertNotIn("exit 137", row["notes"])
+
+    def test_harbor_out_of_memory_messages_name_the_cause(self):
+        from score_results import OOM_CAUSE, infra_cause
+
+        for message in (
+            "Container main OOMKilled",
+            "fork: Cannot allocate memory",
+            "Command failed (exit 137)",
+            "process exited with exit code 137",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(infra_cause({"type": "RuntimeError", "message": message}), OOM_CAUSE)
+        self.assertEqual(
+            infra_cause({"type": "RuntimeError", "message": "Docker compose command failed: service main exited 1"}),
+            "docker compose failed",
+        )
+
+    def test_the_summary_counts_oom_killed_rollouts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness = root / "harness"
+            job = harness / "harbor_runs" / "jenkins-9" / "icode_deepswe_9"
+            write_trial(job / "etree-xml-diff-patch__a", task="etree-xml-diff-patch", exit_code=137,
+                        patch_bytes=900, reward=SOLVED_REWARD, last_out=500)
+            write_trial(job / "etree-xml-diff-patch__b", task="etree-xml-diff-patch", exit_code=0,
+                        patch_bytes=900, reward=SOLVED_REWARD, last_out=500)
+            doc = build_artifact(
+                suite="deepswe", model="m", api_base="b", task_ids=["etree-xml-diff-patch"], harness_dir=harness,
+                baseline_dir=root / "baseline", n_rollouts=2, concurrency=2, cpus_each=1, run_id="jenkins-9",
+            )
+        self.assertEqual(doc["icode"]["oom_killed_rollouts"], 1)
+        md = summary_markdown(doc)
+        self.assertIn("- OOM-killed rollouts (iCode exit 137 or the container ran out of memory): **1**", md)
+        self.assertIn("iCode killed (exit 137, likely out of memory) (1/2)", md)
+        self.assertIn("OOM-killed rollouts 1.", report_html(doc))
+
+    def test_harbor_run_names_the_oom_trials(self):
+        import os
+        import subprocess
+
+        stage = LIB.parent / "stages" / "evaluate" / "harbor_run.sh"
+        text = stage.read_text(encoding="utf-8")
+        helper = text[text.index("oom_trials() {"):text.index("run_harbor() {")]
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = Path(tmp) / "jobs"
+            write_trial(jobs / "icode_deepswe_9" / "etree__killed", exit_code=137)
+            write_trial(jobs / "icode_deepswe_9" / "etree__fine", exit_code=1)
+            proc = subprocess.run(
+                ["bash", "-c", f'{helper}\noom_trials', "_"],
+                capture_output=True, text=True, check=False,
+                env={**os.environ, "JOBS_DIR": str(jobs), "PIPELINE_LIB": str(LIB)},
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "etree__killed\n")
+        self.assertIn('oom="$(oom_trials)"', text)
+        self.assertIn("trials ran out of memory (iCode exit 137 or the container OOM-killed)", text)
+
+
 class NotesAndCellTests(unittest.TestCase):
     def test_notes_are_joined_once_with_how_many_rollouts_had_them(self):
         rows = [

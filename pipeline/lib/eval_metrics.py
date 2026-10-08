@@ -373,6 +373,7 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
     wall = _wall_seconds(rows)
     empty_patches = empty_patch_rows(rows)
     cut_off = sum(1 for row in rows for attempt in row["rollouts"] if attempt.get("cut_off_reply"))
+    oom_killed = sum(1 for row in rows for attempt in row["rollouts"] if attempt.get("oom_killed"))
     public_rows = []
     for row in rows:
         item = dict(row)
@@ -412,6 +413,7 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
         "empty_patch_rollouts": len(empty_patches),
         "empty_patches": empty_patches,
         "cut_off_rollouts": cut_off,
+        "oom_killed_rollouts": oom_killed,
         "pass_methods": dict(PASS_METHODS),
         "macro": {
             "f2p": _mean([v for v in f2p_vals if v is not None]),
