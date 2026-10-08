@@ -295,7 +295,14 @@ impl JobOpts {
             default_n_tasks: config.jenkins_job.default_n_tasks.max(1),
             default_n_rollouts: n_rollouts,
             default_tasks: config.jenkins_job.default_tasks.clone(),
-            default_shard_size: config.jenkins_job.default_shard_size.max(1),
+            // Controllers that first wrote their YAML under the old default keep
+            // `default_shard_size: 10`. Treat that as the previous built-in so a
+            // redeploy shows 2; any other saved value (including set --shard-size)
+            // is left alone.
+            default_shard_size: match config.jenkins_job.default_shard_size {
+                10 => 2,
+                n => n.max(1),
+            },
             ui_profile: UiProfile::parse(&config.jenkins_job.ui_profile),
             credential_ids,
         }
@@ -2430,6 +2437,29 @@ mod tests {
         assert_eq!(opts.ui_profile, UiProfile::Developer);
         assert_eq!(opts.default_shard_size, 1);
         assert_eq!(UiProfile::parse("anything else"), UiProfile::User);
+    }
+
+    #[test]
+    fn a_saved_shard_size_of_ten_renders_as_two_on_every_dispatcher() {
+        let mut cfg = crate::config::MacK3dConfig::default();
+        cfg.jenkins_job.default_shard_size = 10;
+        let opts = JobOpts::from_config(&cfg, Vec::new());
+        assert_eq!(opts.default_shard_size, 2);
+        for bench in EVAL_BENCHMARKS {
+            for shape in [JobShape::Some_, JobShape::FullSuite] {
+                let jf = eval_jenkinsfile(bench, shape, &opts);
+                let block = params_block(&jf);
+                assert!(
+                    block.contains("name: 'SHARD_SIZE'") && block.contains("defaultValue: '2'"),
+                    "{bench} {shape:?}: {block}"
+                );
+            }
+            let one = eval_jenkinsfile(bench, JobShape::One, &opts);
+            assert!(!params_block(&one).contains("SHARD_SIZE"), "{bench}");
+        }
+        // An intentional override other than the old default is kept.
+        cfg.jenkins_job.default_shard_size = 3;
+        assert_eq!(JobOpts::from_config(&cfg, Vec::new()).default_shard_size, 3);
     }
 
     #[test]
