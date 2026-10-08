@@ -365,7 +365,10 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
     tok_out = sum(int(row.get("tok_out") or 0) for row in tok_rows) if tok_rows else None
     tok_total = None if tok_in is None and tok_out is None else int(tok_in or 0) + int(tok_out or 0)
     tok_avg = None if tok_total is None or not tok_rows else tok_total / len(tok_rows)
-    scored = sum(len(row["rollouts"]) for row in rows)
+    scored_attempts = [attempt for row in rows for attempt in row["rollouts"] if attempt_is_scored(attempt)]
+    scored = len(scored_attempts)
+    micro_all_f2p = _micro(scored_attempts, "f2p_pass", "f2p_total")
+    micro_all_p2p = _micro(scored_attempts, "p2p_pass", "p2p_total")
     infra_excluded = sum(1 for _tid, attempts in task_attempts if not attempts)
     wall = _wall_seconds(rows)
     empty_patches = empty_patch_rows(rows)
@@ -425,6 +428,15 @@ def summarize_arm(task_attempts: list[tuple[str, list[dict]]], n_rollouts: int, 
             "partial": micro_partial,
             "partial_pass": micro_partial_pass,
             "partial_total": micro_partial_total,
+        },
+        "micro_all": {
+            "rollouts": scored,
+            "f2p": micro_all_f2p["rate"],
+            "f2p_pass": micro_all_f2p["pass"],
+            "f2p_total": micro_all_f2p["total"],
+            "p2p": micro_all_p2p["rate"],
+            "p2p_pass": micro_all_p2p["pass"],
+            "p2p_total": micro_all_p2p["total"],
         },
         "timing": {
             "wall_seconds": wall,

@@ -959,6 +959,14 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
           archiveArtifacts artifacts: "eval-runs/harness/harbor_runs/jenkins-${{env.BUILD_NUMBER}}/**, eval-runs/harness/anticheat/**", allowEmptyArchive: true
           archiveArtifacts artifacts: 'eval-runs/selected_tasks.txt, eval-runs/suite_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json', allowEmptyArchive: true
         }}
+        // report/render counts the rollouts that have no score. Above 0 the
+        // run measured fewer rollouts than it asked for.
+        if (fileExists('eval-runs/unscored_rollouts.txt')) {{
+          String lost = readFile('eval-runs/unscored_rollouts.txt').trim()
+          if (lost ==~ /\d+/ && (lost as Integer) > 0) {{
+            unstable "${{lost}} rollouts have no score (see Unscored in summary.md)"
+          }}
+        }}
       }}
     }}
   }}
@@ -2010,6 +2018,27 @@ mod tests {
         for name in FORWARDED_PARAMS {
             assert!(jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
         }
+    }
+
+    #[test]
+    fn one_task_is_unstable_when_rollouts_have_no_score() {
+        let opts = deepswe_opts(Vec::new());
+        for bench in EVAL_BENCHMARKS {
+            let jf = eval_jenkinsfile(bench, JobShape::One, &opts);
+            let post = &jf[jf.find("  post {").unwrap()..];
+            assert!(post.contains("if (fileExists('eval-runs/unscored_rollouts.txt')) {"), "{bench}");
+            assert!(post.contains("String lost = readFile('eval-runs/unscored_rollouts.txt').trim()"));
+            assert!(post.contains(r"if (lost ==~ /\d+/ && (lost as Integer) > 0) {"));
+            assert!(post.contains("unstable \"${lost} rollouts have no score (see Unscored in summary.md)\""));
+            // The report and the shard's trials are archived before the build is marked.
+            let marked = post.find("unscored_rollouts.txt").unwrap();
+            assert!(post.find("last_output.txt").unwrap() < marked);
+            assert!(post.find("harbor_runs/jenkins-").unwrap() < marked);
+        }
+        // An unstable shard is one the dispatcher lists as not succeeded.
+        let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
+        assert!(!some.contains("unscored_rollouts.txt"));
+        assert!(some.contains("unstable \"Shards that did not succeed"));
     }
 
     #[test]

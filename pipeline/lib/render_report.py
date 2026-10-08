@@ -18,12 +18,13 @@ from eval_metrics import (
     EMPTY_PATCH_HEADERS,
     EMPTY_PATCH_INTRO,
     EMPTY_PATCH_TITLE,
+    attempt_is_scored,
     empty_patch_cause_counts,
     mean_ci,
     pass_total,
     summarize_arm,
 )
-from score_results import load_json, parse_reward_value, rates_for_trial
+from score_results import infra_cause, load_json, parse_reward_value, rates_for_trial, trial_exception
 from icode_usage import find_icode_usage, icode_exit_code, icode_log_text, provider_error_marker
 from task_resources import cpu_count
 
@@ -145,6 +146,10 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None, max_tokens: int |
             row["empty_patch_cause"] = "cut_off"
         else:
             row["empty_patch_cause"] = "no_edit"
+    exception = trial_exception(trial) if not has_reward else None
+    if exception is not None:
+        row["infra_failure"] = True
+        row["notes"] = _add_note(row["notes"], f"infra: {infra_cause(exception)}")
     if isinstance(started, str):
         row["started_at"] = started
     if isinstance(finished, str):
@@ -456,7 +461,7 @@ def anticheat_line(doc: dict) -> str | None:
     return (
         f"- Anti-cheat `{block.get('version') or '-'}`: clean **{counts.get('clean', 0)}** · "
         f"flagged **{counts.get('flagged', 0)}** · rejected **{counts.get('rejected', 0)}** · "
-        f"macro Pass@1 raw **{_pct(block.get('macro_pass@1_raw'))}** → official "
+        f"not run **{counts.get('not_run', 0)}** · macro Pass@1 raw **{_pct(block.get('macro_pass@1_raw'))}** → official "
         f"**{_pct(block.get('macro_pass@1_official'))}** (metrics below are official; see anticheat/report.md)"
     )
 
@@ -700,8 +705,11 @@ def summary_markdown(doc: dict) -> str:
         hits = arm.get("best_attempt_hits")
         if not isinstance(hits, int) or isinstance(hits, bool):
             hits = sum(1 for row in tasks if row.get("best"))
+        unscored = arm.get("unscored_rollouts")
+        if not isinstance(unscored, int) or isinstance(unscored, bool):
+            unscored = "-"
         lines.append(
-            f"- {title} detail — first-rollout (= padded Pass@1): **{_pct(arm.get('pass@1'))}** · any-pass: **{_pct(arm.get('any_pass'))}** · scored rollouts: **{scored}** · infra-excluded: **{excluded}**"
+            f"- {title} detail — first-rollout (= padded Pass@1): **{_pct(arm.get('pass@1'))}** · any-pass: **{_pct(arm.get('any_pass'))}** · scored rollouts: **{scored}** · unscored rollouts: **{unscored}** · questions with no trial: **{excluded}**"
         )
         lines.append(f"- Best-attempt pass (secondary): **{hits}** / {metrics_n} ({_pct(arm.get('any_pass'))})")
         empty_items = arm.get("empty_patches") if isinstance(arm.get("empty_patches"), list) else None
@@ -717,16 +725,24 @@ def summary_markdown(doc: dict) -> str:
         macro = arm.get("macro") or {}
         micro = arm.get("micro") or {}
         lines.append(
-            f"- Macro avg — F2P: **{_num(macro.get('f2p'))}** · P2P: **{_num(macro.get('p2p'))}** · partial: **{_num(macro.get('partial'))}**"
+            f"- Macro avg (best rollout per question) — F2P: **{_num(macro.get('f2p'))}** · P2P: **{_num(macro.get('p2p'))}** · partial: **{_num(macro.get('partial'))}**"
         )
         lines.append(
-            "- Micro — F2P: "
+            "- Micro (best rollout per question) — F2P: "
             + _micro_count(micro.get("f2p"), micro.get("f2p_pass"), micro.get("f2p_total"))
             + " · P2P: "
             + _micro_count(micro.get("p2p"), micro.get("p2p_pass"), micro.get("p2p_total"))
             + " · partial: "
             + _micro_count(micro.get("partial"), micro.get("partial_pass"), micro.get("partial_total"))
         )
+        micro_all = arm.get("micro_all")
+        if isinstance(micro_all, dict):
+            lines.append(
+                f"- Micro (all {micro_all.get('rollouts')} scored rollouts) — F2P: "
+                + _micro_count(micro_all.get("f2p"), micro_all.get("f2p_pass"), micro_all.get("f2p_total"))
+                + " · P2P: "
+                + _micro_count(micro_all.get("p2p"), micro_all.get("p2p_pass"), micro_all.get("p2p_total"))
+            )
         p2p_excluded = arm.get("p2p_excluded_empty_patch")
         if isinstance(p2p_excluded, int) and not isinstance(p2p_excluded, bool) and p2p_excluded > 0:
             lines.append(
@@ -864,6 +880,39 @@ def write_report(doc: dict, out_dir: Path) -> Path:
     return path
 
 
+def unscored_causes(arm: dict) -> dict[str, int]:
+    """Unscored rollouts by cause: the `infra:` note, else the first note; trials that never appeared as `no trial`."""
+    causes: dict[str, int] = {}
+    for row in arm.get("tasks") or []:
+        for attempt in row.get("rollouts") or []:
+            if attempt_is_scored(attempt):
+                continue
+            notes = [part.strip() for part in str(attempt.get("notes") or "").split(";") if part.strip()]
+            infra = [note[len("infra: "):] for note in notes if note.startswith("infra: ")]
+            why = infra[0] if infra else (notes[0] if notes else "no score")
+            causes[why] = causes.get(why, 0) + 1
+        missing = int(row.get("unscored") or 0) - sum(
+            1 for attempt in row.get("rollouts") or [] if not attempt_is_scored(attempt)
+        )
+        if missing > 0:
+            causes["no trial"] = causes.get("no trial", 0) + missing
+    return causes
+
+
+def report_unscored(doc: dict, out: Path | None) -> int:
+    """Write the unscored rollout count to `out` and warn when it is not 0."""
+    arm = doc.get("icode") if isinstance(doc.get("icode"), dict) else {}
+    lost = arm.get("unscored_rollouts")
+    lost = lost if isinstance(lost, int) and not isinstance(lost, bool) else 0
+    if out is not None:
+        out.write_text(f"{lost}\n", encoding="utf-8")
+    if lost:
+        expected = int(doc.get("n_tasks") or 0) * int(doc.get("n_rollouts") or 0)
+        why = ", ".join(f"{cause} {n}" for cause, n in sorted(unscored_causes(arm).items(), key=lambda kv: -kv[1]))
+        print(f"WARNING: {lost} of {expected} rollouts have no score ({why or 'no reward.json'}); see Unscored in summary.md")
+    return lost
+
+
 def run_folder_name(utc: str, task_ids: list[str], build_number: str = "") -> str:
     number = build_number.strip()
     if number:
@@ -933,6 +982,7 @@ def main() -> int:
     ap.add_argument("--workdir", default=os.environ.get("WORKDIR", ""))
     ap.add_argument("--utc", default="")
     ap.add_argument("--run-folder", default="")
+    ap.add_argument("--unscored-out", default="", help="file for the unscored rollout count (Jenkins reads it)")
     args = ap.parse_args()
     if args.demo:
         doc = demo_artifact()
@@ -981,6 +1031,7 @@ def main() -> int:
     path = write_report(doc, out)
     copy_memory_sidecars(Path(args.harness_dir), out)
     print(f"wrote {path}")
+    report_unscored(doc, Path(args.unscored_out) if args.unscored_out else None)
     return 0
 
 

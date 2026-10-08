@@ -32,7 +32,7 @@ from render_report import _thinking_type, build_artifact, eval_model_label, writ
 from score_results import load_json  # noqa: E402
 from task_resources import cpu_count  # noqa: E402
 
-VERDICTS = ("clean", "flagged", "rejected")
+VERDICTS = ("clean", "flagged", "rejected", "not_run")
 # What has to match for the shards to be one measurement of one iCode setup.
 COMPARED_MODEL_PARAMS = ("model", "api_base", "provider", "reasoning_effort", "max_tokens", "max_iterations")
 INPUT_PROTOCOL_KEYS = ("harbor", "benchmark", "grader_overlay", "images", "worker", "requester", "pipeline", "isolation")
@@ -125,6 +125,12 @@ def egress_probe_of(protocol: dict) -> dict | None:
     return probe if isinstance(probe, dict) and probe.get("image") else None
 
 
+def trial_network_of(protocol: dict) -> dict | None:
+    isolation = protocol.get("isolation") if isinstance(protocol.get("isolation"), dict) else {}
+    record = isolation.get("trial_network")
+    return record if isinstance(record, dict) and record.get("mode") else None
+
+
 def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
     icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
     row = {
@@ -138,14 +144,17 @@ def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
     probe = egress_probe_of(protocol)
     if probe is not None:
         row["egress_probe"] = {"image": str(probe.get("image")), "substituted": probe.get("substituted") is True}
+    network = trial_network_of(protocol)
+    if network is not None:
+        row["trial_network"] = {key: network.get(key) for key in ("mode", "pool", "prefix", "free", "total", "need")}
     return row
 
 
 def merge_protocols(protocols: list[dict]) -> dict:
     """The first shard's protocol, with every shard's per-task image and benchmark pins.
 
-    When the shards' egress probes differ, the merged protocol names none of them;
-    each shard's row keeps its own.
+    When the shards' egress probes or trial network pools differ, the merged
+    protocol names none of them; each shard's row keeps its own.
     """
     if not protocols:
         return {}
@@ -157,6 +166,13 @@ def merge_protocols(protocols: list[dict]) -> dict:
     }
     if len(probes) > 1 and isinstance(out.get("isolation"), dict):
         out["isolation"].pop("egress_probe", None)
+    pools = {
+        (str(n.get("mode")), str(n.get("pool") or ""), n.get("prefix"))
+        for n in (trial_network_of(protocol) for protocol in protocols)
+        if n is not None
+    }
+    if len(pools) > 1 and isinstance(out.get("isolation"), dict):
+        out["isolation"].pop("trial_network", None)
     images = out.get("images") if isinstance(out.get("images"), dict) else {}
     bench = out.get("benchmark") if isinstance(out.get("benchmark"), dict) else None
     pins = bench.get("tasks") if bench is not None and isinstance(bench.get("tasks"), dict) else None

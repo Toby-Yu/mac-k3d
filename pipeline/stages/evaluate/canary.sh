@@ -36,6 +36,8 @@ if harbor_dry_run; then
 fi
 
 ensure_harbor_egress
+ensure_trial_network
+teardown_on_exit "$CANARY_DIR"
 warn_docker_mtu
 if [ "$CANARY_MODE" = only ]; then
   targets=("${TASK_IDS[@]}")

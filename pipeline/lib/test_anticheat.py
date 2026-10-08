@@ -165,6 +165,15 @@ class VerdictTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 load_overrides(path)
 
+    def test_a_reviewer_cannot_decide_not_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "anticheat_overrides.json"
+            row = {"task": "t", "attempt": 1, "decision": "not_run", "who": "toby", "when": "2026-10-08", "reason": "x"}
+            path.write_text(json.dumps([row]), encoding="utf-8")
+            with self.assertRaises(SystemExit) as ctx:
+                load_overrides(path)
+            self.assertIn("('clean', 'flagged', 'rejected')", str(ctx.exception))
+
 
 class HarnessLabelTests(unittest.TestCase):
     def test_kombu_is_tuned_and_hinted_unknown_task_is_neither(self):
@@ -304,6 +313,41 @@ class LivePipelineTests(unittest.TestCase):
             for rel in ("agent/anticheat.json", "trial.log"):
                 self.assertTrue((attempt / rel).is_file(), rel)
             self.assertTrue((dest / "anticheat" / "summary.json").is_file())
+
+    def test_a_rollout_harbor_never_started_is_not_run_not_clean(self):
+        from anticheat_verdict import run_live
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness = root / "harness"
+            _trial(harness, "alpha", 1, (FIX / "independent.patch").read_text(encoding="utf-8"), FIX / "web_search.jsonl")
+            _trial(harness, "alpha", 2, "", FIX / "pip_install.jsonl", reward=0.0)
+            lost = harness / "harbor_runs" / "jenkins-9" / "alpha" / "alpha_icode_9_a03" / "alpha__t3"
+            (lost / "agent").mkdir(parents=True)
+            (lost / "result.json").write_text(
+                json.dumps({"exception_info": {
+                    "exception_type": "RuntimeError",
+                    "exception_message": "Docker compose command failed for environment alpha. Stdout: failed to create "
+                                         "network: all predefined address pools have been fully subnetted",
+                }}),
+                encoding="utf-8",
+            )
+            task_file = root / "tasks.txt"
+            task_file.write_text("alpha\n", encoding="utf-8")
+            args = type("A", (), {"harness_dir": str(harness), "tasks_dir": "", "task_file": str(task_file), "benchmark": "deepswe"})
+            run_live(args)
+            doc = json.loads((lost / "agent" / "anticheat.json").read_text(encoding="utf-8"))
+            self.assertEqual(doc["verdict"], "not_run")
+            self.assertEqual(
+                doc["reasons"],
+                ["no patch, transcript or reward.json; Harbor RuntimeError: Docker network pool exhausted"],
+            )
+            summ = json.loads((harness / "anticheat" / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summ["counts"], {"clean": 2, "flagged": 0, "rejected": 0, "not_run": 1})
+            report = (harness / "anticheat" / "report.md").read_text(encoding="utf-8")
+            self.assertIn("· not run **1** of 3 attempts", report)
+            self.assertIn("| alpha | 03 | no patch, transcript or reward.json; Harbor RuntimeError: Docker network pool exhausted |",
+                          report)
 
     def test_missing_verdicts_leave_official_equal_to_raw(self):
         from render_report import build_artifact

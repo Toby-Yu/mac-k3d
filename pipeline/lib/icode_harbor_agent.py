@@ -15,6 +15,7 @@ starts.
 from __future__ import annotations
 
 import harbor_probe_override  # noqa: F401  (must run before Harbor creates an environment)
+import harbor_network_override  # noqa: F401  (must run before Harbor creates an environment)
 
 import os
 import shlex

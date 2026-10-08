@@ -2,7 +2,8 @@
 # anticheat/verdict: clean, flagged or rejected per rollout, from patch
 # similarity to the gold patch and a scan of the agent transcript
 # (pipeline/config/anticheat-v1.json). The report scores rejected rollouts as
-# unresolved.
+# unresolved. A rollout Harbor never ran (no patch, transcript or reward) is
+# not_run.
 set -euo pipefail
 # shellcheck source=../_common.sh
 source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"

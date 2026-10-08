@@ -489,6 +489,25 @@ def record_egress_probe(inputs: Path, probe: Path) -> dict:
     return doc
 
 
+def record_trial_network(inputs: Path, record: Path) -> dict:
+    """`trial_network.py check` output: where Harbor's trial networks take their subnets."""
+    doc = _load_json(inputs)
+    facts = _load_json(record)
+    isolation = doc.get("isolation") if isinstance(doc.get("isolation"), dict) else {}
+    isolation["trial_network"] = {
+        "mode": str(facts.get("mode") or ""),
+        "pool": str(facts.get("pool") or ""),
+        "prefix": _int_or_none(facts.get("prefix")),
+        "free": _int_or_none(facts.get("free")),
+        "total": _int_or_none(facts.get("total")),
+        "need": _int_or_none(facts.get("need")),
+        "checked_at": str(facts.get("checked_at") or ""),
+    }
+    doc["isolation"] = isolation
+    _write_json(inputs, doc)
+    return doc
+
+
 def write_protocol_inputs(
     *,
     out: Path,
@@ -547,6 +566,27 @@ def _bool_or_none(value: object) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
+def _int_or_none(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def trial_network_text(record: object, short: bool = False) -> str:
+    """Where trial networks took their subnets (isolation.trial_network); empty when not recorded."""
+    if not isinstance(record, dict):
+        return ""
+    if record.get("mode") == "docker_default":
+        return "Docker default" if short else "Docker's default address pools (MAC_K3D_TRIAL_SUBNETS=off)"
+    if record.get("mode") != "subnets" or not record.get("pool"):
+        return ""
+    prefix = _cell(record.get("prefix"))
+    if short:
+        return f"{record['pool']} /{prefix} ({_cell(record.get('free'))} free)"
+    return (
+        f"own /{prefix} subnets from {record['pool']} · {_cell(record.get('free'))} of "
+        f"{_cell(record.get('total'))} free at check · need {_cell(record.get('need'))}"
+    )
+
+
 def isolation_view(isolation: object) -> dict | None:
     if not isinstance(isolation, dict):
         return None
@@ -582,6 +622,7 @@ def isolation_view(isolation: object) -> dict | None:
         "egress_image": str(egress.get("image") or ""),
         "egress_substituted": egress.get("substituted") is True,
         "egress_reason": str(egress.get("reason") or ""),
+        "trial_network": trial_network_text(isolation.get("trial_network")),
     }
 
 
@@ -607,6 +648,8 @@ def isolation_lines(view: dict | None) -> list[str]:
         )
     elif view.get("egress_image"):
         lines.append(f"Egress probe: Harbor default {view['egress_image']}")
+    if view.get("trial_network"):
+        lines.append(f"Trial networks: {view['trial_network']}")
     if view["leak_scanner"]:
         hits = ", ".join(view["leak_hits"]) if view["leak_hits"] else "none"
         lines.append(f"Leak scan: {view['leak_scanner']} · hit tasks {hits} · {_cell(view['leak_statuses'])}")
@@ -707,6 +750,7 @@ def shard_views(shards: object) -> list[dict]:
                 "not_run_count": item.get("not_run_count") if isinstance(item.get("not_run_count"), int) else 0,
                 "not_run_offset": item.get("not_run_offset"),
                 "egress": egress,
+                "trial_network": trial_network_text(item.get("trial_network"), short=True),
                 "node": str(worker.get("node") or ""),
                 "nproc": worker.get("nproc"),
                 "memory_kb": worker.get("memory_kb"),
@@ -765,6 +809,8 @@ def shard_worker_lines(view: dict) -> list[str]:
             parts = [f"{name} {_cell(shard[key])}" for key, name in SHARD_WORKER_FIELDS]
             if shard.get("egress"):
                 parts.append(f"egress probe {shard['egress']}")
+            if shard.get("trial_network"):
+                parts.append(f"trial networks {shard['trial_network']}")
         parts.extend(shard_status(shard))
         lines.append(f"Worker ({shard['label']}): {' · '.join(parts) or '-'}")
     if view.get("model_params_status") == "mixed":
@@ -885,6 +931,10 @@ def main(argv: list[str] | None = None) -> int:
     egress.add_argument("--inputs", required=True)
     egress.add_argument("--probe", required=True)
 
+    network = sub.add_parser("record-trial-network")
+    network.add_argument("--inputs", required=True)
+    network.add_argument("--record", required=True)
+
     res = sub.add_parser("record-resources")
     res.add_argument("--inputs", required=True)
     res.add_argument("--plan", required=True)
@@ -921,6 +971,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "record-egress-probe":
         record_egress_probe(Path(args.inputs), Path(args.probe))
+        return 0
+    if args.cmd == "record-trial-network":
+        record_trial_network(Path(args.inputs), Path(args.record))
         return 0
     if args.cmd == "record-resources":
         record_resources(Path(args.inputs), Path(args.plan))

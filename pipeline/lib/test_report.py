@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -4072,6 +4074,181 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("overlaps benchmark path", proc.stderr)
             self.assertNotIn("harbor dry-run", proc.stdout)
+
+
+SUBNETTED = (
+    "Docker compose command failed for environment {task}. Stdout: Network {task}__env_default Creating "
+    "failed to create network: Error response from daemon: all predefined address pools have been fully subnetted"
+)
+
+
+class UnscoredRolloutTests(unittest.TestCase):
+    """deepswe_some_task #6: 5 questions x 4 rollouts, 8 trials Harbor never started."""
+
+    @staticmethod
+    def _scored(job: Path, task: str, n: int, f2p_passed: int) -> Path:
+        trial = job / f"{task}__s{n}AbCd"
+        (trial / "verifier").mkdir(parents=True)
+        (trial / "agent").mkdir()
+        result = {"task_name": f"datacurve/{task}", "task_id": {"path": f"/eval-runs/deep-swe/tasks/{task}"}}
+        (trial / "result.json").write_text(json.dumps(result), encoding="utf-8")
+        reward = {"reward": 1 if f2p_passed == 4 else 0, "f2p": f2p_passed / 4, "f2p_total": 4,
+                  "f2p_passed": f2p_passed, "p2p": 1.0, "p2p_total": 2, "p2p_passed": 2}
+        (trial / "verifier" / "reward.json").write_text(json.dumps(reward), encoding="utf-8")
+        art = trial / "artifacts" / "logs" / "artifacts"
+        art.mkdir(parents=True)
+        (art / "model.patch").write_text("--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n", encoding="utf-8")
+        return trial
+
+    @staticmethod
+    def _never_ran(job: Path, task: str, n: int, message: str) -> Path:
+        trial = job / f"{task}__n{n}AbCd"
+        (trial / "agent").mkdir(parents=True)
+        (trial / "verifier").mkdir()
+        result = {
+            "task_name": f"datacurve/{task}",
+            "task_id": {"path": f"/eval-runs/deep-swe/tasks/{task}"},
+            "exception_info": {"exception_type": "RuntimeError", "exception_message": message,
+                               "exception_traceback": "Traceback ...", "occurred_at": "2026-10-07T21:00:00Z"},
+        }
+        (trial / "result.json").write_text(json.dumps(result), encoding="utf-8")
+        (trial / "trial.log").write_text("starting environment\n", encoding="utf-8")
+        return trial
+
+    def _build6(self, root: Path) -> tuple[Path, list[str]]:
+        harness = root / "harness"
+        job = harness / "harbor_runs" / "jenkins-6" / "icode_deepswe_6"
+        layout = {"q1": (4, 0), "q2": (4, 0), "q3": (2, 2), "q4": (1, 3), "q5": (1, 3)}
+        for task, (scored, lost) in layout.items():
+            for n in range(scored):
+                self._scored(job, task, n, 4 if n == 0 else 2)
+            for n in range(lost):
+                self._never_ran(job, task, n, SUBNETTED.format(task=task))
+        return harness, list(layout)
+
+    def test_build_6_counts_only_the_rollouts_that_ran(self):
+        from anticheat_verdict import run_live
+        from render_report import build_artifact, report_unscored, summary_markdown
+        from report_html import report_html
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness, ids = self._build6(root)
+            task_file = root / "selected_tasks.txt"
+            task_file.write_text("\n".join(ids) + "\n", encoding="utf-8")
+            args = type("A", (), {"harness_dir": str(harness), "tasks_dir": "", "task_file": str(task_file),
+                                  "benchmark": "deepswe"})
+            run_live(args)
+            doc = build_artifact(
+                suite="deepswe", model="m", api_base="b", task_ids=ids, harness_dir=harness,
+                baseline_dir=root / "baseline", n_rollouts=4, concurrency=4, cpus_each=1, run_id="jenkins-6",
+            )
+            arm = doc["icode"]
+            self.assertEqual(doc["anticheat"]["counts"], {"clean": 12, "flagged": 0, "rejected": 0, "not_run": 8})
+            self.assertEqual((arm["scored_rollouts"], arm["unscored_rollouts"]), (12, 8))
+            self.assertEqual(arm["scored_rollouts"] + arm["unscored_rollouts"], 20)
+            self.assertEqual(arm["micro_all"]["rollouts"], 12)
+            md = summary_markdown(doc)
+            self.assertIn("clean **12** · flagged **0** · rejected **0** · not run **8**", md)
+            self.assertIn("scored rollouts: **12** · unscored rollouts: **8** · questions with no trial: **0**", md)
+            self.assertIn("progress: **12/20 rollouts (60.0%)", md)
+            self.assertIn("missing reward.json; infra: Docker network pool exhausted", json.dumps(arm["tasks"]))
+            self.assertIn("12 clean, 0 flagged, 0 rejected, 8 not run.", report_html(doc))
+            out = root / "unscored_rollouts.txt"
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                self.assertEqual(report_unscored(doc, out), 8)
+            self.assertEqual(out.read_text(encoding="utf-8"), "8\n")
+            self.assertEqual(
+                printed.getvalue().strip(),
+                "WARNING: 8 of 20 rollouts have no score (Docker network pool exhausted 8); see Unscored in summary.md",
+            )
+
+    def test_a_fully_scored_run_writes_0_and_warns_nothing(self):
+        from render_report import report_unscored
+
+        doc = {"n_tasks": 1, "n_rollouts": 2, "icode": {"unscored_rollouts": 0, "tasks": []}}
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "unscored_rollouts.txt"
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                self.assertEqual(report_unscored(doc, out), 0)
+            self.assertEqual(out.read_text(encoding="utf-8"), "0\n")
+            self.assertEqual(printed.getvalue(), "")
+
+    def test_a_missing_trial_counts_as_unscored_too(self):
+        from render_report import report_unscored
+
+        arm = {"unscored_rollouts": 3, "tasks": [{"id": "a", "unscored": 3, "rollouts": [{"has_reward": False, "notes": "missing reward.json"}]}]}
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            report_unscored({"n_tasks": 1, "n_rollouts": 4, "icode": arm}, None)
+        self.assertIn("3 of 4 rollouts have no score (no trial 2, missing reward.json 1)", printed.getvalue())
+
+    def test_harbors_exception_names_the_infra_cause(self):
+        from render_report import _attempt_from_trial
+
+        cases = {
+            SUBNETTED.format(task="t"): "Docker network pool exhausted",
+            "failed to register layer: unable to prepare extraction snapshot: target snapshot sha256:ab already exists":
+                "Docker image store damaged",
+            "failed to extract layer: missing parent snapshot sha256:cd": "Docker image store damaged",
+            "Error response from daemon: pull access denied for x, repository does not exist": "image pull failed",
+            "toomanyrequests: You have reached your pull rate limit": "image pull failed",
+            "Docker compose command failed for environment t. Stdout: service main exited 1": "docker compose failed",
+            "the agent did not finish in 3600 s": "AgentTimeoutError",
+        }
+        for message, cause in cases.items():
+            with self.subTest(cause=cause), tempfile.TemporaryDirectory() as tmp:
+                trial = self._never_ran(Path(tmp), "t", 0, message)
+                if cause == "AgentTimeoutError":
+                    doc = json.loads((trial / "result.json").read_text(encoding="utf-8"))
+                    doc["exception_info"]["exception_type"] = "AgentTimeoutError"
+                    (trial / "result.json").write_text(json.dumps(doc), encoding="utf-8")
+                row = _attempt_from_trial(trial, None)
+                self.assertEqual(row["notes"], f"missing reward.json; infra: {cause}")
+                self.assertTrue(row["infra_failure"])
+
+    def test_a_scored_trial_with_an_exception_keeps_its_score(self):
+        from render_report import _attempt_from_trial
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trial = self._scored(Path(tmp), "t", 0, 4)
+            doc = json.loads((trial / "result.json").read_text(encoding="utf-8"))
+            doc["exception_info"] = {"exception_type": "RuntimeError", "exception_message": "late cleanup error"}
+            (trial / "result.json").write_text(json.dumps(doc), encoding="utf-8")
+            row = _attempt_from_trial(trial, trial / "verifier" / "reward.json")
+            self.assertTrue(row["has_reward"])
+            self.assertNotIn("infra", row["notes"])
+            self.assertNotIn("infra_failure", row)
+
+    def test_micro_over_all_scored_rollouts_sits_next_to_the_best_rollout_lines(self):
+        from eval_metrics import summarize_arm
+        from render_report import summary_markdown
+        from report_html import report_html
+
+        def attempt(passed: int, scored: bool = True) -> dict:
+            return {"resolved": passed == 4, "has_reward": scored, "f2p": passed / 4, "f2p_pass": passed, "f2p_total": 4,
+                    "p2p": 1.0, "p2p_pass": 2, "p2p_total": 2, "partial": None,
+                    "notes": "" if scored else "missing reward.json"}
+
+        arm = summarize_arm([("a", [attempt(4), attempt(1), attempt(0, scored=False)])], 3, 1)
+        self.assertEqual(arm["scored_rollouts"], 2)
+        self.assertEqual(arm["micro"]["f2p_pass"], 4)
+        self.assertEqual(
+            {k: arm["micro_all"][k] for k in ("rollouts", "f2p_pass", "f2p_total", "p2p_pass", "p2p_total")},
+            {"rollouts": 2, "f2p_pass": 5, "f2p_total": 8, "p2p_pass": 4, "p2p_total": 4},
+        )
+        doc = {"suite": "deepswe", "n_tasks": 1, "n_rollouts": 3, "icode": arm}
+        md = summary_markdown(doc)
+        self.assertIn("- Macro avg (best rollout per question) — F2P: **1.0000**", md)
+        self.assertIn("- Micro (best rollout per question) — F2P: **1.0000** (4/4)", md)
+        self.assertIn("- Micro (all 2 scored rollouts) — F2P: **0.6250** (5/8) · P2P: **1.0000** (4/4)", md)
+        self.assertLess(md.index("Micro (best rollout"), md.index("Micro (all 2 scored"))
+        page = report_html(doc)
+        for label in ("Macro F2P (best rollout per question)", "Micro F2P (best rollout per question)",
+                      "Micro F2P (all scored rollouts)"):
+            self.assertIn(label, page)
 
 
 if __name__ == "__main__":

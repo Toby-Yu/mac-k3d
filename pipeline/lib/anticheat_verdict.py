@@ -4,7 +4,9 @@
 Two signals: line/path Jaccard of the graded patch against the task's gold
 patch (anticheat_similarity), and transcript rule hits (anticheat_transcript).
 Thresholds and rules live in pipeline/config/anticheat-v1.json. Reviewer
-decisions in anticheat_overrides.json replace the automatic verdict.
+decisions in anticheat_overrides.json replace the automatic verdict. A rollout
+with no patch, no transcript and no reward.json never ran (Harbor stopped it
+first) and is `not_run`, not clean.
 
 Live (anticheat/verdict), writes <trial>/agent/anticheat.json and <harness>/anticheat/{summary.json,report.md}:
     anticheat_verdict.py --harness-dir H --tasks-dir T --task-file F --benchmark B
@@ -34,10 +36,19 @@ from anticheat_similarity import (
 from anticheat_transcript import RULE_SEVERITY, scan
 from harness_labels import labels_for
 from harness_labels import load as load_labels
-from score_results import attempt_index, harbor_task_trials, load_json, parse_reward_value
+from score_results import (
+    attempt_index,
+    harbor_task_trials,
+    infra_cause,
+    load_json,
+    parse_reward_value,
+    trial_exception,
+)
 
 SCHEMA = "mac-k3d-anticheat-v1"
-VERDICTS = ("clean", "flagged", "rejected")
+# What a reviewer may decide in anticheat_overrides.json.
+OVERRIDE_DECISIONS = ("clean", "flagged", "rejected")
+VERDICTS = OVERRIDE_DECISIONS + ("not_run",)
 PATCH_CANDIDATES = (
     "artifacts/logs/artifacts/model.patch",
     "artifacts/logs/artifacts/solution.patch",
@@ -158,6 +169,15 @@ def decide(sim: dict, scan_doc: dict, tamper: list[str], config: dict) -> tuple[
     return "clean", reasons
 
 
+def never_ran(*trials: Path | None) -> str:
+    """Why a rollout with nothing to judge has no verdict: Harbor's exception, when one was recorded."""
+    for trial in trials:
+        exception = trial_exception(trial) if trial is not None else None
+        if exception is not None:
+            return f"no patch, transcript or reward.json; Harbor {exception['type'] or 'error'}: {infra_cause(exception)}"
+    return "no patch, transcript or reward.json; Harbor recorded no exception"
+
+
 def evaluate(ctx: Context, task_id: str, attempt_no: int, attempt: Path, transcript_root: Path | None = None) -> dict:
     task = ctx.task(task_id)
     patch_path = patch_of_record(attempt)
@@ -173,6 +193,9 @@ def evaluate(ctx: Context, task_id: str, attempt_no: int, attempt: Path, transcr
     scan_doc["transcripts"] = [str(p.relative_to(transcript_root or attempt)) for p in files]
     tamper = tampering(patch_text, task["owned_tests"]) if patch_text else []
     verdict, reasons = decide(sim, scan_doc, tamper, ctx.config)
+    resolved = raw_resolved(attempt)
+    if not patch_text.strip() and not files and resolved is None:
+        verdict, reasons = "not_run", [never_ran(attempt, transcript_root)]
     return {
         "schema": SCHEMA,
         "version": ctx.config["version"],
@@ -183,7 +206,7 @@ def evaluate(ctx: Context, task_id: str, attempt_no: int, attempt: Path, transcr
         "auto_verdict": verdict,
         "override": None,
         "reasons": reasons,
-        "resolved_raw": raw_resolved(attempt),
+        "resolved_raw": resolved,
         "patch": {
             "path": str(patch_path.relative_to(attempt)) if patch_path else None,
             "bytes": len(patch_text.encode("utf-8")),
@@ -206,8 +229,8 @@ def load_overrides(path: Path) -> dict[tuple[str, int], dict]:
         if not isinstance(row, dict):
             continue
         decision = str(row.get("decision") or "")
-        if decision not in VERDICTS or not all(str(row.get(k) or "").strip() for k in ("who", "when", "reason")):
-            raise SystemExit(f"bad override (need task, attempt, decision in {VERDICTS}, who, when, reason): {row}")
+        if decision not in OVERRIDE_DECISIONS or not all(str(row.get(k) or "").strip() for k in ("who", "when", "reason")):
+            raise SystemExit(f"bad override (need task, attempt, decision in {OVERRIDE_DECISIONS}, who, when, reason): {row}")
         out[(str(row.get("task")), int(row.get("attempt")))] = row
     return out
 
@@ -276,7 +299,8 @@ def report_markdown(title: str, docs: list[dict], summ: dict, metrics: dict | No
     )
     lines.append(
         f"- Verdicts: clean **{c['clean']}** · flagged **{c['flagged']}** · rejected **{c['rejected']}** "
-        f"of {summ['attempts']} attempts · no transcript: {summ['no_transcript']} · overrides: {summ['overrides']}"
+        f"· not run **{c.get('not_run', 0)}** of {summ['attempts']} attempts · no transcript: {summ['no_transcript']} "
+        f"· overrides: {summ['overrides']}"
     )
     if metrics:
         lines.append(
@@ -315,6 +339,15 @@ def report_markdown(title: str, docs: list[dict], summ: dict, metrics: dict | No
             for h in hits[:8]:
                 lines.append(f"- `{h['rule']}` ({h['severity']}, {h['tool']}): `{h['excerpt'].replace('`', "'")}`")
             lines.append("")
+    never = [d for d in docs if d["verdict"] == "not_run"]
+    if never:
+        lines.append(f"## Not run ({len(never)})")
+        lines.append("")
+        lines.append("| task | attempt | reason |")
+        lines.append("|---|---|---|")
+        for d in never:
+            lines.append(f"| {d['task']} | {d['attempt']:02d} | " + "; ".join(d["reasons"]).replace("|", "/") + " |")
+        lines.append("")
     rule_attempts: Counter = Counter()
     rule_hits: Counter = Counter()
     for d in docs:
@@ -360,7 +393,10 @@ def run_live(args: argparse.Namespace) -> int:
     title = f"{args.benchmark} {os.environ.get('BUILD_NUMBER') and 'jenkins-' + os.environ['BUILD_NUMBER'] or 'local'}"
     (out_dir / "report.md").write_text(report_markdown(title, docs, summ), encoding="utf-8")
     c = summ["counts"]
-    print(f"anticheat: clean {c['clean']} flagged {c['flagged']} rejected {c['rejected']} ({summ['attempts']} attempts)")
+    print(
+        f"anticheat: clean {c['clean']} flagged {c['flagged']} rejected {c['rejected']} not_run {c['not_run']} "
+        f"({summ['attempts']} attempts)"
+    )
     return 0
 
 
@@ -442,7 +478,8 @@ def run_rescore(args: argparse.Namespace) -> int:
     summ = doc["anticheat"]
     c = summ["counts"]
     print(
-        f"{run.name}: clean {c['clean']} flagged {c['flagged']} rejected {c['rejected']} of {summ['attempts']}; "
+        f"{run.name}: clean {c['clean']} flagged {c['flagged']} rejected {c['rejected']} not_run {c['not_run']} "
+        f"of {summ['attempts']}; "
         f"no transcript {summ['no_transcript']}; macro Pass@1 raw {_pct(summ['macro_pass@1_raw'])} "
         f"(artifact {_pct(doc['source_artifact_macro_pass@1'])}) -> official {_pct(summ['macro_pass@1_official'])}"
     )

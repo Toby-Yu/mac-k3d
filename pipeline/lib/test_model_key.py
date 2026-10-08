@@ -103,6 +103,8 @@ class ModelKeyTests(unittest.TestCase):
         cls._site = site
         with mock.patch.dict(os.environ, clear=False):
             os.environ.pop("MAC_K3D_EGRESS_PROBE_IMAGE", None)
+            # This fake Harbor has no DockerEnvironment for harbor_network_override to wrap.
+            os.environ["MAC_K3D_TRIAL_SUBNETS"] = "off"
             import canary_harbor_agent
             import icode_harbor_agent
         cls.icode = icode_harbor_agent

@@ -464,7 +464,7 @@ class EgressRecordTests(unittest.TestCase):
 class EgressWiringTests(unittest.TestCase):
     def test_env_runs_egress_after_harbor_and_clears_the_last_output(self):
         text = (STAGES / "env.sh").read_text(encoding="utf-8")
-        self.assertIn("STEPS=(env/host env/compose env/harbor env/egress env/model_api)", text)
+        self.assertIn("STEPS=(env/host env/compose env/harbor env/egress env/network env/model_api)", text)
         self.assertIn('rm -f "$WORKDIR/last_output.txt"', text)
         self.assertLess(text.index("last_output.txt"), text.index("run_steps"))
         step = (STAGES / "env" / "egress.sh").read_text(encoding="utf-8")

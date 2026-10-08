@@ -192,6 +192,8 @@ if [ "$(canary_mode)" = only ]; then
 fi
 
 ensure_harbor_egress
+ensure_trial_network
+teardown_on_exit "$JOBS_DIR"
 warn_docker_mtu
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SECONDS=0

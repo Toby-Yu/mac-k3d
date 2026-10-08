@@ -81,7 +81,7 @@ def make_shard(
         json.dumps(
             {
                 "version": "mac-k3d-anticheat-v1",
-                "counts": {"clean": len(tasks), "flagged": 0, "rejected": 0},
+                "counts": {"clean": len(tasks), "flagged": 0, "rejected": 0, "not_run": 0},
                 "attempts": sum(len(v) for v in tasks.values()),
                 "no_transcript": 0,
                 "overrides": 0,
@@ -166,15 +166,16 @@ class MergeTests(unittest.TestCase):
                 },
                 {
                     "version": "v1",
-                    "counts": {"clean": 1, "flagged": 0, "rejected": 2},
-                    "attempts": 3,
+                    "counts": {"clean": 1, "flagged": 0, "rejected": 2, "not_run": 3},
+                    "attempts": 6,
                     "rejected": [{"task": "b"}, {"task": "c"}],
                     "flagged": [],
                 },
             ]
         )
-        self.assertEqual(got["counts"], {"clean": 4, "flagged": 1, "rejected": 2})
-        self.assertEqual(got["attempts"], 7)
+        # The first shard predates not_run; it counts as 0 there.
+        self.assertEqual(got["counts"], {"clean": 4, "flagged": 1, "rejected": 2, "not_run": 3})
+        self.assertEqual(got["attempts"], 10)
         self.assertEqual(len(got["rejected"]), 2)
         self.assertEqual(got["shards"], 2)
         self.assertNotIn("status", got)
@@ -658,7 +659,8 @@ class DispatcherPlanTests(unittest.TestCase):
             doc, md, _ = self.report(root)
             self.assertEqual({row["id"] for row in doc["icode"]["tasks"]}, {"alpha", "beta"})
             self.assertEqual(doc["anticheat"]["attempts"], 4)
-            self.assertNotIn("not run", md)
+            self.assertNotRegex(md, r"\d+ (questions? )?not run")
+            self.assertIn("· not run **0** ·", md)
             self.assertIn("- Coverage: 2 of 2 planned questions have trials", md)
             self.assertIn("- Worker (shard 2 jenkins-61): node cloud", md)
             self.assertIn(f"- Egress probe: Harbor default {DEFAULT_PROBE}", md)
@@ -681,6 +683,31 @@ class DispatcherPlanTests(unittest.TestCase):
             self.assertTrue(lines[0].startswith("- Worker (shard 1 jenkins-60): node home · nproc 16"), lines[0])
             self.assertIn(f"egress probe Harbor default {DEFAULT_PROBE}", lines[0])
             self.assertIn(f"egress probe substituted {SUBSTITUTE_PROBE}", lines[1])
+
+    def test_each_worker_line_names_its_trial_networks(self):
+        for pools, merged in (
+            (("10.213.0.0/16", "10.213.0.0/16"), "- Trial networks: own /28 subnets from 10.213.0.0/16 · 4090 of 4096"),
+            (("10.213.0.0/16", "10.214.0.0/16"), None),
+        ):
+            with self.subTest(pools=pools), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for (build, task, node, free), pool in zip((("60", "alpha", "home", 4090), ("61", "beta", "cloud", 4093)), pools):
+                    inputs = shard_inputs(build, node)
+                    inputs["isolation"]["trial_network"] = {
+                        "mode": "subnets", "pool": pool, "prefix": 28, "free": free, "total": 4096, "need": 2,
+                    }
+                    work = make_shard(root / node, f"jenkins-{build}", {task: [1.0]}, inputs=inputs)
+                    self.collect(root, build, work)
+                code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha", "2|61|SUCCESS|1|1|beta"], rollouts=1)
+                self.assertEqual(code, 0, err)
+                _, md, page = self.report(root)
+                lines = [line for line in md.splitlines() if line.startswith("- Worker (shard")]
+                self.assertIn(f"egress probe Harbor default {DEFAULT_PROBE} · trial networks {pools[0]} /28 (4090 free)", lines[0])
+                self.assertIn(f"trial networks {pools[1]} /28 (4093 free)", lines[1])
+                if merged:
+                    self.assertIn(merged, md)
+                else:
+                    self.assertNotIn("- Trial networks:", md)
 
     def test_without_a_plan_every_archived_shard_counts_as_before(self):
         """An older dispatcher passes no --plan; nothing is dropped."""

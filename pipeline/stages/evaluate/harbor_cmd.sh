@@ -4,6 +4,10 @@
 #
 #   load_eval_state    read what the tasks phase and evaluate/slots left in $WORKDIR
 #   ensure_harbor_egress  re-run env/egress's probe check right before Harbor runs
+#   ensure_trial_network  enough free trial subnets for EVAL_SLOTS trials at once
+#                      (env/network); recorded in the protocol
+#   teardown_on_exit   when the step's shell exits, remove every trial
+#                      container and network under a jobs dir, and the env file
 #   write_harbor_env   the 0600 --env-file with the model key and settings,
 #                      removed when the step's shell exits
 #   build_run_cmd      iCode: every selected task x N_ROLLOUTS trials, one job
@@ -68,6 +72,25 @@ ensure_harbor_egress() {
     || die "Harbor cannot enforce network isolation on this worker (see the lines above)"
   python3 "$PIPELINE_LIB/provenance.py" record-egress-probe --inputs "$PROTOCOL_INPUTS" --probe "$probe"
   EGRESS_PROBE_IMAGE="$(python3 "$PIPELINE_LIB/harbor_egress.py" override --probe "$probe")"
+}
+
+# harbor_network_override.py gives each running trial its own subnet, and
+# Harbor runs EVAL_SLOTS trials at once.
+ensure_trial_network() {
+  local record="$WORKDIR/trial_network.json"
+  python3 "$PIPELINE_LIB/trial_network.py" check --need "$EVAL_SLOTS" --out "$record" \
+    || die "not enough free trial subnets for $EVAL_SLOTS trials at once (see the lines above)"
+  python3 "$PIPELINE_LIB/provenance.py" record-trial-network --inputs "$PROTOCOL_INPUTS" --record "$record"
+}
+
+# Harbor removes a trial's containers and network when the trial ends; stopped
+# early (Ctrl-C, an aborted build) it can leave them running. Replaces
+# write_harbor_env's EXIT trap, so the env file is removed here too.
+teardown_on_exit() {
+  TEARDOWN_DIR="$1"
+  trap 'python3 "$PIPELINE_LIB/trial_network.py" teardown --jobs-dir "$TEARDOWN_DIR" || true; rm -f "$HARBOR_ENV"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }
 
 # Harbor loads this file into its own environment; the agents copy the key

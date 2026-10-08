@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # report/render: this run's artifact.json, summary.md and report.html under
 # $WORKDIR/output/<benchmark>/<run folder>. Records the folder in
-# report_dir.txt for the archive phase.
+# report_dir.txt for the archive phase, and the number of rollouts without a
+# score in unscored_rollouts.txt (Jenkins marks the build UNSTABLE above 0).
 set -euo pipefail
 # shellcheck source=../_common.sh
 source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
@@ -61,7 +62,8 @@ python3 "$PIPELINE_LIB/render_report.py" \
   --workdir "$WORKDIR" \
   --utc "$UTC" \
   --run-folder "$FOLDER" \
-  --out-dir "$ART_DIR"
+  --out-dir "$ART_DIR" \
+  --unscored-out "$WORKDIR/unscored_rollouts.txt"
 
 printf '%s\n' "$ART_DIR" >"$WORKDIR/report_dir.txt"
 rel="$ART_DIR"

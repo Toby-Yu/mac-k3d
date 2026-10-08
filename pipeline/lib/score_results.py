@@ -805,6 +805,33 @@ def trial_patch_bytes(trial: Path) -> int | None:
     return got if isinstance(got, int) and not isinstance(got, bool) else None
 
 
+# Matched in order against Harbor's exception message, lowercased.
+INFRA_CAUSES = (
+    (("fully subnetted",), "Docker network pool exhausted"),
+    (("extraction snapshot", "missing parent", "parent snapshot"), "Docker image store damaged"),
+    (("pull access denied", "manifest unknown", "error pulling", "failed to pull", "toomanyrequests"), "image pull failed"),
+    (("docker compose command failed",), "docker compose failed"),
+)
+
+
+def trial_exception(trial: Path) -> dict | None:
+    """The exception Harbor recorded in <trial>/result.json (type, message), or None."""
+    result = load_json(trial / "result.json")
+    info = result.get("exception_info") if isinstance(result, dict) else None
+    if not isinstance(info, dict) or not (info.get("exception_type") or info.get("exception_message")):
+        return None
+    return {"type": str(info.get("exception_type") or ""), "message": str(info.get("exception_message") or "")}
+
+
+def infra_cause(exception: dict) -> str:
+    """Why Harbor stopped a trial, in a few words: a known infra cause, else the exception type."""
+    low = str(exception.get("message") or "").lower()
+    for needles, cause in INFRA_CAUSES:
+        if any(needle in low for needle in needles):
+            return cause
+    return str(exception.get("type") or "") or "unknown Harbor error"
+
+
 def rates_for_trial(trial: Path) -> dict:
     rates = verifier_rates(trial)
     if rates["partial"] is None:

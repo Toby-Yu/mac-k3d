@@ -525,7 +525,8 @@ def report_html(doc: dict) -> str:
         counts = anticheat.get("counts") if isinstance(anticheat.get("counts"), dict) else {}
         clauses.append(
             f"Anti-cheat {anticheat.get('version') or '-'}: {counts.get('clean', 0)} clean, "
-            f"{counts.get('flagged', 0)} flagged, {counts.get('rejected', 0)} rejected. "
+            f"{counts.get('flagged', 0)} flagged, {counts.get('rejected', 0)} rejected, "
+            f"{counts.get('not_run', 0)} not run. "
             f"Macro Pass@1 raw {_fmt_pct(_as_rate(anticheat.get('macro_pass@1_raw')))}, "
             f"official {_fmt_pct(_as_rate(anticheat.get('macro_pass@1_official')))} (rejected counted unresolved)."
         )
@@ -617,8 +618,11 @@ def report_html(doc: dict) -> str:
     micro_f2p = _fmt_rate3(_as_rate(micro.get("f2p")))
     metric_rows.append(["First-rollout Pass@1", _fmt_pct(first), scored_first])
     metric_rows.append([f"Pass@{n_rollouts} / any-pass", any_cell, scored_any])
-    metric_rows.append(["Macro F2P", macro_f2p, macro_f2p if all_scored else DASH])
-    metric_rows.append(["Micro F2P", micro_f2p, micro_f2p if all_scored else DASH])
+    metric_rows.append(["Macro F2P (best rollout per question)", macro_f2p, macro_f2p if all_scored else DASH])
+    metric_rows.append(["Micro F2P (best rollout per question)", micro_f2p, micro_f2p if all_scored else DASH])
+    if isinstance(arm.get("micro_all"), dict):
+        micro_all_f2p = _fmt_rate3(_as_rate(arm["micro_all"].get("f2p")))
+        metric_rows.append(["Micro F2P (all scored rollouts)", micro_all_f2p if all_scored else DASH, micro_all_f2p])
 
     if median_s is None and mean_s is None:
         latency = "<p>No duration data</p>"
