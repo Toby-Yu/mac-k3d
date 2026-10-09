@@ -1023,7 +1023,14 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
         // can merge them. The workspace keeps every earlier build's trials too.
         if (params.RUN_GROUP?.trim()) {{
           archiveArtifacts artifacts: "eval-runs/harness/harbor_runs/jenkins-${{env.BUILD_NUMBER}}/**, eval-runs/harness/anticheat/**", allowEmptyArchive: true
-          archiveArtifacts artifacts: 'eval-runs/selected_tasks.txt, eval-runs/suite_tasks.txt, eval-runs/skipped_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json, eval-runs/harness/container_mem.jsonl', allowEmptyArchive: true
+          // suite_tasks.txt is the whole suite. A shard given ids already names
+          // its questions in selected_tasks.txt. An offset shard (no TASK and no
+          // TASKS) archives the list so the merge can name a slice that ran nothing.
+          def inputs = 'eval-runs/selected_tasks.txt, eval-runs/skipped_tasks.txt, eval-runs/eval_protocol_inputs.json, eval-runs/eval_resources.json, eval-runs/harness/container_mem.jsonl'
+          if (!params.TASK?.trim() && !params.TASKS?.trim()) {{
+            inputs = 'eval-runs/suite_tasks.txt, ' + inputs
+          }}
+          archiveArtifacts artifacts: inputs, allowEmptyArchive: true
         }}
         // report/render counts the rollouts that have no score and prints their
         // causes. Each stays in the report as that rollout's own failure; the
@@ -1072,7 +1079,8 @@ fn eval_stage(stage: &EvalStage, first: bool, bootstrap: &str, opts: &JobOpts) -
                 error "No ${{env.NODE_NAME}}-core-N lockable resources. Run mac-k3d config on this worker to register them."
               }}
               env.CPU_LOCK_QTY = "${{held}}"
-              sh '''
+              sh '''#!/bin/bash
+set -euo pipefail
 {bootstrap}
                 {run}
               '''
@@ -1117,11 +1125,17 @@ fn eval_stage(stage: &EvalStage, first: bool, bootstrap: &str, opts: &JobOpts) -
     } else {
         (String::new(), "")
     };
+    let announce = if first {
+        "\n            echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK ICODE_MODE=$ICODE_MODE\""
+    } else {
+        ""
+    };
     format!(
         r#"    stage('{title}') {{
       steps {{
-{cred_open}{setup}          sh '''
-{clear}{bootstrap}
+{cred_open}{setup}          sh '''#!/bin/bash
+set -euo pipefail
+{clear}{bootstrap}{announce}
             {run}
           '''
 {cred_close}      }}
@@ -1158,11 +1172,12 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             error "ICODE_MODE=release needs an uploaded ICODE_RELEASE_FILE (${t})"
           }
         }
-        sh '''
-          set -euo pipefail
-          file="${WORKSPACE}/ICODE_RELEASE_FILE"
-          [ -s "$file" ] || { echo "ICODE_RELEASE_FILE is empty" >&2; exit 1; }
-          hash="$(python3 - "$file" <<'PY'
+        script {
+          def hash = sh(returnStdout: true, script: '''#!/bin/bash
+set -euo pipefail
+file="${WORKSPACE}/ICODE_RELEASE_FILE"
+[ -s "$file" ] || { echo "ICODE_RELEASE_FILE is empty" >&2; exit 1; }
+python3 - "$file" <<'PY'
 import hashlib, sys
 digest = hashlib.sha256()
 with open(sys.argv[1], "rb") as handle:
@@ -1170,16 +1185,19 @@ with open(sys.argv[1], "rb") as handle:
         digest.update(chunk)
 print(digest.hexdigest())
 PY
-)"
-          mkdir -p "${WORKSPACE}/icode-release"
-          cp "$file" "${WORKSPACE}/icode-release/ICODE_RELEASE_FILE"
-          printf '%s\n' "$hash" > "${WORKSPACE}/icode-release/sha256.txt"
-          echo "iCode under test: release $(basename "$file") sha256 ${hash}"
-        '''
-        script {
-          env.ICODE_RELEASE_SHA256 = readFile('icode-release/sha256.txt').trim()
+''').trim()
+          if (!hash) {
+            error "could not hash ICODE_RELEASE_FILE"
+          }
+          env.ICODE_RELEASE_SHA256 = hash
+          sh '''#!/bin/bash
+set -euo pipefail
+mkdir -p "${WORKSPACE}/icode-release"
+cp "${WORKSPACE}/ICODE_RELEASE_FILE" "${WORKSPACE}/icode-release/ICODE_RELEASE_FILE"
+'''
+          echo "iCode under test: release ICODE_RELEASE_FILE sha256 ${hash}"
         }
-        archiveArtifacts artifacts: 'icode-release/**'
+        archiveArtifacts artifacts: 'icode-release/ICODE_RELEASE_FILE'
       }
     }
 
@@ -1303,6 +1321,19 @@ PY
             if (shardPlan[i] != null) {{ planLines << shardPlan[i] }}
           }}
           env.SHARD_PLAN = planLines.join(';')
+          // The shards have copied the drop. The sha256 in summary.md and
+          // report.html is the record, so the build page does not keep the file.
+          // A sandbox refusal only warns; the eval result does not change.
+          if (params.ICODE_MODE == 'release') {{
+            try {{
+              def dropped = new File(currentBuild.rawBuild.getRootDir(), "archive/icode-release")
+              if (dropped.isDirectory() && !dropped.deleteDir()) {{
+                echo "WARNING: could not remove the iCode release from this build's artifacts. The sha256 is in summary.md and report.html."
+              }}
+            }} catch (Throwable t) {{
+              echo "WARNING: could not remove the iCode release from this build's artifacts (${{t}}). The sha256 is in summary.md and report.html."
+            }}
+          }}
           if (retried) {{
             echo "Retried once after failing before Harbor started: ${{retried.join(', ')}}"
           }}
@@ -1335,8 +1366,8 @@ PY
           // A shard that stopped early archives nothing; the plan still names it.
           writeFile file: 'shards/plan.txt', text: (env.SHARD_PLAN ?: '').replace(';', '\n') + '\n'
         }}
-        sh '''
-          set -euo pipefail
+        sh '''#!/bin/bash
+set -euo pipefail
           export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
           MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
           mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean
@@ -1386,8 +1417,7 @@ PY
 fn eval_bootstrap_sh(job_benchmark: &str, opts: &JobOpts, indent: usize) -> String {
     let pad = " ".repeat(indent);
     let body = format!(
-        r#"set -euo pipefail
-export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
+        r#"export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
 command -v docker >/dev/null
 docker info >/dev/null
 export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
@@ -1448,8 +1478,7 @@ if [ "${{ICODE_MODE}}" = "release" ] || [ "${{ICODE_MODE}}" = "binary" ]; then
     echo "ICODE_MODE=release: upload ICODE_RELEASE_FILE on Jenkins Build with Parameters (not a worker path)." >&2
     exit 1
   fi
-fi
-echo "MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK ICODE_MODE=$ICODE_MODE""#,
+fi"#,
         icode_mode_fb = jenkins_icode_mode(opts),
         harbor_fb = crate::prepare::toolchain::harbor_version(),
         harness_fb = eval_catalog::HARNESSES[0],
@@ -2159,6 +2188,14 @@ mod tests {
         let at = jf.find(clear).unwrap();
         assert!(first < at && at < second);
         assert_eq!(jf.matches("mac-k3d pipeline --extract-to").count(), 7);
+        // Jenkins does not trace a script that starts with a shebang, so the
+        // prelude is not printed on every stage. The one-line summary is the
+        // Environment stage only.
+        assert_eq!(jf.matches("#!/bin/bash").count(), 7);
+        assert_eq!(
+            jf.matches("echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK ICODE_MODE=$ICODE_MODE\"").count(),
+            1
+        );
 
         let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
         assert!(some.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean"#));
@@ -2199,6 +2236,10 @@ mod tests {
         assert!(jf.contains("string(name: 'SHARD', value: note)"));
         assert!(jf.contains("string(name: 'ICODE_MODE', value: params.ICODE_MODE)"));
         assert!(jf.contains("stage('iCode release')"));
+        assert!(jf.contains("archiveArtifacts artifacts: 'icode-release/ICODE_RELEASE_FILE'"));
+        assert!(!jf.contains("sha256.txt"));
+        assert!(jf.contains("archive/icode-release"));
+        assert!(jf.contains("#!/bin/bash"));
         assert!(jf.contains("copyArtifactPermission('deepswe_one_task')"));
         assert!(jf.contains("ICODE_RELEASE_FROM"));
         assert!(jf.contains("unstable \"Shards that did not succeed"));
@@ -2430,8 +2471,10 @@ mod tests {
         ));
         assert!(!jf.contains("'eval-runs/harness/harbor_runs/**'"));
         assert!(jf.contains("eval-runs/selected_tasks.txt"));
-        // The whole suite in byte order, so the merge can name an offset shard that ran nothing.
-        assert!(jf.contains("eval-runs/suite_tasks.txt"));
+        // The whole suite, only when this shard was not given ids. The merge
+        // names an offset slice that ran nothing from that list.
+        assert!(jf.contains("if (!params.TASK?.trim() && !params.TASKS?.trim()) {"));
+        assert!(jf.contains("inputs = 'eval-runs/suite_tasks.txt, ' + inputs"));
         assert!(jf.contains("currentBuild.description = \"shard ${params.SHARD}\""));
         // A direct build names whoever started it; a shard takes the dispatcher's user.
         let cause = jf.find("currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')").expect("cause");

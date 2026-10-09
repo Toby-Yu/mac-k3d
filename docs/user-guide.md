@@ -189,7 +189,7 @@ Before the canary or any rollout, the console prints one line: `iCode under test
 
 Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND`. The archived JSON includes `icode_git` (resolved SHA + subject). Full split: [icode-harness-inputs.md](icode-harness-inputs.md).
 
-Release-mode CI: **upload** `ICODE_RELEASE_FILE` on any of the three jobs. `mac-k3d eval --job` cannot attach a file. On `_some_task` and `_full_suite_task` the dispatcher hashes the upload, archives it, and each shard copies that file and checks the sha256.
+Release-mode CI: **upload** `ICODE_RELEASE_FILE` on any of the three jobs. `mac-k3d eval --job` cannot attach a file. On `_some_task` and `_full_suite_task` the dispatcher hashes the upload and each shard copies that file and checks the sha256. After the shards have it, the dispatcher build drops the file. The finished build keeps the sha256 in `summary.md` and `report.html`, not the drop and not a `sha256.txt`.
 
 3. Click **Build**. Console must say `Running on <this-worker-name>`. The build is allowed **96 hours**. Re-run `mac-k3d config` on the controller so the Jenkins job picks up that limit; an already installed job still has the old cap.
 4. Download **Build Artifacts** → `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, plus `summary.md` and `report.html` in that same folder. Token totals are input, output, and the sum.

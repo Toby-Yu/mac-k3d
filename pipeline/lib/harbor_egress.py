@@ -249,6 +249,26 @@ def tried_line(entry: dict) -> str:
     return f"{label} {entry['image']}: {result}"
 
 
+def answer_key(record: dict) -> tuple:
+    """The part of a probe record the console explains. `checked_at` is not part of it."""
+    return (
+        record.get("harbor_default"),
+        record.get("image"),
+        bool(record.get("substituted")),
+        record.get("reason") or "",
+        record.get("sidecar") or "",
+        record.get("sidecar_present"),
+    )
+
+
+def previous_answer(out_path: Path) -> dict | None:
+    try:
+        doc = json.loads(out_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
 def check(out_path: Path, fallback: str = FALLBACK_PROBE_IMAGE) -> dict:
     python = harbor_python()
     facts = harbor_facts(python)
@@ -316,8 +336,13 @@ def check(out_path: Path, fallback: str = FALLBACK_PROBE_IMAGE) -> dict:
             f"Harbor's egress sidecar {sidecar} is not on this host and Harbor would build it "
             f"from gogost/gost, which needs the same image layers that {default} could not unpack"
         )
+    previous = previous_answer(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+
+    if previous is not None and answer_key(previous) == answer_key(record):
+        print(f"egress: same probe as the last check ({record['image']})")
+        return record
 
     if record["substituted"]:
         print(

@@ -244,6 +244,30 @@ class HarborEgressCheckTests(unittest.TestCase):
         self.assertEqual(harbor_runs(self.log), [])
         self.assertNotIn(f"pull {SIDECAR}", self.log.read_text(encoding="utf-8"))
 
+    def test_a_repeated_check_prints_the_explanation_once(self):
+        first = self.check(STUB_BROKEN=DEFAULT)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn(f"WARNING: Harbor's probe image {DEFAULT} cannot run on this host", first.stdout)
+        second = self.check(STUB_BROKEN=DEFAULT)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn(f"egress: same probe as the last check ({SIDECAR})", second.stdout)
+        self.assertNotIn("cannot run on this host", second.stdout)
+        self.assertNotIn("Docker image store is damaged", second.stdout)
+
+    def test_a_changed_answer_prints_in_full(self):
+        first = self.check()
+        self.assertIn(f"OK egress control: Harbor default probe {DEFAULT}", first.stdout)
+        second = self.check(STUB_BROKEN=DEFAULT)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn(f"WARNING: Harbor's probe image {DEFAULT} cannot run on this host", second.stdout)
+
+    def test_a_new_failure_still_prints_in_full(self):
+        first = self.check(STUB_BROKEN=DEFAULT)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        failed = self.check(STUB_BROKEN=f"{DEFAULT},{FALLBACK_PROBE_IMAGE}", STUB_RUN_BROKEN=SIDECAR)
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("Harbor cannot check egress control on this host", failed.stderr)
+
     def test_build_61_hanging_alpine_is_never_needed(self):
         proc = self.check(STUB_BROKEN=DEFAULT, STUB_HANG=FALLBACK_PROBE_IMAGE)
         self.assertEqual(proc.returncode, 0, proc.stderr)
