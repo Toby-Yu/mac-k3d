@@ -71,14 +71,39 @@ The tar has the scores, patches, and anti-cheat verdicts. It does not have `even
 
 ## Prepare the NAS
 
-Put it on the controller's private network. A disk on this PC alone is not a store for the cloud worker.
+The NAS is a third copy, after Jenkins has the artifacts. Both workers must see the same export. A disk plugged into this PC is not a store for the cloud worker, and a disk on the controller VM is not a store for this PC.
 
-- Two disks in RAID 1, with snapshots.
-- One export, mounted on each worker at `/mnt/mac-k3d-archive`.
-- Mount option `nofail`, so a missing NAS does not stop the agent.
-- The agent user writes (`Toby` on this PC, `toby` on the cloud worker). Mode `0750`. No guest access.
-- Do not mount it as the Jenkins workspace or as Docker's data root.
-- Do not point `MAC_K3D_BACKUP_ROOT` at the NAS yet. A backup written outside the workspace is not offered on the Jenkins build page. Jenkins keeps the copy that must succeed. The NAS copy comes after that.
+1. Put the NAS on the controller's private network, the one both workers already use to reach Jenkins. Do not expose the export on the public internet.
+2. Install two disks and make them one RAID 1 volume, then turn snapshots on. RAID 1 keeps the files if one disk dies. Usable space is the size of one disk. The second disk is the mirror, not extra capacity. Snapshots use part of that usable space, so the volume has to be larger than the folders below.
+3. Export one share. Mount that same share on each worker at `/mnt/mac-k3d-archive`.
+4. Mount with `nofail`. If the NAS is down or the network path is gone, the worker still boots and the Jenkins agent still starts. The eval writes its Jenkins artifacts on local disk either way. Copy to the NAS only when the mount is actually there.
+5. Let the agent user write: `Toby` on this PC, `toby` on the cloud worker. Mode `0750`. No guest access, and no write for anyone else.
+6. Leave the mount as an archive directory only. Do not make it the Jenkins workspace, and do not make it Docker's data root. Harbor, image pulls, and the build workspace stay on the worker's own disk.
+7. Do not point `MAC_K3D_BACKUP_ROOT` at the NAS yet. A backup written outside the workspace is not offered on the Jenkins build page. Jenkins keeps the copy that must succeed. The NAS copy comes after that, by hand, from the paths in [Shard copy](#shard-copy) and [Report copy](#report-copy).
+
+## How much disk the NAS needs
+
+This is disk size, not the model bill. `cost-token-report.md` is a list-price estimate of DeepSeek tokens and is one of the small files in `reports/`. It does not price the disks.
+
+The sizes below are the ones the pipeline already records for a DeepSWE full suite (113 questions, 4 rollouts, 452 trials):
+
+| What | Per full suite | Where it lives |
+|---|---|---|
+| One trial, almost all of it the plain transcript | about 57 MB, of which about 56 MB is `events.jsonl` | Worker disk, until `archive` gzips it |
+| One uncompressed suite | about 26 GB | Worker disk. The NAS does not hold this |
+| Gzipped transcripts (about 7× smaller) | about 26 GB / 7 ≈ 3.7 GB | NAS `transcripts/` |
+| Merged report, tar, and the other small files, with no transcripts | about 0.2 GB | NAS `reports/` |
+
+A shorter run scales with trials. Four questions at 4 rollouts is 16 trials, 16/452 of a full suite: about 0.13 GB of gzipped transcripts plus a report well under 0.2 GB.
+
+What you keep changes the total:
+
+```text
+reports     = 0.2 GB × (every full suite you store)
+transcripts = 3.7 GB × (copies you still keep)
+```
+
+`reports/` is every run. `transcripts/` is 90 days, or the last three runs of that iCode commit, whichever you apply. Three kept full-suite transcript trees are about 3 × 3.7 GB ≈ 11 GB. A year of weekly full-suite reports is about 52 × 0.2 GB ≈ 10 GB. Together that is about 21 GB of files. Buy the RAID 1 pair so one disk's usable space covers that, plus the snapshots of it. The mirror disk is the second purchase and adds no usable gigabytes.
 
 ## How long to keep it
 
