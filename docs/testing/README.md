@@ -12,5 +12,6 @@ These pages are **this team’s copy-paste checklists** (cloud IP, this PC, sign
 | [clean-machine-binary-test.md](clean-machine-binary-test.md) | Wipe or new PC |
 | [question-coverage.md](question-coverage.md) | Questions run on this worker, and Docker memory per question |
 | [question-log.md](question-log.md) | Per-run result of every question, open problems and your fix notes (`mac-k3d eval record`) |
+| [nas-storage.md](nas-storage.md) | What to copy to a NAS after a run, and what stays on the worker |
 
 Do not nest a second `testing/` under a branch folder. Branch re-test notes stay in `docs/<branch>/testing.md`.

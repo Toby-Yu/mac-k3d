@@ -2607,7 +2607,10 @@ class EvalReportTests(unittest.TestCase):
             )
             (harness / "harbor_jobs_dir.txt").write_text(f"{runs / 'jenkins-52'}\n", encoding="utf-8")
 
-            self.assertEqual(harbor_task_trials(harness, "alpha"), [current])
+            self.assertEqual(
+                [p.resolve() for p in harbor_task_trials(harness, "alpha")],
+                [current.resolve()],
+            )
             arm = self._artifact(harness, ["alpha"])["icode"]
             self.assertEqual(arm["macro_pass@1"], 1.0)
             self.assertEqual(arm["infra_excluded"], 0)
@@ -4165,17 +4168,31 @@ class AgentIsolationTests(unittest.TestCase):
                 tmp_path = Path(tmp)
                 bindir = tmp_path / "bin"
                 bindir.mkdir()
-                route = "1.1.1.1 dev surfshark_wg table 300000 src 10.14.0.2" if tunnel_mtu else ""
-                (bindir / "ip").write_text(
-                    "#!/bin/sh\n"
-                    'case "$*" in\n'
-                    f"  'route get 1.1.1.1') [ -n '{route}' ] || exit 2; echo '{route}' ;;\n"
-                    f"  *link*) echo '7: surfshark_wg: <POINTOPOINT,UP> mtu {tunnel_mtu} qdisc noqueue' ;;\n"
-                    "esac\n",
-                    encoding="utf-8",
-                )
+                if os.uname().sysname == "Darwin":
+                    # warn_docker_mtu uses route and ifconfig on Darwin, ip on Linux.
+                    iface = "   interface: surfshark_wg\n" if tunnel_mtu else ""
+                    (bindir / "route").write_text(
+                        "#!/bin/sh\n" f"printf '%s' '{iface}'\n",
+                        encoding="utf-8",
+                    )
+                    (bindir / "ifconfig").write_text(
+                        "#!/bin/sh\n" f"echo 'mtu {tunnel_mtu}'\n",
+                        encoding="utf-8",
+                    )
+                    stubs = ("route", "ifconfig", "docker")
+                else:
+                    route = "1.1.1.1 dev surfshark_wg table 300000 src 10.14.0.2" if tunnel_mtu else ""
+                    (bindir / "ip").write_text(
+                        "#!/bin/sh\n"
+                        'case "$*" in\n'
+                        f"  'route get 1.1.1.1') [ -n '{route}' ] || exit 2; echo '{route}' ;;\n"
+                        f"  *link*) echo '7: surfshark_wg: <POINTOPOINT,UP> mtu {tunnel_mtu} qdisc noqueue' ;;\n"
+                        "esac\n",
+                        encoding="utf-8",
+                    )
+                    stubs = ("ip", "docker")
                 (bindir / "docker").write_text(f"#!/bin/sh\necho '{bridge_mtu}'\n", encoding="utf-8")
-                for name in ("ip", "docker"):
+                for name in stubs:
                     (bindir / name).chmod(0o755)
                 env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
                            MAC_K3D_EVAL_WORKDIR=str(tmp_path / "work"))

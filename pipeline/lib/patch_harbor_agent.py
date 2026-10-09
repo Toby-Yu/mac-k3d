@@ -7,7 +7,11 @@ Harbor's verifier grades it the same way.
 
 from __future__ import annotations
 
-from typing import override
+try:
+    from typing import override
+except ImportError:  # Python 3.11
+    def override(method):
+        return method
 
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.environments.base import BaseEnvironment

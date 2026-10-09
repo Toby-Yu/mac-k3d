@@ -337,7 +337,8 @@ def report_markdown(title: str, docs: list[dict], summ: dict, metrics: dict | No
             lines.append(f"**{d['task']} attempt-{d['attempt']:02d}** evidence:")
             lines.append("")
             for h in hits[:8]:
-                lines.append(f"- `{h['rule']}` ({h['severity']}, {h['tool']}): `{h['excerpt'].replace('`', "'")}`")
+                excerpt = h["excerpt"].replace("`", "'")
+                lines.append(f"- `{h['rule']}` ({h['severity']}, {h['tool']}): `{excerpt}`")
             lines.append("")
     never = [d for d in docs if d["verdict"] == "not_run"]
     if never:

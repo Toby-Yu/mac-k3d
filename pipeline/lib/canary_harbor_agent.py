@@ -12,7 +12,12 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import override
+
+try:
+    from typing import override
+except ImportError:  # Python 3.11
+    def override(method):
+        return method
 
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
