@@ -9,18 +9,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export MAC_K3D_ROOT="$ROOT"
 # Tool pins shared with `mac-k3d setup` (Harbor, compose, buildx, Java, bash,
 # python3, host minimums). A value the job or caller already exported wins.
-# This loop and the bash guard below must parse on bash 3.2 (macOS /bin/bash).
+# macOS /bin/bash is 3.2 and rejects ${!name:-}, so the version guard runs
+# before that loop. Only this BASH_MIN read has to work on 3.2.
 TOOLCHAIN_ENV="$ROOT/pipeline/config/toolchain.env"
 [ -f "$TOOLCHAIN_ENV" ] || { echo "ERROR: missing $TOOLCHAIN_ENV" >&2; exit 1; }
-while IFS='=' read -r _pin_key _pin_value || [ -n "$_pin_key" ]; do
-  [[ "$_pin_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
-  if [ -z "${!_pin_key:-}" ]; then
-    export "${_pin_key}=${_pin_value}"
-  else
-    export "${_pin_key?}"
-  fi
-done <"$TOOLCHAIN_ENV"
-unset _pin_key _pin_value
+if [ -z "${BASH_MIN:-}" ]; then
+  BASH_MIN="$(sed -n 's/^BASH_MIN=//p' "$TOOLCHAIN_ENV" | head -n 1)"
+  export BASH_MIN
+fi
 
 # The steps use bash 4.4 features (mapfile, empty arrays under set -u).
 require_bash_min() {
@@ -35,6 +31,16 @@ require_bash_min() {
   fi
 }
 require_bash_min
+
+while IFS='=' read -r _pin_key _pin_value || [ -n "$_pin_key" ]; do
+  [[ "$_pin_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+  if [ -z "${!_pin_key:-}" ]; then
+    export "${_pin_key}=${_pin_value}"
+  else
+    export "${_pin_key?}"
+  fi
+done <"$TOOLCHAIN_ENV"
+unset _pin_key _pin_value
 
 export PIPELINE_LIB="$ROOT/pipeline/lib"
 # shellcheck source=../lib/parallel_degree.sh

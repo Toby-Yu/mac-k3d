@@ -56,8 +56,12 @@ jobs:
         run: |
           set -uo pipefail
           /bin/bash -n pipeline/stages/run_all.sh
+          # GitHub runs this step with -e. The guard's exit 1 is the result we
+          # check, so capture it instead of aborting before the message is printed.
+          set +e
           out="$(/bin/bash pipeline/stages/run_all.sh 2>&1)"
           rc=$?
+          set -e
           echo "$out"
           [ "$rc" -eq 1 ] || { echo "expected exit 1 from the bash guard, got $rc"; exit 1; }
           echo "$out" | grep -q 'older than 4.4' || { echo "bash guard message missing"; exit 1; }

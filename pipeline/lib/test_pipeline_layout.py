@@ -213,6 +213,8 @@ class MacPortabilityTests(unittest.TestCase):
         self.assertIn("BASH_VERSINFO", common[:guard])
         code = "\n".join(l for l in common[:guard].splitlines() if not l.lstrip().startswith("#"))
         self.assertIsNone(self.BASH4.search(code), "bash 4 syntax before the guard")
+        # bash 3.2 rejects ${!name:-} at runtime, before the version message.
+        self.assertNotIn("${!", code, "indirect expansion before the bash guard")
         host = (STAGES / "env" / "host.sh").read_text(encoding="utf-8")
         self.assertLess(host.index('/_common.sh"'), host.index("have python3"))
 
