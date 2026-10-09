@@ -4221,13 +4221,24 @@ class AgentIsolationTests(unittest.TestCase):
                 bindir.mkdir()
                 if os.uname().sysname == "Darwin":
                     # warn_docker_mtu uses route and ifconfig on Darwin, ip on Linux.
-                    iface = "   interface: surfshark_wg\n" if tunnel_mtu else ""
+                    # The ifconfig sed keeps the digits after " mtu ", so the stub
+                    # line has that space, as real macOS ifconfig does.
+                    iface = "   interface: surfshark_wg" if tunnel_mtu else ""
                     (bindir / "route").write_text(
-                        "#!/bin/sh\n" f"printf '%s' '{iface}'\n",
+                        "#!/bin/sh\n"
+                        'case "$*" in\n'
+                        "  '-n get 1.1.1.1')\n"
+                        f"    [ -n '{iface}' ] || exit 2\n"
+                        f"    printf '%s\\n' '{iface}' ;;\n"
+                        "esac\n",
                         encoding="utf-8",
                     )
                     (bindir / "ifconfig").write_text(
-                        "#!/bin/sh\n" f"echo 'mtu {tunnel_mtu}'\n",
+                        "#!/bin/sh\n"
+                        'case "$1" in\n'
+                        "  surfshark_wg)\n"
+                        f"    printf '%s\\n' 'surfshark_wg: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu {tunnel_mtu}' ;;\n"
+                        "esac\n",
                         encoding="utf-8",
                     )
                     stubs = ("route", "ifconfig", "docker")
