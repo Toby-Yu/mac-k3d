@@ -173,6 +173,31 @@ class QuestionLogTests(unittest.TestCase):
         proc = self.record("--run", "deepswe_one_task #55", "--build", "55", art=local)
         self.assertIn("not build 55; ignored", proc.stdout)
 
+    def test_a_merged_some_task_report_belongs_to_that_dispatcher_build(self):
+        art = artifact(
+            "deepswe_some_task-9",
+            [task("ytt-jsonpath-query-api", 2, 4, reward=0.5), task("dasel-html-document-format", 0, 4)],
+        )
+        proc = self.record("--run", "deepswe_some_task #9", "--build", "9", "--result", "SUCCESS",
+                           "--worker", "mac-Michael-Ubuntu", "--benchmark", "deepswe",
+                           "--date", "1791360000000", art=art)
+        runs = self.runs()
+        self.assertEqual(runs[("deepswe_some_task #9", "ytt-jsonpath-query-api")][5], "fail 2/4 (reward 0.5)")
+        self.assertEqual(runs[("deepswe_some_task #9", "dasel-html-document-format")][5], "fail 0/4 (reward 0)")
+        self.assertIn("2 row(s) for deepswe_some_task #9", proc.stdout)
+        cov = self.coverage.read_text(encoding="utf-8")
+        self.assertIn("| `ytt-jsonpath-query-api` | run | 9 |", cov)
+
+        other_job = artifact("lolbench_some_task-9", [task("abs-module-cache-flags", 1, 1)])
+        proc = self.record("--run", "deepswe_some_task #9", "--build", "9", art=other_job)
+        self.assertIn("artifact.json is from run lolbench_some_task-9, not build 9; ignored", proc.stdout)
+        earlier = artifact("deepswe_some_task-8", [task("abs-module-cache-flags", 1, 1)])
+        proc = self.record("--run", "deepswe_some_task #9", "--build", "9", art=earlier)
+        self.assertIn("artifact.json is from run deepswe_some_task-8, not build 9; ignored", proc.stdout)
+        longer = artifact("jenkins-19", [task("abs-module-cache-flags", 1, 1)])
+        proc = self.record("--run", "deepswe_one_task #9", "--build", "9", art=longer)
+        self.assertIn("artifact.json is from run jenkins-19, not build 9; ignored", proc.stdout)
+
     def test_fix_survives_a_rerecord_and_a_later_pass_closes_the_problem(self):
         self.record("--run", "deepswe_one_task #53", "--build", "53", "--result", "FAILURE",
                     "--date", "1791190000000", console=CONSOLE_53)

@@ -159,7 +159,7 @@ mac-k3d eval record --run eval-runs/output/deepswe/<run folder>
 | `--run DIR` | One local output folder (`artifact.json` inside) |
 | `--workdir PATH` | Where the last local run left `last_output.txt` and `last_console.log` (default `./eval-runs`) |
 
-An `artifact.json` from another run (a reused Jenkins workspace) is ignored. A run that stopped before `report` still gets rows, from the console: the selected questions, the last `== phase/step` and the first `ERROR:` line, masked for keys and tokens. `--local` and `--stage all` copy their console to `eval-runs/last_console.log` and record themselves when they end, passed or failed. Re-recording a run keeps the `fix` column.
+An `artifact.json` from another run (a reused Jenkins workspace) is ignored. A `one_task` report belongs to the build when its `run_id` is `jenkins-<build>`. A `some_task` or `full_suite_task` merge belongs to the dispatcher build when its `run_id` is `<job>-<build>` (for example `deepswe_some_task-9`); that one command writes a row for every question in the merged report. A run that stopped before `report` still gets rows, from the console: the selected questions, the last `== phase/step` and the first `ERROR:` line, masked for keys and tokens. `--local` and `--stage all` copy their console to `eval-runs/last_console.log` and record themselves when they end, passed or failed. Re-recording a run keeps the `fix` column.
 
 ---
 

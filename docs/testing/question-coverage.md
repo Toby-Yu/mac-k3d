@@ -2,7 +2,7 @@
 
 Which questions have a Harbor run, and the Docker memory recorded for each. Product packing rules stay in [optimization.md](../optimization.md). Branch notes: [eval-comparison-report](../eval-comparison-report/README.md).
 
-What each run did per question (pass, fail, the error that stopped it, and your fix notes) is in [question-log.md](question-log.md). `mac-k3d eval record` writes it and also sets `status` and `builds` here: a Jenkins build adds its number, a local run adds `local` once. It never touches `peak_gb`, `slots` or `memory_mb`.
+What each run did per question (pass, fail, the error that stopped it, and your fix notes) is in [question-log.md](question-log.md). `mac-k3d eval record` writes it and also sets `status` and `builds` here: a Jenkins build adds its number (a `some_task` or `full_suite_task` record adds the dispatcher build, not each shard), a local run adds `local` once. It never touches `peak_gb`, `slots` or `memory_mb`.
 
 Jenkins build numbers are the `jenkins-<n>` trees under each job’s `eval-runs/harness/harbor_runs`. `peak_gb`, `slots`, and `memory_mb` come from that run’s `container_mem.jsonl` after the report phase (copied next to `artifact.json`). Historical builds finished before that file existed, so those cells stay empty.
 
@@ -20,7 +20,7 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 
 ## DeepSWE
 
-6 run, 107 not run, 113 task dirs.
+46 run, 67 not run, 113 task dirs.
 
 | question | status | builds | peak_gb | slots | memory_mb |
 |----------|--------|--------|---------|-------|-----------|
@@ -30,44 +30,44 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 | `adaptix-name-mapping-aliases` | run | 23, 24, 29, 30 | | | |
 | `aiomonitor-task-snapshots-diff` | run | 23 | | | |
 | `anko-default-function-arguments` | not run |  | | | |
-| `anko-typed-variable-bindings` | not run |  | | | |
+| `anko-typed-variable-bindings` | run | 9 | | | |
 | `arcane-drift-detection-baselines` | not run |  | | | |
 | `arktype-json-schema-refs-dependencies` | not run |  | | | |
-| `awilix-async-container-initialization` | not run |  | | | |
-| `bandit-incremental-cache-control` | not run |  | | | |
-| `bandit-interprocedural-taint-checks` | not run |  | | | |
-| `bandit-structured-nosec-directives` | not run |  | | | |
+| `awilix-async-container-initialization` | run | 9 | | | |
+| `bandit-incremental-cache-control` | run | 9 | | | |
+| `bandit-interprocedural-taint-checks` | run | 9 | | | |
+| `bandit-structured-nosec-directives` | run | 9 | | | |
 | `boa-hierarchical-evaluation-cancellation` | not run |  | | | |
 | `cattrs-partial-structuring-recovery` | not run |  | | | |
-| `clack-async-autocomplete-options` | not run |  | | | |
+| `clack-async-autocomplete-options` | run | 9 | | | |
 | `claude-code-by-agents-recursive-delegation` | not run |  | | | |
 | `cliffy-config-file-parsing` | not run |  | | | |
-| `csstree-shorthand-expansion-compression` | not run |  | | | |
-| `dasel-html-document-format` | not run |  | | | |
+| `csstree-shorthand-expansion-compression` | run | 9 | | | |
+| `dasel-html-document-format` | run | 9 | | | |
 | `dateutil-rfc5545-timezone-interop` | not run |  | | | |
 | `drizzle-orm-window-function-builders` | not run |  | | | |
 | `dynamodb-toolbox-conditional-attribute-requirements` | not run |  | | | |
 | `dynamodb-toolbox-lazy-recursive-schemas` | not run |  | | | |
 | `effect-sse-httpapi-streaming` | not run |  | | | |
 | `eicrud-keyset-pagination-cursor` | not run |  | | | |
-| `etree-xml-diff-patch` | not run |  | | | |
+| `etree-xml-diff-patch` | run | 9 | | | |
 | `expr-try-catch-errors` | not run |  | | | |
-| `fastapi-deprecation-response-headers` | not run |  | | | |
+| `fastapi-deprecation-response-headers` | run | 9 | | | |
 | `fastapi-implicit-head-options` | not run |  | | | |
-| `fd-deterministic-multi-key-sorting` | not run |  | | | |
-| `geo-shapeindex-serialization` | not run |  | | | |
-| `go-critic-doc-link-checker` | not run |  | | | |
-| `go-genai-streamed-function-args` | not run |  | | | |
+| `fd-deterministic-multi-key-sorting` | run | 9 | | | |
+| `geo-shapeindex-serialization` | run | 9 | | | |
+| `go-critic-doc-link-checker` | run | 9 | | | |
+| `go-genai-streamed-function-args` | run | 9 | | | |
 | `go-git-worktree-merge-conflicts` | not run |  | | | |
 | `goreleaser-retry-publish-auditing` | not run |  | | | |
-| `gql-incremental-graphql-delivery` | not run |  | | | |
+| `gql-incremental-graphql-delivery` | run | 9 | | | |
 | `happy-dom-abort-pending-body-reads` | not run |  | | | |
-| `happy-dom-deterministic-intersectionobserver` | not run |  | | | |
+| `happy-dom-deterministic-intersectionobserver` | run | 9 | | | |
 | `helm-array-merge-strategies` | not run |  | | | |
 | `helm-unified-manifest-stream` | not run |  | | | |
 | `httpx-deterministic-cookie-store` | not run |  | | | |
 | `httpx-multipart-response-parsing` | not run |  | | | |
-| `httpx-streaming-json-iteration` | not run |  | | | |
+| `httpx-streaming-json-iteration` | run | 9 | | | |
 | `igel-persist-feature-schema` | not run |  | | | |
 | `ink-grid-box-layout` | not run |  | | | |
 | `ipython-session-bundle-replay` | run | 54 | | | |
@@ -76,38 +76,38 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 | `kea-atomic-signal-selectors` | not run |  | | | |
 | `kgateway-consistent-hash-policy` | not run |  | | | |
 | `kombu-single-active-consumer-priority` | not run |  | | | |
-| `kombu-virtual-queue-dead-lettering` | not run |  | | | |
+| `kombu-virtual-queue-dead-lettering` | run | 9 | | | |
 | `koota-composite-trait-aspects` | not run |  | | | |
-| `koota-deferred-mutation-buffer` | not run |  | | | |
-| `koota-entity-snapshot-rollback` | not run |  | | | |
+| `koota-deferred-mutation-buffer` | run | 9 | | | |
+| `koota-entity-snapshot-rollback` | run | 9 | | | |
 | `koota-pair-relation-tracking` | not run |  | | | |
-| `koota-query-predicates` | not run |  | | | |
+| `koota-query-predicates` | run | 9 | | | |
 | `kysely-window-grouping-helpers` | not run |  | | | |
-| `langchain-request-coalescing` | not run |  | | | |
+| `langchain-request-coalescing` | run | 9 | | | |
 | `mashumaro-flattened-dataclass-fields` | not run |  | | | |
 | `meriyah-explicit-resource-declarations` | not run |  | | | |
 | `mnamer-daemon-watch-lifecycle` | not run |  | | | |
 | `mobly-grouped-test-barriers` | not run |  | | | |
 | `narwhals-rolling-window-suite` | not run |  | | | |
 | `numba-stencil-boundary-modes` | not run |  | | | |
-| `obsidian-linter-auto-table-of-contents` | not run |  | | | |
+| `obsidian-linter-auto-table-of-contents` | run | 9 | | | |
 | `obsidian-linter-link-format-conversion` | not run |  | | | |
 | `obsidian-linter-scoped-ignore-markers` | not run |  | | | |
-| `ofetch-per-origin-circuit-breaker` | not run |  | | | |
-| `onedump-dump-encryption-pipeline` | not run |  | | | |
-| `opa-rego-rule-profiling` | not run |  | | | |
+| `ofetch-per-origin-circuit-breaker` | run | 9 | | | |
+| `onedump-dump-encryption-pipeline` | run | 9 | | | |
+| `opa-rego-rule-profiling` | run | 9 | | | |
 | `opa-template-string-reconstruction` | not run |  | | | |
 | `optique-conditional-option-dependencies` | not run |  | | | |
 | `oxvg-structural-selector-preservation` | not run |  | | | |
-| `participle-grammar-conflict-analysis` | not run |  | | | |
+| `participle-grammar-conflict-analysis` | run | 9 | | | |
 | `pebble-durability-wait-apis` | not run |  | | | |
-| `pest-character-class-coalescing` | not run |  | | | |
+| `pest-character-class-coalescing` | run | 9 | | | |
 | `prometheus-transactional-reload-status` | not run |  | | | |
 | `prometheus-typed-label-sorting` | not run |  | | | |
-| `psd-tools-blend-range-api` | not run |  | | | |
+| `psd-tools-blend-range-api` | run | 9 | | | |
 | `pwntools-tube-multiplexing` | not run |  | | | |
 | `python-statemachine-state-data-scoping` | not run |  | | | |
-| `query-persist-restored-query-state` | not run |  | | | |
+| `query-persist-restored-query-state` | run | 9 | | | |
 | `quill-shared-toolbar-focus` | not run |  | | | |
 | `returns-validated-error-accumulation` | not run |  | | | |
 | `scc-bounded-memory-spilling` | not run |  | | | |
@@ -115,28 +115,28 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 | `skrub-duration-encoding` | not run |  | | | |
 | `sql-formatter-bigquery-pipe-formatting` | not run |  | | | |
 | `sqlfmt-create-table-ddl-formatting` | not run |  | | | |
-| `sqlite-utils-safe-import-checkpoints` | not run |  | | | |
-| `superjson-error-stack-serialization` | not run |  | | | |
-| `task-task-graph-export` | not run |  | | | |
+| `sqlite-utils-safe-import-checkpoints` | run | 9 | | | |
+| `superjson-error-stack-serialization` | run | 9 | | | |
+| `task-task-graph-export` | run | 9 | | | |
 | `tengo-callable-instance-isolation` | not run |  | | | |
-| `tengo-destructuring-bindings` | not run |  | | | |
-| `termenv-preserve-ansi-resets` | not run |  | | | |
+| `tengo-destructuring-bindings` | run | 9 | | | |
+| `termenv-preserve-ansi-resets` | run | 9 | | | |
 | `testem-bail-on-test-failure` | not run |  | | | |
 | `testem-per-launcher-reports` | not run |  | | | |
 | `textual-kitty-key-phases` | not run |  | | | |
-| `textual-richlog-follow-state` | not run |  | | | |
-| `tomlkit-toml-table-converters` | not run |  | | | |
+| `textual-richlog-follow-state` | run | 9 | | | |
+| `tomlkit-toml-table-converters` | run | 9 | | | |
 | `true-myth-iterable-collection-combinators` | not run |  | | | |
 | `ts-pattern-match-each` | not run |  | | | |
-| `updo-policy-alerting` | not run |  | | | |
+| `updo-policy-alerting` | run | 9 | | | |
 | `valibot-recursive-schema-composition` | not run |  | | | |
 | `vitest-duration-sharding` | not run |  | | | |
-| `vulture-persistent-analysis-cache` | not run |  | | | |
+| `vulture-persistent-analysis-cache` | run | 9 | | | |
 | `wasmi-trap-coredumps` | not run |  | | | |
 | `wazero-multi-module-snapshots` | not run |  | | | |
 | `yaegi-go-embed-directives` | not run |  | | | |
 | `yjs-map-conflict-detection` | not run |  | | | |
-| `ytt-jsonpath-query-api` | not run |  | | | |
+| `ytt-jsonpath-query-api` | run | 9 | | | |
 
 ## LoLBench
 

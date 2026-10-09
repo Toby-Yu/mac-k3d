@@ -44,7 +44,7 @@ COVERAGE_SECTIONS = {"deepswe": "## DeepSWE", "lolbench": "## LoLBench", "sweben
 
 HEADER = f"""# Question run log
 
-One row per question per eval run, newest first. `mac-k3d eval record --job <job> --build <n>` adds a Jenkins build; every `mac-k3d eval --local` run adds itself when it ends, passed or failed. Coverage per question (which ones ever ran) stays in [question-coverage.md](question-coverage.md).
+One row per question per eval run, newest first. `mac-k3d eval record --job <job> --build <n>` adds a Jenkins build. On `some_task` or `full_suite_task` that build is the dispatcher: the merged report's `run_id` is `<job>-<n>`, and every question in it is recorded. A `one_task` report is `jenkins-<n>`. Every `mac-k3d eval --local` run adds itself when it ends, passed or failed. Coverage per question (which ones ever ran) stays in [question-coverage.md](question-coverage.md).
 
 Only **fix** is yours: write what you changed or found. Re-recording a run rewrites the other cells and keeps **fix**. Problem text is masked for keys and tokens and cut to {MAX_TEXT} characters; open the build's console or `summary.md` for the rest.
 
@@ -146,7 +146,23 @@ def console_facts(text: str) -> dict:
     return facts
 
 
-def load_artifact(path: Path | None, build: str) -> tuple[dict | None, str]:
+def job_of_run(run: str) -> str:
+    """`deepswe_some_task #9` -> `deepswe_some_task`. Empty when the label has no job."""
+    head = str(run or "").split("#", 1)[0].strip()
+    return head
+
+
+def artifact_matches_build(run_id: str, build: str, job: str = "") -> bool:
+    """A one_task report is `jenkins-<build>`. A some/full merge is `<job>-<build>`."""
+    number = str(build).strip()
+    if not number:
+        return False
+    if run_id in {number, f"jenkins-{number}"}:
+        return True
+    return bool(job) and run_id == f"{job}-{number}"
+
+
+def load_artifact(path: Path | None, build: str, job: str = "") -> tuple[dict | None, str]:
     """(artifact or None, why it was not used)."""
     if path is None or not path.is_file():
         return None, ""
@@ -158,7 +174,7 @@ def load_artifact(path: Path | None, build: str) -> tuple[dict | None, str]:
         return None, "artifact.json is not an object"
     run_id = str(doc.get("run_id") or "")
     if build:
-        if run_id not in {str(build), f"jenkins-{build}"}:
+        if not artifact_matches_build(run_id, build, job):
             return None, f"artifact.json is from run {run_id or '?'}, not build {build}; ignored"
     elif not run_id.startswith("local"):
         return None, f"artifact.json is from Jenkins build {run_id or '?'}, not a local run; ignored"
@@ -234,7 +250,9 @@ def rows_for_run(args: argparse.Namespace) -> tuple[list[dict], list[str]]:
         console = Path(args.console).read_text(encoding="utf-8", errors="replace")
     facts = console_facts(console)
     result = args.result or facts["result"]
-    artifact, why = load_artifact(Path(args.artifact) if args.artifact else None, args.build)
+    artifact, why = load_artifact(
+        Path(args.artifact) if args.artifact else None, args.build, job_of_run(args.run)
+    )
     if why:
         notes.append(why)
     error = run_error(facts) if build_failed(result) or not artifact else ""
