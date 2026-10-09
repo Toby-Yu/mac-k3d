@@ -37,6 +37,7 @@ from render_report import (  # noqa: E402
     build_artifact,
     container_mem_peak,
     eval_model_label,
+    icode_identity,
     read_skipped_tasks,
     write_report,
 )
@@ -161,7 +162,7 @@ def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
         "worker": protocol.get("worker") if isinstance(protocol.get("worker"), dict) else {},
         "resources": protocol.get("resources") if isinstance(protocol.get("resources"), dict) else {},
         "model_params": protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {},
-        "icode_version": icode.get("version") or None,
+        "icode_version": icode_identity(icode) or None,
     }
     probe = egress_probe_of(protocol)
     if probe is not None:

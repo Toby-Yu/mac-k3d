@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 
@@ -292,15 +291,11 @@ def _limit(value) -> int | None:
     return int(text) if text.isdigit() and int(text) > 0 else None
 
 
-def _icode_version_from_path(bin_path: str) -> str:
-    match = re.search(r"full-v([0-9][^/\\]*)", bin_path or "")
-    if not match:
-        return Path(bin_path).name if bin_path else ""
-    version = match.group(1)
-    for suffix in (".tar.gz", ".tgz", ".tar"):
-        if version.endswith(suffix):
-            version = version[: -len(suffix)]
-    return f"v{version}"
+def _recorded_icode_mode() -> str:
+    mode = (os.environ.get("ICODE_MODE") or "").strip().lower()
+    if mode == "binary":
+        return "release"
+    return mode
 
 
 def build_eval_protocol(
@@ -334,6 +329,15 @@ def build_eval_protocol(
                 "filename": str(release_raw.get("filename") or ""),
                 "sha256": str(release_raw.get("sha256") or ""),
             }
+    mode = _recorded_icode_mode()
+    # Both files means a previous run's record survived. The mode picks one.
+    # A single file is this run's record, including when report.sh defaulted
+    # ICODE_MODE to binary before this function ran.
+    if git_doc is not None and release_doc is not None:
+        if mode == "release":
+            git_doc = None
+        else:
+            release_doc = None
     effort = str(
         inputs.get("reasoning_effort")
         or os.environ.get("ICODE_REASONING_EFFORT")
@@ -345,7 +349,6 @@ def build_eval_protocol(
     if git_doc:
         icode = {
             "mode": "git",
-            "version": str(git_doc.get("sha") or ""),
             "bin_path": bin_path,
             "source": f"{git_doc.get('url') or ''}@{git_doc.get('ref') or ''}",
             "git": {
@@ -358,14 +361,12 @@ def build_eval_protocol(
         }
     else:
         icode = {
-            "mode": os.environ.get("ICODE_MODE") or "release",
-            "version": (release_doc or {}).get("sha256") or _icode_version_from_path(bin_path),
+            "mode": mode or "release",
             "bin_path": bin_path,
             "source": bin_path,
         }
-    if release_doc:
-        icode["release"] = release_doc
-        icode["version"] = release_doc["sha256"]
+        if release_doc:
+            icode["release"] = release_doc
     cpu_lock = inputs.get("cpu_lock_qty")
     if not isinstance(cpu_lock, int) or isinstance(cpu_lock, bool):
         raw_lock = os.environ.get("CPU_LOCK_QTY") or ""
@@ -646,6 +647,19 @@ def _empty_patch_markdown(items: list) -> list[str]:
     return lines
 
 
+def icode_identity(icode: dict | None) -> str:
+    """The commit or release sha256 this run graded. Empty when this run recorded neither."""
+    if not isinstance(icode, dict):
+        return ""
+    git = icode.get("git") if isinstance(icode.get("git"), dict) else {}
+    release = icode.get("release") if isinstance(icode.get("release"), dict) else {}
+    if icode.get("mode") == "release":
+        return str(release.get("sha256") or "")
+    if git.get("sha"):
+        return str(git.get("sha") or "")
+    return str(release.get("sha256") or "")
+
+
 def icode_under_test(protocol: dict | None) -> str:
     """One line naming the iCode this run actually graded: git SHA or release sha256."""
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
@@ -653,7 +667,7 @@ def icode_under_test(protocol: dict | None) -> str:
     if icode.get("mode") != "release" and (git.get("sha") or icode.get("mode") == "git"):
         kind = git.get("kind") or "-"
         ref = git.get("ref") or "-"
-        sha = git.get("sha") or icode.get("version") or "-"
+        sha = git.get("sha") or "-"
         subject = str(git.get("subject") or "").strip()
         line = f"git {kind} {ref} -> {sha}"
         if subject:
@@ -661,7 +675,7 @@ def icode_under_test(protocol: dict | None) -> str:
         return line
     release = icode.get("release") if isinstance(icode.get("release"), dict) else {}
     name = release.get("filename") or "-"
-    digest = release.get("sha256") or icode.get("version") or "-"
+    digest = release.get("sha256") or "-"
     return f"release {name} sha256 {digest}"
 
 
@@ -684,7 +698,6 @@ def summary_markdown(doc: dict) -> str:
         resources = protocol.get("resources") if isinstance(protocol.get("resources"), dict) else {}
         thinking = params.get("thinking") if isinstance(params.get("thinking"), dict) else {}
         lines.append(f"- iCode mode: `{icode.get('mode') or '-'}`")
-        lines.append(f"- iCode version: `{icode.get('version') or '-'}`")
         lines.append(f"- iCode source: `{icode.get('source') or '-'}`")
         lines.append(f"- iCode under test: `{icode_under_test(protocol)}`")
         lines.append(

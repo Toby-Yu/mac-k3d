@@ -16,6 +16,8 @@ rm -f "$WORKDIR/eval_protocol_inputs.json" "$WORKDIR/eval_resources.json" "$WORK
   "$WORKDIR/trial_network.json" \
   "$WORKDIR/selected_tasks.txt" "$WORKDIR/selected_tasks_offset.txt" "$WORKDIR/suite_tasks.txt" \
   "$WORKDIR/skipped_tasks.txt" "$HARNESS_DIR/container_mem.jsonl" \
+  "$WORKDIR/icode_git.json" "$WORKDIR/icode_release.json" \
+  "$WORKDIR/icode_bin_path.txt" "$WORKDIR/icode_host_root.txt" \
   "$HARNESS_DIR/anticheat/summary.json" "$HARNESS_DIR/anticheat/report.md" "$HARNESS_DIR/anticheat/anticheat.jsonl"
 
 progress 0 "env: checking this worker (benchmark=$BENCHMARK n=$N_TASKS harness=$HARNESS llm=$LLM)"

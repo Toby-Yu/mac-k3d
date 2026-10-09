@@ -136,6 +136,29 @@ rm -f "$KIND_TMP/c-clean/extra.txt"
 printf '%s\n' '#!/bin/sh' >"$KIND_TMP/c-clean/icode"
 icode_assert_clean_checkout "$KIND_TMP/c-clean"
 ok "porcelain allows only the icode launcher"
+resolve_kind() {
+  ICODE_GIT_URL="$ORIGIN" ICODE_GIT_REF="$1" ICODE_GIT_REF_KIND="$2" \
+    MAC_K3D_ICODE_GIT_ALLOW_FILE=1 bash "$IN" --resolve-sha
+}
+[ "$(resolve_kind feature branch)" = "$FEAT_SHA" ] || fail "resolve-sha branch"
+[ "$(resolve_kind v9.9.9 tag)" = "$BASE_SHA" ] || fail "resolve-sha tag"
+[ "$(resolve_kind "$FEAT_SHA" commit)" = "$FEAT_SHA" ] || fail "resolve-sha commit"
+[ "$(resolve_kind 7 pr)" = "$FEAT_SHA" ] || fail "resolve-sha pr"
+git -C "$ORIGIN" checkout -q feature
+echo c >>"$ORIGIN/f"
+git -C "$ORIGIN" commit -q -am later
+MOVED="$(git -C "$ORIGIN" rev-parse HEAD)"
+git -C "$ORIGIN" checkout -q main
+[ "$(resolve_kind feature branch)" = "$MOVED" ] || fail "resolve-sha follows a moved branch"
+WORKDIR="$KIND_TMP/pinwork"
+mkdir -p "$WORKDIR"
+ICODE_GIT_SHA="$FEAT_SHA" icode_checkout_requested "$KIND_TMP/c-pin" "$ORIGIN" feature branch
+[ "$(git -C "$KIND_TMP/c-pin" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "ICODE_GIT_SHA checkout stayed on the pin"
+icode_record_git_meta "$KIND_TMP/c-pin" "https://gitcode.com/org/icode.git" branch feature
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["kind"]=="branch" and d["ref"]=="feature" and d["sha"]==sys.argv[2]' \
+  "$WORKDIR/icode_git.json" "$FEAT_SHA" || fail "pinned checkout records the form and the pinned sha"
+unset ICODE_GIT_SHA
+ok "resolve-sha branch/tag/commit/pr; a later branch move does not change a pinned checkout"
 unset MAC_K3D_ICODE_GIT_ALLOW_FILE
 
 PTH_TREE="$KIND_TMP/pth-tree"

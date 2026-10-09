@@ -11,8 +11,8 @@ ICODE_MODE="$(icode_normalize_mode)"
 export ICODE_MODE
 echo "icode: resolving iCode ($ICODE_MODE)"
 
-# Do not reuse git identity from an earlier git-mode run in this WORKDIR.
-rm -f "$WORKDIR/icode_git.json"
+# A reused workspace must not carry the previous run's iCode identity.
+rm -f "$WORKDIR/icode_git.json" "$WORKDIR/icode_release.json"
 
 ICODE_BIN=""
 case "$ICODE_MODE" in

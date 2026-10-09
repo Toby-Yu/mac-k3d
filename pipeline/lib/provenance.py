@@ -917,7 +917,7 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
         lines.append(f"- {line}")
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
     release = icode.get("release") if isinstance(icode.get("release"), dict) else None
-    if release and str(release.get("sha256") or ""):
+    if icode.get("mode") == "release" and release and str(release.get("sha256") or ""):
         lines.append(
             f"- iCode release: `{_cell(release.get('filename'))}` `{_cell(release.get('sha256'))}`"
         )

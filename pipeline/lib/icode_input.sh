@@ -670,10 +670,54 @@ icode_uv_sync() {
   die "uv sync failed in ${dest}"
 }
 
+icode_begin_git_auth() {
+  local url="$1" host token
+  host="${url#https://}"
+  host="${host%%/*}"
+  host="${host%%:*}"
+  export GIT_TERMINAL_PROMPT=0
+  export GIT_CONFIG_NOSYSTEM=1
+  token="$(icode_resolve_git_token "$host")"
+  export MAC_K3D_GIT_USERNAME="$(icode_git_username_for_host "$host")"
+  if [ -n "$token" ]; then
+    export MAC_K3D_GIT_TOKEN="$token"
+    GIT_ASKPASS="$(icode_write_askpass)"
+    export GIT_ASKPASS
+  fi
+}
+
+icode_end_git_auth() {
+  unset MAC_K3D_GIT_TOKEN GIT_ASKPASS || true
+}
+
+# Fetch the form's ref, or ICODE_GIT_SHA when a dispatcher pinned one commit.
+icode_checkout_requested() {
+  local dest="$1" url="$2" ref="$3" kind="$4" pin head want
+  pin="${ICODE_GIT_SHA:-}"
+  if [ -n "$pin" ]; then
+    icode_looks_like_commit "$pin" || die "ICODE_GIT_SHA must be a git SHA (7–40 hex chars), not '${pin}'."
+    icode_git_checkout "$dest" "$url" "$pin" commit
+    head="$(git -C "$dest" rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+    want="$(printf '%s' "$pin" | tr '[:upper:]' '[:lower:]')"
+    [ "$head" = "$want" ] || die "ICODE_GIT_SHA=$want but checkout HEAD is $head"
+  else
+    icode_git_checkout "$dest" "$url" "$ref" "$kind"
+  fi
+}
+
+# Print the commit the form names. Stdout is only the SHA; checkout chatter goes to stderr.
+icode_resolve_sha_into() {
+  local dest="$1" url="$2" ref="$3" kind="$4"
+  icode_git_checkout "$dest" "$url" "$ref" "$kind" >&2
+  git -C "$dest" rev-parse HEAD
+}
+
 # Clone allow-listed URL at tag/commit/branch, uv sync, wrapper. Prints ICODE_BIN path.
 # Tests: MAC_K3D_ICODE_FETCH_DIR skips clone (must already contain .venv/bin/icode or pyproject).
 get_bin_icode() {
-  local dest="$WORKDIR/icode-src" url ref host token kind
+  local dest="$WORKDIR/icode-src" url ref kind host token
+  host=""
+  token=""
   if [ -n "${MAC_K3D_ICODE_FETCH_DIR:-}" ]; then
     [ -d "$MAC_K3D_ICODE_FETCH_DIR" ] || die "MAC_K3D_ICODE_FETCH_DIR is not a directory"
     dest="$(cd "$MAC_K3D_ICODE_FETCH_DIR" && pwd)"
@@ -688,18 +732,11 @@ get_bin_icode() {
     host="${url#https://}"
     host="${host%%/*}"
     host="${host%%:*}"
-    mkdir -p "$(dirname "$dest")"
-    export GIT_TERMINAL_PROMPT=0
-    export GIT_CONFIG_NOSYSTEM=1
     token="$(icode_resolve_git_token "$host")"
-    export MAC_K3D_GIT_USERNAME="$(icode_git_username_for_host "$host")"
-    if [ -n "$token" ]; then
-      export MAC_K3D_GIT_TOKEN="$token"
-      GIT_ASKPASS="$(icode_write_askpass)"
-      export GIT_ASKPASS
-    fi
-    icode_git_checkout "$dest" "$url" "$ref" "$kind"
-    unset MAC_K3D_GIT_TOKEN GIT_ASKPASS || true
+    mkdir -p "$(dirname "$dest")"
+    icode_begin_git_auth "$url"
+    icode_checkout_requested "$dest" "$url" "$ref" "$kind"
+    icode_end_git_auth
     icode_record_git_meta "$dest" "$url" "$kind" "$ref"
   fi
   [ -d "$dest" ] || die "icode git checkout missing: $dest"
@@ -746,8 +783,32 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
       icode_force_rm "${2:-}"
       echo OK
       ;;
+    --resolve-sha)
+      url="${ICODE_GIT_URL:-}"
+      ref="${ICODE_GIT_REF:-main}"
+      [ -n "$ref" ] || ref=main
+      if [ "${MAC_K3D_ICODE_GIT_ALLOW_FILE:-}" = 1 ] && [ -d "$url" ]; then
+        :
+      else
+        icode_validate_git_url "$url"
+      fi
+      icode_validate_git_ref "$ref"
+      kind="$(icode_normalize_ref_kind "${ICODE_GIT_REF_KIND:-auto}" "$ref")"
+      icode_validate_ref_for_kind "$kind" "$ref"
+      if [ "${MAC_K3D_ICODE_GIT_ALLOW_FILE:-}" != 1 ] || [ ! -d "$url" ]; then
+        icode_begin_git_auth "$url"
+      fi
+      dest="$(mktemp -d)"
+      trap 'icode_end_git_auth; icode_force_rm "$dest"' EXIT
+      sha="$(icode_resolve_sha_into "$dest" "$url" "$ref" "$kind")"
+      trap - EXIT
+      icode_end_git_auth
+      icode_force_rm "$dest"
+      [ -n "$sha" ] || die "could not resolve the iCode git ref"
+      printf '%s\n' "$sha"
+      ;;
     *)
-      echo "usage: icode_input.sh --validate-url URL | --validate-ref REF | --normalize-mode | --token-env-for-host HOST | --normalize-ref-kind KIND [REF] | --validate-ref-kind KIND REF | --force-rm PATH" >&2
+      echo "usage: icode_input.sh --validate-url URL | --validate-ref REF | --normalize-mode | --token-env-for-host HOST | --normalize-ref-kind KIND [REF] | --validate-ref-kind KIND REF | --force-rm PATH | --resolve-sha" >&2
       exit 2
       ;;
   esac

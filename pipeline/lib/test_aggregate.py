@@ -415,7 +415,10 @@ class CliTests(unittest.TestCase):
             report = shard / "output" / "deepswe" / "101-20261007T000000Z"
             report.mkdir(parents=True)
             own = {
-                "icode": {"mode": "git", "version": "eea9d66"},
+                "icode": {
+                    "mode": "git",
+                    "git": {"kind": "pr", "ref": "2", "sha": "eea9d66", "subject": "pin"},
+                },
                 "model_params": {"model": "deepseek-flash", "provider": "DeepSeek", "max_tokens": 65536},
                 "resources": {"concurrency": 2, "cpus_each": 2},
                 "worker": {"node": "mac-cloud"},
@@ -426,9 +429,12 @@ class CliTests(unittest.TestCase):
             out = root / "aggregate"
             self.assertEqual(self.run_main(root, out, rollouts=1), 0)
             doc = json.loads((out / "artifact.json").read_text(encoding="utf-8"))
-            self.assertEqual(doc["eval_protocol"]["icode"]["version"], "eea9d66")
+            summary = (out / "summary.md").read_text(encoding="utf-8")
+            self.assertNotIn("version", doc["eval_protocol"]["icode"])
+            self.assertEqual(doc["eval_protocol"]["icode"]["git"]["sha"], "eea9d66")
             self.assertEqual(doc["eval_protocol"]["shards"][0]["icode_version"], "eea9d66")
-            self.assertIn("- iCode version: `eea9d66`", (out / "summary.md").read_text(encoding="utf-8"))
+            self.assertNotIn("iCode version", summary)
+            self.assertIn("- iCode under test: `git pr 2 -> eea9d66 (pin)`", summary)
 
 
 SHARD_URL = "http://jenkins:8080/job/deepswe_one_task/{build}/"

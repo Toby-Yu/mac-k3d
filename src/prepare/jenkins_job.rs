@@ -18,6 +18,7 @@ const DESC_DISPATCH_ICODE_GIT_URL: &str = "iCode git URL (https on github.com or
 const DESC_TASKS: &str = "Comma-separated question ids. This field wins over N_TASKS. Example: ruff_1,fastapi_1. Leave empty to run the first N_TASKS sorted ids.";
 const DESC_ICODE_RELEASE_FROM: &str = "Set by some_task or full_suite_task: job#build that archived the uploaded iCode release. Empty on a direct build.";
 const DESC_ICODE_RELEASE_SHA256: &str = "Set with ICODE_RELEASE_FROM: sha256 of that release. The shard stops if the copied file differs.";
+const DESC_ICODE_GIT_SHA: &str = "Set by some_task or full_suite_task: the commit every shard checks out. Empty on a direct build, which resolves the git form itself.";
 const DESC_SHARD_SIZE: &str = "Questions per shard. All shards are queued at once and each worker takes the next one when it finishes, so a faster worker runs more of them. There is always at least one shard per online worker.";
 const DESC_RUN_GROUP: &str = "Set by some_task or full_suite_task on a shard build: ties the shards of one run together. Empty on a direct build.";
 const DESC_SHARD: &str = "Set by some_task or full_suite_task on a shard build: which shard this is. Shown as the build description.";
@@ -782,6 +783,7 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             p.push(text_param("REQUESTED_BY", "", DESC_REQUESTED_BY, Never));
             p.push(text_param("ICODE_RELEASE_FROM", "", DESC_ICODE_RELEASE_FROM, Never));
             p.push(text_param("ICODE_RELEASE_SHA256", "", DESC_ICODE_RELEASE_SHA256, Never));
+            p.push(text_param("ICODE_GIT_SHA", "", DESC_ICODE_GIT_SHA, Never));
         }
         JobShape::Some_ => {}
         JobShape::FullSuite => {
@@ -1202,6 +1204,38 @@ cp "${WORKSPACE}/ICODE_RELEASE_FILE" "${WORKSPACE}/icode-release/ICODE_RELEASE_F
     }
 
 "#;
+    let (pin_cred_open, pin_cred_close) = with_credentials_block(&opts.credential_ids);
+    let pin_stage = r#"    stage('Pin iCode') {
+      when { expression { params.ICODE_MODE == 'git' } }
+      agent { label "${params.AGENT_LABEL}" }
+      steps {
+__CRED_OPEN__        script {
+          def sha = sh(returnStdout: true, script: '''#!/bin/bash
+set -euo pipefail
+export PATH="${HOME}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${PATH}"
+command -v mac-k3d >/dev/null || { echo "mac-k3d is not on PATH on ${NODE_NAME:-this worker}. Run scripts/redeploy.sh." >&2; exit 1; }
+export MAC_K3D_ROOT="${WORKSPACE}/mac-k3d-pin"
+rm -rf "$MAC_K3D_ROOT"
+mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean >&2
+export ICODE_GIT_URL="${ICODE_GIT_URL:-}"
+export ICODE_GIT_REF="${ICODE_GIT_REF:-}"
+export ICODE_GIT_REF_KIND="${ICODE_GIT_REF_KIND:-}"
+export GIT_TERMINAL_PROMPT=0
+sha="$(bash "$MAC_K3D_ROOT/pipeline/lib/icode_input.sh" --resolve-sha)"
+printf '%s\n' "$sha"
+''').trim()
+          if (!sha) {
+            error "could not resolve the iCode git ref"
+          }
+          env.ICODE_GIT_SHA = sha
+          echo "iCode under test: git ${params.ICODE_GIT_REF_KIND} ${params.ICODE_GIT_REF} -> ${sha} (pinned for every shard)"
+        }
+__CRED_CLOSE__      }
+    }
+
+"#
+    .replace("__CRED_OPEN__", &pin_cred_open)
+    .replace("__CRED_CLOSE__", &pin_cred_close);
     format!(
         r#"pipeline {{
   agent none
@@ -1216,7 +1250,7 @@ cp "${WORKSPACE}/ICODE_RELEASE_FILE" "${WORKSPACE}/icode-release/ICODE_RELEASE_F
   }}
 
   stages {{
-{release_stage}    stage('Shards') {{
+{release_stage}{pin_stage}    stage('Shards') {{
       steps {{
         script {{
           {display_name}
@@ -1286,6 +1320,7 @@ cp "${WORKSPACE}/ICODE_RELEASE_FILE" "${WORKSPACE}/icode-release/ICODE_RELEASE_F
                   string(name: 'REQUESTED_BY', value: env.BUILD_USER ?: ''),
                   string(name: 'ICODE_RELEASE_FROM', value: params.ICODE_MODE == 'release' ? "${{env.JOB_NAME}}#${{env.BUILD_NUMBER}}" : ''),
                   string(name: 'ICODE_RELEASE_SHA256', value: env.ICODE_RELEASE_SHA256 ?: ''),
+                  string(name: 'ICODE_GIT_SHA', value: env.ICODE_GIT_SHA ?: ''),
                 ]
               def run = build job: '{shard_job}', wait: true, propagate: false, parameters: shardParams
               // A shard sets HARBOR_STARTED once its Harbor job dir exists. One that
@@ -1461,6 +1496,7 @@ fi
 export ICODE_GIT_URL="${{ICODE_GIT_URL:-}}"
 export ICODE_GIT_REF="${{ICODE_GIT_REF:-main}}"
 export ICODE_GIT_REF_KIND="${{ICODE_GIT_REF_KIND:-branch}}"
+export ICODE_GIT_SHA="${{ICODE_GIT_SHA:-}}"
 export HARBOR_VERSION="${{HARBOR_VERSION:-{harbor_fb}}}"
 export DEEPSWE_REF="${{DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea}}"
 export LOLBENCH_REF="${{LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75}}"
@@ -1931,6 +1967,8 @@ mod tests {
         assert!(jf.contains("DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea"));
         assert!(jf.contains("LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75"));
         assert!(jf.contains("ICODE_RELEASE_SHA256:-"));
+        assert!(jf.contains("ICODE_GIT_SHA:-"));
+        assert!(!jf.contains("stage('Pin iCode')"));
         assert!(!jf.contains("OFFICIAL"));
         assert!(!jf.contains("CANARY"));
         assert!(!jf.contains("ICODE_EXPECT_SHA"));
@@ -2236,6 +2274,11 @@ mod tests {
         assert!(jf.contains("string(name: 'SHARD', value: note)"));
         assert!(jf.contains("string(name: 'ICODE_MODE', value: params.ICODE_MODE)"));
         assert!(jf.contains("stage('iCode release')"));
+        assert!(jf.contains("stage('Pin iCode')"));
+        assert!(jf.contains("params.ICODE_MODE == 'git'"));
+        assert!(jf.contains("--resolve-sha"));
+        assert!(jf.contains("pinned for every shard"));
+        assert!(jf.contains("string(name: 'ICODE_GIT_SHA', value: env.ICODE_GIT_SHA ?: '')"));
         assert!(jf.contains("archiveArtifacts artifacts: 'icode-release/ICODE_RELEASE_FILE'"));
         assert!(!jf.contains("sha256.txt"));
         assert!(jf.contains("archive/icode-release"));
@@ -2339,6 +2382,9 @@ mod tests {
         assert!(jf.contains("if (shards < workers) { shards = workers }"));
         assert!(jf.contains("hidden(name: 'N_TASKS', defaultValue: '113'"));
         assert!(jf.contains("stage('Aggregate')"));
+        assert!(jf.contains("stage('Pin iCode')"));
+        assert!(jf.contains("--resolve-sha"));
+        assert!(jf.contains("string(name: 'ICODE_GIT_SHA', value: env.ICODE_GIT_SHA ?: '')"));
         assert!(!jf.contains("eval_aggregate"));
         assert!(!jf.contains("SHARDS"));
 
@@ -2397,7 +2443,7 @@ mod tests {
     fn job_params_mark_shard_plumbing_and_developer_fields() {
         let one = job_params("deepswe", JobShape::One);
         let get = |ps: &[JobParam], n: &str| ps.iter().find(|p| p.name == n).cloned().expect(n);
-        for n in ["TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD", "REQUESTED_BY", "ICODE_RELEASE_FROM", "ICODE_RELEASE_SHA256"] {
+        for n in ["TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD", "REQUESTED_BY", "ICODE_RELEASE_FROM", "ICODE_RELEASE_SHA256", "ICODE_GIT_SHA"] {
             assert!(!get(&one, n).settable, "{n}");
         }
         assert!(get(&one, "TASK").settable && !get(&one, "TASK").developer);

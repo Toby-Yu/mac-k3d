@@ -496,14 +496,11 @@ def report_html(doc: dict) -> str:
         clauses.append(f"API {api_base}.")
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
     if protocol:
-        icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
         params = protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {}
         thinking = params.get("thinking") if isinstance(params.get("thinking"), dict) else {}
         from render_report import icode_under_test
 
-        version = icode.get("version") or "-"
         clauses.append(
-            f"iCode {icode.get('mode') or '-'} {version}. "
             f"iCode under test: {icode_under_test(protocol)}. "
             f"Provider {params.get('provider') or '-'}. "
             f"reasoning_effort {params.get('reasoning_effort') or '-'}. "

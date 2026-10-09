@@ -144,6 +144,20 @@ assert_icode_ok "$W8" "$SHARE" "$TARBALL"
 [ ! -f "$W8/icode_git.json" ] || fail "release mode left stale icode_git.json"
 ok "release mode drops leftover icode_git.json"
 
+# 8b. Git mode must not keep a previous release-mode icode_release.json
+W8B="$TMP/w8b"
+mkdir -p "$W8B"
+printf '%s\n' '{"filename":"ICODE_RELEASE_FILE","sha256":"abc"}' >"$W8B/icode_release.json"
+env \
+  MAC_K3D_EVAL_WORKDIR="$W8B" \
+  MAC_K3D_SHARE="$SHARE" \
+  ICODE_MODE=git \
+  MAC_K3D_ICODE_FETCH_DIR="$FETCH" \
+  ICODE_RELEASE="" \
+  bash "$STAGES/tasks/icode.sh" >/dev/null
+[ ! -f "$W8B/icode_release.json" ] || fail "git mode left stale icode_release.json"
+ok "git mode drops leftover icode_release.json"
+
 # 9. source mode is rejected (worker is not a developer checkout)
 W9="$TMP/w9"
 mkdir -p "$W9"

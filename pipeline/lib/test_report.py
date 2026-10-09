@@ -1943,7 +1943,8 @@ class EvalReportTests(unittest.TestCase):
                 concurrency=4,
                 cpus_each=2,
             )
-            self.assertEqual(protocol["icode"]["version"], "v0.1.44")
+            self.assertNotIn("version", protocol["icode"])
+            self.assertEqual(protocol["icode"]["bin_path"], "/opt/drops/icode-linux-x86_64-full-v0.1.44")
             self.assertEqual(protocol["model_params"]["provider"], "DeepSeek")
             self.assertEqual(protocol["model_params"]["reasoning_effort"], "high")
             self.assertEqual(protocol["model_params"]["thinking"]["type"], "enabled")
@@ -1952,6 +1953,62 @@ class EvalReportTests(unittest.TestCase):
             self.assertEqual(protocol["resources"]["concurrency"], 4)
             # Declared, not CPU_LOCK_QTY / slots.
             self.assertEqual(protocol["resources"]["cpus_each"], 2)
+
+    def test_git_mode_ignores_a_leftover_release_record(self):
+        from render_report import build_eval_protocol, icode_under_test, summary_markdown
+        from report_html import report_html
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "icode_git.json").write_text(
+                json.dumps(
+                    {
+                        "url": "https://gitcode.com/michaelling/jiuwenicode",
+                        "kind": "pr",
+                        "ref": "2",
+                        "sha": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
+                        "subject": "pin",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (work / "icode_release.json").write_text(
+                json.dumps({"filename": "ICODE_RELEASE_FILE", "sha256": "abc123"}) + "\n",
+                encoding="utf-8",
+            )
+            old = os.environ.get("ICODE_MODE")
+            os.environ["ICODE_MODE"] = "git"
+            try:
+                protocol = build_eval_protocol(
+                    workdir=work,
+                    model="deepseek-flash",
+                    api_base="https://api.deepseek.com/v1",
+                    n_rollouts=1,
+                    concurrency=1,
+                    cpus_each=1,
+                )
+            finally:
+                if old is None:
+                    os.environ.pop("ICODE_MODE", None)
+                else:
+                    os.environ["ICODE_MODE"] = old
+            self.assertNotIn("version", protocol["icode"])
+            self.assertNotIn("release", protocol["icode"])
+            self.assertEqual(protocol["icode"]["git"]["sha"], "eea9d66dd00f137c3400b79c1c8574d8ae7debd1")
+            doc = {"suite": "deepswe", "eval_protocol": protocol, "icode": {"tasks": []}}
+            text = summary_markdown(doc)
+            page = report_html(doc)
+            self.assertIn("iCode under test", text)
+            self.assertIn("git pr 2 -> eea9d66dd00f137c3400b79c1c8574d8ae7debd1", text)
+            self.assertNotIn("iCode version", text)
+            self.assertNotIn("iCode release", text)
+            self.assertIn("iCode under test", page)
+            self.assertNotIn("iCode version", page)
+            self.assertEqual(
+                icode_under_test(protocol),
+                "git pr 2 -> eea9d66dd00f137c3400b79c1c8574d8ae7debd1 (pin)",
+            )
 
     def test_eval_protocol_keeps_a_float_cpu_count_whole(self):
         from render_report import build_eval_protocol
@@ -3256,6 +3313,10 @@ class ProvenanceTests(unittest.TestCase):
             doc["eval_protocol"] = protocol
             text = summary_markdown(doc)
             page = report_html(doc)
+            self.assertIn("- iCode under test:", text)
+            self.assertNotIn("iCode version", text)
+            self.assertIn("iCode under test:", page)
+            self.assertNotIn("iCode version", page)
             self.assertIn("Provenance", text)
             self.assertIn("0.22.0", text)
             self.assertIn("tomlhash", text)
@@ -3499,6 +3560,10 @@ class ProvenanceTests(unittest.TestCase):
                 work / "selected_tasks.txt",
                 work / "selected_tasks_offset.txt",
                 work / "suite_tasks.txt",
+                work / "icode_git.json",
+                work / "icode_release.json",
+                work / "icode_bin_path.txt",
+                work / "icode_host_root.txt",
                 anticheat / "summary.json",
                 anticheat / "report.md",
                 anticheat / "anticheat.jsonl",
