@@ -29,6 +29,7 @@ The latest result of each question that is not `pass`, with the newest fix note 
 | gql-incremental-graphql-delivery | deepswe | deepswe_some_task #9 (2026-10-08 10:02) | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | fail 0/4 (reward 0) | done | - | |
 | happy-dom-deterministic-intersectionobserver | deepswe | deepswe_some_task #9 (2026-10-08 10:02) | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | fail 0/4 (reward 0) | done | - | |
 | httpx-streaming-json-iteration | deepswe | deepswe_some_task #9 (2026-10-08 10:02) | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | fail 3/4 (reward 1) | done | - | |
+| kcp-go-multiplexed-kcp-streams | deepswe | deepswe_some_task #10 (2026-10-09 03:09) | mac-Michael-Ubuntu (docker 29.1.3) | fail 0/1 (reward 0) | done | - | |
 | kombu-virtual-queue-dead-lettering | deepswe | deepswe_some_task #9 (2026-10-08 10:02) | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | fail 2/4 (reward 1) | done | - | |
 | koota-deferred-mutation-buffer | deepswe | deepswe_some_task #9 (2026-10-08 10:02) | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | fail 1/4 (reward 1) | done | empty model.patch (1/4) | |
 | koota-entity-snapshot-rollback | deepswe | deepswe_some_task #9 (2026-10-08 10:02) | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | fail 2/4 (reward 1) | done | - | |
@@ -53,6 +54,11 @@ The latest result of each question that is not `pass`, with the newest fix note 
 
 | date (UTC) | run | worker | benchmark | question | result | stage | problem | fix |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-10-09 03:14 | deepswe_some_task #11 | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) · egress probe substituted | deepswe | obsidian-linter-scoped-ignore-markers | pass 1/1 | done | - | |
+| 2026-10-09 03:14 | deepswe_some_task #11 | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) · egress probe substituted | deepswe | pwntools-tube-multiplexing | pass 1/1 | done | - | |
+| 2026-10-09 03:09 | deepswe_some_task #10 | mac-Michael-Ubuntu (docker 29.1.3) | deepswe | igel-persist-feature-schema | pass 1/1 | done | - | |
+| 2026-10-09 03:09 | deepswe_some_task #10 | mac-Michael-Ubuntu (docker 29.1.3) | deepswe | kcp-go-multiplexed-kcp-streams | fail 0/1 (reward 0) | done | - | |
+| 2026-10-09 03:06 | deepswe_one_task #93 | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) · egress probe substituted | deepswe | abs-module-cache-flags | pass 1/1 | done | - | |
 | 2026-10-08 10:02 | deepswe_some_task #9 | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | deepswe | anko-typed-variable-bindings | fail 2/4 (reward 1) | done | - | |
 | 2026-10-08 10:02 | deepswe_some_task #9 | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | deepswe | awilix-async-container-initialization | fail 3/4 (reward 1) | done | - | |
 | 2026-10-08 10:02 | deepswe_some_task #9 | mac-iZt4ndd2dff7gqjta7mppaZ (docker 29.6.2) | deepswe | bandit-incremental-cache-control | fail 3/4 (reward 1) | done | - | |

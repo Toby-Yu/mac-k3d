@@ -20,11 +20,11 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 
 ## DeepSWE
 
-46 run, 67 not run, 113 task dirs.
+50 run, 63 not run, 113 task dirs.
 
 | question | status | builds | peak_gb | slots | memory_mb |
 |----------|--------|--------|---------|-------|-----------|
-| `abs-module-cache-flags` | run | 21, 22, 23, 24, 25, 27, 28, 29, 30, local | | | |
+| `abs-module-cache-flags` | run | 21, 22, 23, 24, 25, 27, 28, 29, 30, local, 93 | | | |
 | `abs-stepped-slices` | run | 23, 24, 25, 28, 29, 30 | | | |
 | `actionlint-action-pinning-lint` | run | 23, 24, 25, 28, 29, 30 | | | |
 | `adaptix-name-mapping-aliases` | run | 23, 24, 29, 30 | | | |
@@ -68,11 +68,11 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 | `httpx-deterministic-cookie-store` | not run |  | | | |
 | `httpx-multipart-response-parsing` | not run |  | | | |
 | `httpx-streaming-json-iteration` | run | 9 | | | |
-| `igel-persist-feature-schema` | not run |  | | | |
+| `igel-persist-feature-schema` | run | 10 | | | |
 | `ink-grid-box-layout` | not run |  | | | |
 | `ipython-session-bundle-replay` | run | 54 | | | |
 | `katex-multicolumn-array-spans` | not run |  | | | |
-| `kcp-go-multiplexed-kcp-streams` | not run |  | | | |
+| `kcp-go-multiplexed-kcp-streams` | run | 10 | | | |
 | `kea-atomic-signal-selectors` | not run |  | | | |
 | `kgateway-consistent-hash-policy` | not run |  | | | |
 | `kombu-single-active-consumer-priority` | not run |  | | | |
@@ -92,7 +92,7 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 | `numba-stencil-boundary-modes` | not run |  | | | |
 | `obsidian-linter-auto-table-of-contents` | run | 9 | | | |
 | `obsidian-linter-link-format-conversion` | not run |  | | | |
-| `obsidian-linter-scoped-ignore-markers` | not run |  | | | |
+| `obsidian-linter-scoped-ignore-markers` | run | 11 | | | |
 | `ofetch-per-origin-circuit-breaker` | run | 9 | | | |
 | `onedump-dump-encryption-pipeline` | run | 9 | | | |
 | `opa-rego-rule-profiling` | run | 9 | | | |
@@ -105,7 +105,7 @@ These three are not in jenkins-21 through jenkins-30. A build extracts its own c
 | `prometheus-transactional-reload-status` | not run |  | | | |
 | `prometheus-typed-label-sorting` | not run |  | | | |
 | `psd-tools-blend-range-api` | run | 9 | | | |
-| `pwntools-tube-multiplexing` | not run |  | | | |
+| `pwntools-tube-multiplexing` | run | 11 | | | |
 | `python-statemachine-state-data-scoping` | not run |  | | | |
 | `query-persist-restored-query-state` | run | 9 | | | |
 | `quill-shared-toolbar-focus` | not run |  | | | |
