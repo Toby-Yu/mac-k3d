@@ -226,16 +226,21 @@ ok "uv sync failure names the SSH-pinned dependency only when there is one"
 for bench in deepswe lolbench swebenchpro; do
   BENCHMARK="$bench" icode_sourceless_enabled || fail "sourceless must default on for $bench"
 done
-ICODE_SOURCELESS_STDLIB=yes-please icode_sourceless_enabled || fail "unrecognized ICODE_SOURCELESS_STDLIB must keep sourceless on"
-if OFFICIAL=0 ICODE_SOURCELESS_STDLIB=0 icode_sourceless_enabled; then
-  fail "ICODE_SOURCELESS_STDLIB=0 must turn sourceless off for a non-official run"
+ICODE_SOURCELESS_STDLIB=0 icode_sourceless_enabled || fail "ICODE_SOURCELESS_STDLIB=0 must not turn sourceless off"
+ICODE_SOURCELESS_STDLIB=off icode_sourceless_enabled || fail "ICODE_SOURCELESS_STDLIB=off must not turn sourceless off"
+ok "sourceless stdlib stays on for every benchmark"
+
+REL_TMP="$(mktemp -d)"
+printf 'drop' >"$REL_TMP/icode"
+HASH="$(python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$REL_TMP/icode")"
+WORKDIR="$REL_TMP" icode_record_release "$REL_TMP/icode" icode-drop
+grep -q "\"sha256\": \"$HASH\"" "$REL_TMP/icode_release.json" || fail "release json must record the file sha256"
+if ( WORKDIR="$REL_TMP" ICODE_RELEASE_SHA256="$(printf '0%.0s' {1..64})" icode_record_release "$REL_TMP/icode" icode-drop ); then
+  fail "expected ICODE_RELEASE_SHA256 mismatch to fail"
 fi
-if (OFFICIAL=1 ICODE_SOURCELESS_STDLIB=off icode_sourceless_enabled) 2>"$KIND_TMP/sourceless-official.err"; then
-  fail "OFFICIAL=1 must refuse ICODE_SOURCELESS_STDLIB=off"
-fi
-grep -q 'OFFICIAL=1 requires the sourceless stdlib' "$KIND_TMP/sourceless-official.err" \
-  || fail "OFFICIAL=1 sourceless refusal message"
-ok "sourceless stdlib on for every benchmark; OFFICIAL=1 refuses turning it off"
+WORKDIR="$REL_TMP" ICODE_RELEASE_SHA256="$HASH" icode_record_release "$REL_TMP/icode" icode-drop
+rm -rf "$REL_TMP"
+ok "release sha256 is recorded and a mismatch dies"
 
 ICODE_MODE=binary bash "$IN" --normalize-mode | grep -qx release || fail "binary alias"
 ICODE_MODE=git bash "$IN" --normalize-mode | grep -qx git || fail "git mode"

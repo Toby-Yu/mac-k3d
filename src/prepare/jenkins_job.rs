@@ -16,8 +16,8 @@ const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-req
 const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, commit, or pr (no auto). For pr, REF is the pull-request number. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
 const DESC_DISPATCH_ICODE_GIT_URL: &str = "iCode git URL (https on github.com or gitcode.com). Every shard clones it; an uploaded release cannot be handed on to the shards.";
 const DESC_TASKS: &str = "Comma-separated question ids. This field wins over N_TASKS. Example: ruff_1,fastapi_1. Leave empty to run the first N_TASKS sorted ids.";
-const DESC_CANARY: &str = "Isolation canary (P0.6). official: on when OFFICIAL=1, off otherwise. on: canary on the first task, then the rollouts. only: canary on every selected task and no rollouts (no tokens). off: smoke runs only; OFFICIAL=1 refuses it. A canary failure stops the build.";
-const DESC_CANARY_ALLOW_HOST: &str = "Test only: open this host (for example github.com) for the canary alone, to prove the canary fails when isolation is broken. Leave empty. OFFICIAL=1 refuses it.";
+const DESC_ICODE_RELEASE_FROM: &str = "Set by some_task or full_suite_task: job#build that archived the uploaded iCode release. Empty on a direct build.";
+const DESC_ICODE_RELEASE_SHA256: &str = "Set with ICODE_RELEASE_FROM: sha256 of that release. The shard stops if the copied file differs.";
 const DESC_SHARD_SIZE: &str = "Questions per shard. All shards are queued at once and each worker takes the next one when it finishes, so a faster worker runs more of them. There is always at least one shard per online worker.";
 const DESC_RUN_GROUP: &str = "Set by some_task or full_suite_task on a shard build: ties the shards of one run together. Empty on a direct build.";
 const DESC_SHARD: &str = "Set by some_task or full_suite_task on a shard build: which shard this is. Shown as the build description.";
@@ -46,10 +46,7 @@ const FORWARDED_PARAMS: &[&str] = &[
     "HARBOR_VERSION",
     "DEEPSWE_REF",
     "LOLBENCH_REF",
-    "ICODE_EXPECT_SHA",
-    "OFFICIAL",
-    "CANARY",
-    "CANARY_ALLOW_HOST",
+    "ICODE_MODE",
     "DEEPSEEK_MODEL",
 ];
 
@@ -708,6 +705,18 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             &format!("Attempts per question. Default {n_rollouts}. Every shard uses the same value, and pass@k is reported up to this k."),
             Always,
         ));
+        p.push(choice_param(
+            "ICODE_MODE",
+            &eval_catalog::choices_preferred_first(eval_catalog::ICODE_CI_MODES, jenkins_icode_mode(opts)),
+            DESC_ICODE_MODE,
+            Always,
+        ));
+        p.push(ParamSpec {
+            name: "ICODE_RELEASE_FILE",
+            kind: ParamKind::StashedFile,
+            description: DESC_ICODE_RELEASE_FILE.into(),
+            show: Always,
+        });
     }
     let git_url_desc = if shape.is_dispatcher() { DESC_DISPATCH_ICODE_GIT_URL } else { DESC_ICODE_GIT_URL };
     p.push(text_param("ICODE_GIT_URL", opts.default_icode_git_url.trim(), git_url_desc, Always));
@@ -723,6 +732,8 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             p.push(text_param("RUN_GROUP", "", DESC_RUN_GROUP, Never));
             p.push(text_param("SHARD", "", DESC_SHARD, Never));
             p.push(text_param("REQUESTED_BY", "", DESC_REQUESTED_BY, Never));
+            p.push(text_param("ICODE_RELEASE_FROM", "", DESC_ICODE_RELEASE_FROM, Never));
+            p.push(text_param("ICODE_RELEASE_SHA256", "", DESC_ICODE_RELEASE_SHA256, Never));
         }
         JobShape::Some_ => {}
         JobShape::FullSuite => {
@@ -745,10 +756,6 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
         ),
         text_param("DEEPSWE_REF", "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea", "DeepSWE commit pinned by P2.", Developer),
         text_param("LOLBENCH_REF", "1b10d10bb4a10cea54374ac34b8f76b69dc8ce75", "LoLBench commit pinned by P2.", Developer),
-        text_param("ICODE_EXPECT_SHA", "", "When set, P3 fails unless the iCode checkout SHA equals this value.", Developer),
-        text_param("OFFICIAL", 0, "1 requires full provenance and the pinned iCode commit. 0 is a smoke run.", Developer),
-        choice_param("CANARY", &["official", "only", "on", "off"], DESC_CANARY, Developer),
-        text_param("CANARY_ALLOW_HOST", "", DESC_CANARY_ALLOW_HOST, Developer),
     ]);
     for spec in &mut p {
         if spec.show == Developer {
@@ -1037,10 +1044,22 @@ fn eval_stage(stage: &EvalStage, first: bool, bootstrap: &str, opts: &JobOpts) -
               currentBuild.description = "shard ${{params.SHARD}}"
             }}
             {requester}
-            try {{
-              unstash 'ICODE_RELEASE_FILE'
-            }} catch (Throwable t) {{
-              echo "No ICODE_RELEASE_FILE stash (${{t}})"
+            if (params.ICODE_RELEASE_FROM?.trim()) {{
+              def from = params.ICODE_RELEASE_FROM.split('#', 2)
+              if (from.size() != 2 || !from[1].trim()) {{
+                error "ICODE_RELEASE_FROM must be job#build (got ${{params.ICODE_RELEASE_FROM}})"
+              }}
+              copyArtifacts projectName: from[0],
+                selector: specific(from[1].trim()),
+                filter: 'icode-release/ICODE_RELEASE_FILE',
+                target: '.',
+                flatten: true
+            }} else {{
+              try {{
+                unstash 'ICODE_RELEASE_FILE'
+              }} catch (Throwable t) {{
+                echo "No ICODE_RELEASE_FILE stash (${{t}})"
+              }}
             }}
           }}
 "#
@@ -1079,12 +1098,51 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
         .map(|n| format!("                  string(name: '{n}', value: params.{n}),"))
         .collect::<Vec<_>>()
         .join("\n");
+    let release_stage = r#"    stage('iCode release') {
+      when { expression { params.ICODE_MODE == 'release' } }
+      agent { label "${params.AGENT_LABEL}" }
+      steps {
+        script {
+          deleteDir()
+          try {
+            unstash 'ICODE_RELEASE_FILE'
+          } catch (Throwable t) {
+            error "ICODE_MODE=release needs an uploaded ICODE_RELEASE_FILE (${t})"
+          }
+        }
+        sh '''
+          set -euo pipefail
+          file="${WORKSPACE}/ICODE_RELEASE_FILE"
+          [ -s "$file" ] || { echo "ICODE_RELEASE_FILE is empty" >&2; exit 1; }
+          hash="$(python3 - "$file" <<'PY'
+import hashlib, sys
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+)"
+          mkdir -p "${WORKSPACE}/icode-release"
+          cp "$file" "${WORKSPACE}/icode-release/ICODE_RELEASE_FILE"
+          printf '%s\n' "$hash" > "${WORKSPACE}/icode-release/sha256.txt"
+          echo "iCode under test: release $(basename "$file") sha256 ${hash}"
+        '''
+        script {
+          env.ICODE_RELEASE_SHA256 = readFile('icode-release/sha256.txt').trim()
+        }
+        archiveArtifacts artifacts: 'icode-release/**'
+      }
+    }
+
+"#;
     format!(
         r#"pipeline {{
   agent none
 
   options {{
     timeout(time: 96, unit: 'HOURS')
+    copyArtifactPermission('{shard_job}')
   }}
 
   parameters {{
@@ -1092,7 +1150,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
   }}
 
   stages {{
-    stage('Shards') {{
+{release_stage}    stage('Shards') {{
       steps {{
         script {{
           {display_name}
@@ -1160,7 +1218,8 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
                   string(name: 'RUN_GROUP', value: env.RUN_GROUP),
                   string(name: 'SHARD', value: note),
                   string(name: 'REQUESTED_BY', value: env.BUILD_USER ?: ''),
-                  string(name: 'ICODE_MODE', value: 'git'),
+                  string(name: 'ICODE_RELEASE_FROM', value: params.ICODE_MODE == 'release' ? "${{env.JOB_NAME}}#${{env.BUILD_NUMBER}}" : ''),
+                  string(name: 'ICODE_RELEASE_SHA256', value: env.ICODE_RELEASE_SHA256 ?: ''),
                 ]
               def run = build job: '{shard_job}', wait: true, propagate: false, parameters: shardParams
               // A shard sets HARBOR_STARTED once its Harbor job dir exists. One that
@@ -1232,7 +1291,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
           set -euo pipefail
           export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
           MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
-          mac-k3d pipeline --extract-to "$MAC_K3D_ROOT"
+          mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean
           python3 "$MAC_K3D_ROOT/pipeline/lib/aggregate_runs.py" \
             --shards "${{WORKSPACE}}/shards" \
             --benchmark "$BENCHMARK" \
@@ -1284,19 +1343,15 @@ export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin
 command -v docker >/dev/null
 docker info >/dev/null
 export MAC_K3D_EVAL_WORKDIR="${{WORKSPACE}}/eval-runs"
-export OFFICIAL="${{OFFICIAL:-0}}"
 
 # The pipeline is the one embedded in this worker's mac-k3d binary, extracted
 # once per build (the first stage clears it), so a redeploy mid-build cannot change the
 # scripts under a running build. BUILD.json names the commit for the artifact.
+# Every build refuses a binary built from uncommitted src/ or pipeline/.
 export MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
 if [ ! -f "$MAC_K3D_ROOT/pipeline/BUILD.json" ]; then
   command -v mac-k3d >/dev/null || {{ echo "mac-k3d is not on PATH on ${{NODE_NAME:-this worker}}. Run scripts/redeploy.sh." >&2; exit 1; }}
-  if [ "$OFFICIAL" = "1" ]; then
-    mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean
-  else
-    mac-k3d pipeline --extract-to "$MAC_K3D_ROOT"
-  fi
+  mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean
 fi
 
 export N_TASKS="${{N_TASKS:-1}}"
@@ -1331,9 +1386,7 @@ export ICODE_GIT_REF_KIND="${{ICODE_GIT_REF_KIND:-branch}}"
 export HARBOR_VERSION="${{HARBOR_VERSION:-{harbor_fb}}}"
 export DEEPSWE_REF="${{DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea}}"
 export LOLBENCH_REF="${{LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75}}"
-export ICODE_EXPECT_SHA="${{ICODE_EXPECT_SHA:-}}"
-export CANARY="${{CANARY:-official}}"
-export CANARY_ALLOW_HOST="${{CANARY_ALLOW_HOST:-}}"
+export ICODE_RELEASE_SHA256="${{ICODE_RELEASE_SHA256:-}}"
 export HARNESS="${{HARNESS:-{harness_fb}}}"
 export LLM="${{LLM:-{llm_fb}}}"
 export BENCHMARK="${{BENCHMARK:-{bench}}}"
@@ -1382,23 +1435,24 @@ fn eval_job_xml(
     let script = eval_jenkinsfile(job_benchmark, shape, opts);
     let params = xml_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
     let desc_xml = xml_escape(description);
-    let copy_permission = if shape == JobShape::One {
-        let readers = shard_readers(job_benchmark)
-            .iter()
-            .map(|r| format!("        <string>{}</string>", xml_escape(r)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!(
-            r#"    <hudson.plugins.copyartifact.CopyArtifactPermissionProperty plugin="copyartifact">
+    let readers: Vec<String> = if shape == JobShape::One {
+        shard_readers(job_benchmark)
+    } else {
+        vec![eval_job_name(job_benchmark, JobShape::One)]
+    };
+    let reader_xml = readers
+        .iter()
+        .map(|r| format!("        <string>{}</string>", xml_escape(r)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let copy_permission = format!(
+        r#"    <hudson.plugins.copyartifact.CopyArtifactPermissionProperty plugin="copyartifact">
       <projectNameList>
-{readers}
+{reader_xml}
       </projectNameList>
     </hudson.plugins.copyartifact.CopyArtifactPermissionProperty>
 "#
-        )
-    } else {
-        String::new()
-    };
+    );
     format!(
         r#"<?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
@@ -1753,12 +1807,10 @@ mod tests {
         assert!(jf.contains("HARBOR_VERSION:-0.22.0"));
         assert!(jf.contains("DEEPSWE_REF:-0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea"));
         assert!(jf.contains("LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75"));
-        assert!(jf.contains("ICODE_EXPECT_SHA:-"));
-        assert!(jf.contains("OFFICIAL:-0"));
-        assert!(jf.contains("choice(name: 'CANARY', choices: ['official', 'only', 'on', 'off']"));
-        assert!(jf.contains("CANARY:-official"));
-        assert!(jf.contains("string(name: 'CANARY_ALLOW_HOST', defaultValue: ''"));
-        assert!(jf.contains("CANARY_ALLOW_HOST:-"));
+        assert!(jf.contains("ICODE_RELEASE_SHA256:-"));
+        assert!(!jf.contains("OFFICIAL"));
+        assert!(!jf.contains("CANARY"));
+        assert!(!jf.contains("ICODE_EXPECT_SHA"));
         assert!(jf.contains("upload ICODE_RELEASE_FILE"));
         assert!(jf.contains("icode"));
         // Each worker locks its own cores; a shared pool would let a build on
@@ -1835,6 +1887,8 @@ mod tests {
                 "TASKS",
                 "N_TASKS",
                 "N_ROLLOUTS",
+                "ICODE_MODE",
+                "ICODE_RELEASE_FILE",
                 "ICODE_GIT_URL",
                 "ICODE_GIT_REF",
                 "ICODE_GIT_REF_KIND",
@@ -1848,6 +1902,8 @@ mod tests {
                 "LLM",
                 "BENCHMARK",
                 "N_ROLLOUTS",
+                "ICODE_MODE",
+                "ICODE_RELEASE_FILE",
                 "ICODE_GIT_URL",
                 "ICODE_GIT_REF",
                 "ICODE_GIT_REF_KIND",
@@ -1885,15 +1941,14 @@ mod tests {
         for shape in EVAL_SHAPES {
             let jf = eval_jenkinsfile("deepswe", *shape, &opts);
             let block = params_block(&jf);
-            assert!(block.contains("hidden(name: 'OFFICIAL', defaultValue: '0'"), "{shape:?}");
-            assert!(block.contains("hidden(name: 'CANARY', defaultValue: 'official'"));
-            assert!(block.contains("hidden(name: 'AGENT_LABEL', defaultValue: 'lolbench'"));
+            assert!(block.contains("hidden(name: 'AGENT_LABEL', defaultValue: 'lolbench'"), "{shape:?}");
             assert!(block.contains("string(name: 'N_ROLLOUTS'"));
-            assert!(!block.contains("string(name: 'OFFICIAL'"));
+            assert!(!block.contains("OFFICIAL"), "{shape:?}");
+            assert!(!block.contains("CANARY"), "{shape:?}");
+            assert!(!block.contains("ICODE_EXPECT_SHA"), "{shape:?}");
             let xml = eval_job_xml("deepswe", *shape, "d", &opts);
-            assert!(xml.contains(
-                "<com.wangyin.parameter.WHideParameterDefinition plugin=\"hidden-parameter\">\n          <name>OFFICIAL</name>"
-            ));
+            assert!(!xml.contains("<name>OFFICIAL</name>"), "{shape:?}");
+            assert!(!xml.contains("<name>CANARY</name>"), "{shape:?}");
         }
         let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
         assert!(params_block(&one).contains("string(name: 'TASK'"));
@@ -1907,8 +1962,9 @@ mod tests {
         opts.ui_profile = UiProfile::Developer;
         let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
         let block = params_block(&one);
-        assert!(block.contains("choice(name: 'CANARY', choices: ['official', 'only', 'on', 'off']"));
         assert!(block.contains("string(name: 'HARBOR_VERSION', defaultValue: '0.22.0'"));
+        assert!(!block.contains("CANARY"));
+        assert!(!block.contains("OFFICIAL"));
         // Shard plumbing stays hidden for developers too: the dispatcher owns it.
         assert!(block.contains("hidden(name: 'RUN_GROUP', defaultValue: ''"));
         assert!(block.contains("hidden(name: 'TASK_OFFSET', defaultValue: '0'"));
@@ -1997,7 +2053,6 @@ mod tests {
         assert!(jf.contains(r#"export MAC_K3D_ROOT="${WORKSPACE}/mac-k3d-pipeline""#));
         assert!(jf.contains(r#"if [ ! -f "$MAC_K3D_ROOT/pipeline/BUILD.json" ]; then"#));
         assert!(jf.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean"#));
-        assert!(jf.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT""#));
         assert!(!jf.contains("git fetch"));
         assert!(!jf.contains("MAC_K3D_GIT"));
         // The first stage starts from a fresh extract; the other six reuse it.
@@ -2009,12 +2064,11 @@ mod tests {
         let second = jf.find("stage('Tasks')").unwrap();
         let at = jf.find(clear).unwrap();
         assert!(first < at && at < second);
-        assert_eq!(jf.matches("mac-k3d pipeline --extract-to").count(), 14);
+        assert_eq!(jf.matches("mac-k3d pipeline --extract-to").count(), 7);
 
         let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
-        assert!(some.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT""#));
+        assert!(some.contains(r#"mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean"#));
         assert!(some.contains(r#"python3 "$MAC_K3D_ROOT/pipeline/lib/aggregate_runs.py""#));
-        assert!(!some.contains("--require-clean"));
         assert!(!some.contains("git fetch"));
     }
 
@@ -2049,7 +2103,10 @@ mod tests {
         assert!(jf.contains("propagate: false"));
         assert!(jf.contains("string(name: 'TASK_OFFSET', value: ids ? '0' : \"${from}\")"));
         assert!(jf.contains("string(name: 'SHARD', value: note)"));
-        assert!(jf.contains("string(name: 'ICODE_MODE', value: 'git')"));
+        assert!(jf.contains("string(name: 'ICODE_MODE', value: params.ICODE_MODE)"));
+        assert!(jf.contains("stage('iCode release')"));
+        assert!(jf.contains("copyArtifactPermission('deepswe_one_task')"));
+        assert!(jf.contains("ICODE_RELEASE_FROM"));
         assert!(jf.contains("unstable \"Shards that did not succeed"));
         // The merge runs in this build, on a worker, from the shard build numbers.
         assert!(jf.contains(
@@ -2205,11 +2262,11 @@ mod tests {
     fn job_params_mark_shard_plumbing_and_developer_fields() {
         let one = job_params("deepswe", JobShape::One);
         let get = |ps: &[JobParam], n: &str| ps.iter().find(|p| p.name == n).cloned().expect(n);
-        for n in ["TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD", "REQUESTED_BY"] {
+        for n in ["TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD", "REQUESTED_BY", "ICODE_RELEASE_FROM", "ICODE_RELEASE_SHA256"] {
             assert!(!get(&one, n).settable, "{n}");
         }
         assert!(get(&one, "TASK").settable && !get(&one, "TASK").developer);
-        assert!(get(&one, "CANARY").settable && get(&one, "CANARY").developer);
+        assert!(get(&one, "HARBOR_VERSION").settable && get(&one, "HARBOR_VERSION").developer);
         let some = job_params("deepswe", JobShape::Some_);
         assert!(get(&some, "TASKS").settable && !get(&some, "TASKS").developer);
         assert!(get(&some, "SHARD_SIZE").settable && get(&some, "SHARD_SIZE").developer);
@@ -2294,7 +2351,8 @@ mod tests {
         assert!(xml.contains("CopyArtifactPermissionProperty"));
         assert!(xml.contains("<string>deepswe_full_suite_task</string>"));
         let some = eval_job_xml("deepswe", JobShape::Some_, "d", &opts);
-        assert!(!some.contains("CopyArtifactPermissionProperty"));
+        assert!(some.contains("CopyArtifactPermissionProperty"));
+        assert!(some.contains("<string>deepswe_one_task</string>"));
     }
 
     #[test]
@@ -2372,14 +2430,10 @@ mod tests {
             "<defaultValue>0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea</defaultValue>"
         ));
         assert!(xml.contains("<name>LOLBENCH_REF</name>"));
-        assert!(xml.contains("<name>ICODE_EXPECT_SHA</name>"));
-        assert!(xml.contains("<name>OFFICIAL</name>"));
-        assert!(xml.contains("<defaultValue>0</defaultValue>"));
-        assert!(xml.contains("<name>CANARY</name>"));
-        assert!(xml.contains("<string>official</string>"));
-        assert!(xml.contains("<string>only</string>"));
-        assert!(xml.contains("<name>CANARY_ALLOW_HOST</name>"));
-        assert!(xml.contains("OFFICIAL=1 refuses it"));
+        assert!(!xml.contains("<name>ICODE_EXPECT_SHA</name>"));
+        assert!(!xml.contains("<name>OFFICIAL</name>"));
+        assert!(!xml.contains("<name>CANARY</name>"));
+        assert!(!xml.contains("<name>CANARY_ALLOW_HOST</name>"));
         assert!(xml.contains("StashedFileParameterDefinition"));
         assert!(
             !xml.contains("<name>ICODE_RELEASE</name>"),

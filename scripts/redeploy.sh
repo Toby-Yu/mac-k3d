@@ -50,7 +50,7 @@ fi
 
 step "Checking the checkout"
 if [ -n "$(git status --porcelain -- src pipeline Cargo.toml Cargo.lock build.rs)" ]; then
-  warn "uncommitted changes in src/ or pipeline/: every host will report a dirty build, and OFFICIAL=1 builds refuse it."
+  warn "uncommitted changes in src/ or pipeline/: every host will report a dirty build, and every Jenkins build refuses it."
 fi
 if ahead="$(git rev-list --count '@{upstream}..HEAD' 2>/dev/null)"; then
   [ "$ahead" -gt 0 ] && warn "$(git rev-parse --abbrev-ref HEAD) is $ahead commit(s) ahead of its upstream: push so the commit in each result can be found."

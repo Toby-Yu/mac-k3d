@@ -40,7 +40,7 @@ load_eval_state() {
   have harbor || die "harbor not on PATH (run the env phase)"
   ensure_selected_tasks
   local line skip_list=""
-  # tasks/leakscan lists the questions OFFICIAL=1 keeps out of Harbor. They
+  # tasks/leakscan lists the questions a leak hit keeps out of Harbor. They
   # stay in selected_tasks.txt, so the report counts them as not scored.
   if [ -s "$WORKDIR/skipped_tasks.txt" ]; then
     skip_list="$(cut -f1 "$WORKDIR/skipped_tasks.txt")"

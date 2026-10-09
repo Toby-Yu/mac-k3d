@@ -125,11 +125,13 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
                 )));
             }
             if let Some(mode) = nonblank(&req.icode_mode) {
-                if eval_catalog::normalize_icode_mode(&mode)? != "git" {
+                if eval_catalog::normalize_icode_mode(&mode)? == "release" {
                     return Err(Error::Config(format!(
-                        "{job} always clones iCode from git: every shard needs it, and an upload cannot be handed on"
+                        "{job} with ICODE_MODE=release needs an uploaded ICODE_RELEASE_FILE, which the CLI \
+                         cannot attach. Open the job's Build with Parameters page, or use --icode-mode git"
                     )));
                 }
+                set.push(("ICODE_MODE", "git".into(), "--icode-mode"));
             }
             if let Some(raw) = nonblank(&req.tasks) {
                 if req.shape == JobShape::FullSuite {
@@ -380,7 +382,7 @@ mod tests {
         req.n_rollouts = Some(1);
         req.shard_size = Some(2);
         req.model = Some("deepseek-flash".into());
-        req.params = vec!["canary=on".into()];
+        req.params = vec!["agent_label=lolbench".into()];
         assert_eq!(
             names(&request_fields(&req).unwrap()),
             [
@@ -388,7 +390,7 @@ mod tests {
                 "N_ROLLOUTS=1",
                 "DEEPSEEK_MODEL=deepseek-flash",
                 "SHARD_SIZE=2",
-                "CANARY=on",
+                "AGENT_LABEL=lolbench",
             ]
         );
         let bare = QueueRequest {
@@ -457,7 +459,7 @@ mod tests {
         assert!(request_fields(&req).unwrap_err().to_string().contains("--tasks a,b,c"));
         let mut req = some("a");
         req.icode_mode = Some("release".into());
-        assert!(request_fields(&req).unwrap_err().to_string().contains("always clones iCode from git"));
+        assert!(request_fields(&req).unwrap_err().to_string().contains("ICODE_RELEASE_FILE"));
         let mut req = some("a");
         req.shape = JobShape::FullSuite;
         assert!(request_fields(&req).unwrap_err().to_string().contains("whole suite"));
@@ -484,18 +486,20 @@ mod tests {
         }
         assert!(err(&["TASKS=b"], JobShape::Some_).contains("use --tasks"));
         assert!(err(&["DEEPSEEK_MODEL=gpt-4"], JobShape::FullSuite).contains("use --model"));
-        assert!(err(&["CANARY=on", "canary=off"], JobShape::Some_).contains("given twice"));
+        assert!(err(&["AGENT_LABEL=a", "agent_label=b"], JobShape::Some_).contains("given twice"));
+        assert!(err(&["OFFICIAL=1"], JobShape::Some_).contains("has no field OFFICIAL"));
+        assert!(err(&["CANARY=on"], JobShape::Some_).contains("has no field CANARY"));
         assert!(err(&["ICODE_RELEASE_FILE=x"], JobShape::One).contains("file upload"));
         assert!(err(&["SHARD_SIZE=2"], JobShape::One).contains("has no field SHARD_SIZE"));
         let req = QueueRequest {
             benchmark: "lolbench".into(),
             shape: JobShape::One,
-            params: vec!["agent_label=mac-Michael-Ubuntu".into(), "OFFICIAL=0".into()],
+            params: vec!["agent_label=mac-Michael-Ubuntu".into()],
             ..Default::default()
         };
         assert_eq!(
             names(&request_fields(&req).unwrap()),
-            ["AGENT_LABEL=mac-Michael-Ubuntu", "OFFICIAL=0"]
+            ["AGENT_LABEL=mac-Michael-Ubuntu"]
         );
     }
 

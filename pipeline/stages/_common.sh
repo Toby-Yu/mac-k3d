@@ -56,7 +56,6 @@ export DEEPSWE_TASK_COUNT="${DEEPSWE_TASK_COUNT:-113}"
 export LOLBENCH_REF="${LOLBENCH_REF:-1b10d10bb4a10cea54374ac34b8f76b69dc8ce75}"
 export LOLBENCH_TASK_COUNT="${LOLBENCH_TASK_COUNT:-20}"
 export ICODE_EXPECT_SHA="${ICODE_EXPECT_SHA:-}"
-export OFFICIAL="${OFFICIAL:-0}"
 export SWEBENCHPRO_DIR="${SWEBENCHPRO_DIR:-$WORKDIR/swebenchpro}"
 export SWEBENCHPRO_GIT_URL="${SWEBENCHPRO_GIT_URL:-https://github.com/scaleapi/SWE-bench_Pro-os}"
 export ICODE_MODE="${ICODE_MODE:-binary}"
@@ -162,36 +161,26 @@ warn_docker_mtu() {
   echo "WARNING: disconnect the VPN, or set \"mtu\": $host_mtu and \"default-network-opts\": {\"bridge\": {\"com.docker.network.driver.mtu\": \"$host_mtu\"}} in /etc/docker/daemon.json and restart Docker." >&2
 }
 
-official_run() {
-  case "$(printf '%s' "${OFFICIAL:-0}" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on) return 0 ;;
-  esac
-  return 1
-}
-
-# Isolation canary. CANARY=official (default) runs it on official runs only;
-# on runs it once before the rollouts; only runs it on every selected task and
-# stops after the evaluate phase.
+# Isolation canary. Every scored run probes once before the rollouts.
+# CANARY=only (pipeline/tools/canary.sh) probes every selected task and stops.
 canary_mode() {
   local raw
-  raw="$(printf '%s' "${CANARY:-official}" | tr '[:upper:]' '[:lower:]')"
+  raw="$(printf '%s' "${CANARY:-on}" | tr '[:upper:]' '[:lower:]')"
   case "$raw" in
-    official)
-      if official_run; then echo on; else echo off; fi
-      ;;
-    on|only|off) echo "$raw" ;;
+    only) echo only ;;
+    on) echo on ;;
     *) return 1 ;;
   esac
 }
 
-# Refuse canary settings an official run must not use. Checked in env (fail
-# before any clone) and again where the canary runs.
+# A scored run cannot open an extra host. CANARY_ALLOW_HOST is the negative
+# test in pipeline/tools/canary.sh (CANARY=only). Checked in env and again
+# where the canary runs.
 check_canary_settings() {
   local mode
-  mode="$(canary_mode)" || die "CANARY must be official, on, only or off (got ${CANARY:-})"
-  if official_run; then
-    [ "$mode" != off ] || die "OFFICIAL=1 runs the isolation canary; remove CANARY=off"
-    [ -z "${CANARY_ALLOW_HOST:-}" ] || die "CANARY_ALLOW_HOST breaks isolation on purpose; OFFICIAL=1 refuses it"
+  mode="$(canary_mode)" || die "CANARY must be on, or only for pipeline/tools/canary.sh (got ${CANARY:-})"
+  if [ -n "${CANARY_ALLOW_HOST:-}" ] && [ "$mode" != only ]; then
+    die "CANARY_ALLOW_HOST is only for pipeline/tools/canary.sh (CANARY=only); a scored run cannot open a host"
   fi
 }
 

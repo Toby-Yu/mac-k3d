@@ -33,7 +33,7 @@ Current pins:
 |-----------|---------|---------|-----------------|--------------|------------|
 | glibc (Linux release) | 2.39 or newer on every host | fixed by the build image (Ubuntu 24.04) | release runner image | the OS | `scripts/redeploy.sh` runs the new binary's `--version` on every host before switching any |
 | macOS release | Apple Silicon and Intel builds | per release | `release-binaries.yml` matrix | download | not lab-tested yet |
-| Embedded pipeline | the `pipeline/` tree of the commit the binary was built from | pinned per build (`mac-k3d --version` prints the commit) | `build.rs`, `src/prepare/eval_assets.rs` | `mac-k3d config` / `pipeline --extract-to` | `check_report` refuses a dirty or mixed pipeline when `OFFICIAL=1` |
+| Embedded pipeline | the `pipeline/` tree of the commit the binary was built from | pinned per build (`mac-k3d --version` prints the commit) | `build.rs`, `src/prepare/eval_assets.rs` | `mac-k3d config` / `pipeline --extract-to` | every Jenkins build passes `--require-clean`; `check_report` refuses a dirty or mixed pipeline |
 
 ## Controller
 
@@ -96,7 +96,7 @@ macOS is supported by the code and the CI tests, but no Mac worker has run a lab
 | DeepSWE | `DEEPSWE_REF=0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea` | pinned | `_common.sh` | `tasks/benchmark.sh` (git) | checkout at the ref |
 | LoLBench | `LOLBENCH_REF=1b10d10bb4a10cea54374ac34b8f76b69dc8ce75` | pinned | `_common.sh` | `tasks/benchmark.sh` (git) | checkout at the ref |
 | SWE-bench Pro | default branch of `SWEBENCHPRO_GIT_URL` (`--depth 1`) | **not pinned** (known gap) | `_common.sh` | `tasks/benchmark.sh` | — |
-| iCode (system under test) | PR 2 at `eea9d66` | pinned when `OFFICIAL=1` | `OFFICIAL_ICODE_SHA` in `pipeline/lib/icode_input.sh` (`ICODE_EXPECT_SHA` overrides it) | Jenkins upload or git clone (`tasks/icode`) | `ICODE_EXPECT_SHA` against the checkout HEAD |
+| iCode (system under test) | the git ref or release drop the job selects (default PR 2) | recorded, not pinned | the checkout HEAD, or the release file's sha256 | Jenkins upload or git clone (`tasks/icode`) | the console line `iCode under test:` and `eval_protocol.icode` |
 | Task images | per task (`docker_image` in LoLBench `task.toml`) | per task | the benchmark checkout | `tasks/images.sh` (LoLBench); Harbor pulls the rest | `tasks/images.sh` |
 
 ## Sandbox config

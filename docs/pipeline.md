@@ -31,7 +31,7 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 
 | Step | What it does | Writes under `$WORKDIR` |
 |------|--------------|-------------------------|
-| `env/host` | Checks `BENCHMARK`, `CANARY`/`OFFICIAL`, bash ≥ `BASH_MIN`, python3 ≥ `PYTHON_MIN`, git, free RAM and disk (`MIN_RAM_GB`, `WORKER_MIN_DISK_GB`; `MAC_K3D_MIN_RAM_GB` / `MAC_K3D_MIN_DISK_GB` override), `docker info`, a VPN MTU smaller than Docker's bridge, that `mac-k3d` lists `eval`, and the agent unit (systemd) or LaunchAgent (macOS) | — |
+| `env/host` | Checks `BENCHMARK`, bash ≥ `BASH_MIN`, python3 ≥ `PYTHON_MIN`, git, free RAM and disk (`MIN_RAM_GB`, `WORKER_MIN_DISK_GB`; `MAC_K3D_MIN_RAM_GB` / `MAC_K3D_MIN_DISK_GB` override), `docker info`, a VPN MTU smaller than Docker's bridge, that `mac-k3d` lists `eval`, and the agent unit (systemd) or LaunchAgent (macOS) | — |
 | `env/compose` | `docker compose` (v2 plugin) and `docker buildx`: an existing plugin is kept, a missing one is downloaded at the version in `pipeline/config/toolchain.env` (worker `setup` does the same) | — |
 | `env/harbor` | Harbor at `HARBOR_VERSION` from `pipeline/config/toolchain.env` (the same pin `mac-k3d setup` installs). Reinstalls with `uv tool install --force` only when the version differs | `harbor_version.txt` |
 | `env/egress` | Runs Harbor's egress-control kernel probe visibly (Harbor itself only refuses `--allow-agent-host` and `no-network` when it fails). When Docker cannot run Harbor's probe image, the same script runs in Harbor's egress sidecar image, then in a pinned `alpine:3.19`, and the run uses the first that works (see [How Harbor is called](#how-harbor-is-called)). Also checks Harbor's egress sidecar image | `egress_probe.json` |
@@ -39,12 +39,12 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 | `env/model_api` | `DEEPSEEK_MODEL` is served by `GET /models`. Skipped with a note when no key is set | — |
 | `tasks/benchmark` | Checks out the benchmark (see [Where the benchmarks come from](#where-the-benchmarks-come-from)). Question images are fetched later, see [Benchmark checkout and question images](#benchmark-checkout-and-question-images) | `deep-swe/`, `lolbench/` or `swebenchpro/` |
 | `tasks/select` | Picks the questions from `TASK`, `TASKS`, `N_TASKS` and `TASK_OFFSET`; every later step reads this file. `TASK_OFFSET` counts in `suite_tasks.txt`, every task dir in byte order (`LC_ALL=C`), so all workers cut the same slices | `selected_tasks.txt`, `selected_tasks_offset.txt`, `suite_tasks.txt` |
-| `tasks/icode` | Resolves the iCode under test: a release drop, or a git clone built with `uv sync`. Never changes iCode's source | `icode_bin_path.txt`, `icode_host_root.txt`, `icode_git.json` (git) |
+| `tasks/icode` | Resolves the iCode under test: a release drop, or a git clone built with `uv sync`. Prints `iCode under test:` (git SHA or release sha256) before any canary or rollout. Never changes iCode's source | `icode_bin_path.txt`, `icode_host_root.txt`, `icode_git.json` (git) or `icode_release.json` |
 | `tasks/icode_sandbox` | Makes a git build runnable at `/opt/icode-host`: embedded CPython, sanitized venv, wrapper, probe. A release drop keeps its own binary | — |
 | `tasks/agent` | Harbor's Python can import `icode_harbor_agent` and `patch_harbor_agent` | — |
 | `tasks/images` | LoLBench: each selected task's image exists for this CPU architecture, rebuilt from its Dockerfile when it does not. DeepSWE and SWE-bench Pro images are pulled by Harbor at the trial | — |
 | `tasks/isolation` | Builds the one read-only mount and refuses a tree that overlaps a benchmark; checks the model API host is on the network allowlist; records both | `agent_mounts.json`, `eval_protocol_inputs.json` |
-| `tasks/leakscan` | Searches the mounted iCode tree for any selected task's gold patch. Warns on a smoke run; `OFFICIAL=1` stops | `anticheat_leakscan.json` |
+| `tasks/leakscan` | Searches the mounted iCode tree for any selected task's gold patch. A hit question is skipped; the build stops only when every selected question is hit | `anticheat_leakscan.json`, `skipped_tasks.txt` |
 | `evaluate/slots` | Clears this build's Harbor job and memory samples, then divides `CPU_LOCK_QTY` by each task's declared `cpus`/`memory_mb` into `EVAL_SLOTS`. Refuses a worker that cannot host one trial | `eval_resources.json` |
 | `evaluate/canary` | The isolation canary (see [Anti-cheat](#anti-cheat)) | `canary/jenkins-<N>/` |
 | `evaluate/harbor_run` | One `harbor run` for every selected task × rollout, with a 60 s heartbeat and memory sampling; then `meta.json`, and the iCode tree handed back to the build user. A Harbor that exits non-zero before any trial finished fails the step with Harbor's last `…Error:` line | `harness/harbor_runs/jenkins-<N>/`, `harness/harbor.log`, `harness/progress.json`, `harness/meta.json` |
@@ -172,7 +172,7 @@ Each trial gets its own Docker network, and Harbor 0.22 lets Docker pick its sub
 | After Harbor | Capture receipts: the graded patch is the agent's own work at the declared base commit | `anticheat/receipts`, `capture_receipt.py` |
 | After Harbor | Verdict per rollout from gold-patch similarity and a transcript scan; `rejected` scores as unresolved | `anticheat/verdict`, `anticheat_verdict.py`, `pipeline/config/anticheat-v1.json` |
 
-`OFFICIAL=1` makes these binding: the canary must run (no `CANARY=off`, no `CANARY_ALLOW_HOST`), a leak-scan hit question is skipped (the build stops only when every question is hit), and the report requires the verdicts. Each control is recorded in `eval_protocol.isolation`, including `network_allowlist` (version, hosts, file hash), and shown under Provenance in `summary.md` and `report.html`. The fields are explained in [evaluation.md](evaluation.md).
+Every scored run makes these binding: the canary runs once per shard (`CANARY_ALLOW_HOST` is refused unless `CANARY=only`, which only `pipeline/tools/canary.sh` sets), a leak-scan hit question is skipped (the build stops only when every question is hit), and the report requires the verdicts, a clean pipeline, and either the git runtime record or the release sha256. Each control is recorded in `eval_protocol.isolation`, including `network_allowlist` (version, hosts, file hash), and shown under Provenance in `summary.md` and `report.html`. The fields are explained in [evaluation.md](evaluation.md).
 
 ## Outputs
 

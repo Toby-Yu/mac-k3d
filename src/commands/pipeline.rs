@@ -11,7 +11,7 @@ pub struct PipelineArgs {
     #[arg(long, value_name = "DIR")]
     pub extract_to: PathBuf,
 
-    /// Fail unless the binary was built from a clean, known commit (OFFICIAL=1)
+    /// Fail unless the binary was built from a clean, known commit. Every Jenkins build passes this.
     #[arg(long)]
     pub require_clean: bool,
 }

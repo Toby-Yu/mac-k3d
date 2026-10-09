@@ -682,6 +682,20 @@ def merge_anticheat(summaries: list[dict]) -> dict | None:
     return out
 
 
+def _print_icode_under_test(doc: dict) -> None:
+    """Name the iCode the merged shards graded, or MIXED when they disagree."""
+    protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else {}
+    shards = [s for s in protocol.get("shards") or [] if isinstance(s, dict) and s.get("icode_version")]
+    versions = sorted({str(s["icode_version"]) for s in shards})
+    icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
+    n = len(shards) or 1
+    if len(versions) > 1:
+        print(f"iCode under test ({n} shards): MIXED: {', '.join(versions)}")
+        return
+    shown = versions[0] if versions else (icode.get("version") or "-")
+    print(f"iCode under test ({n} shards): {shown}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shards", required=True, help="dir holding the copied shard artifacts")
@@ -804,6 +818,7 @@ def main() -> int:
                 file=sys.stderr,
             )
     write_report(doc, out)
+    _print_icode_under_test(doc)
     # archive_run.py packs these tasks' trials into the combined .tar.gz.
     (out / "selected_tasks.txt").write_text("".join(f"{tid}\n" for tid in tasks), encoding="utf-8")
     print(

@@ -176,18 +176,20 @@ Extract the pipeline on the worker (`mac-k3d config -c worker.yaml`, or any `mac
 | TASKS | `_some_task` | Comma-separated ids. Wins over N_TASKS. Example: `ruff_1,fastapi_1` |
 | N_TASKS | `_some_task` | Used only when TASKS is empty: first N sorted ids. Full suite: DeepSWE `113`, LoLBench `20`, SWE-bench Pro `731` |
 | N_ROLLOUTS | all | Attempts per question. `1` on `_one_task` (a smoke run), `4` on the others |
-| ICODE_MODE | `_one_task` | Choose `release` (upload a drop) or `git` (clone URL + ref). Fill only the fields for that choice; leave the other group as it is. Shards of `_some_task` / `_full_suite_task` always use `git` |
-| ICODE_RELEASE_FILE | `_one_task` | **release:** choose the `icode` / `icode-*-full-*` drop here. **git:** do not choose a file; leave this control as it is. |
+| ICODE_MODE | all | Choose `release` (upload a drop) or `git` (clone URL + ref). Fill only the fields for that choice; leave the other group as it is. On `_some_task` and `_full_suite_task` a release upload is hashed on the dispatcher and copied to each shard |
+| ICODE_RELEASE_FILE | all | **release:** choose the `icode` / `icode-*-full-*` drop here. **git:** do not choose a file; leave this control as it is. |
 | ICODE_GIT_URL | all | **git:** https URL on github.com or gitcode.com. **release:** leave it as it is. |
 | ICODE_GIT_REF | all | **git:** branch name, tag, commit SHA, or pull-request number when KIND is `pr`. **release:** leave it as it is. |
 | ICODE_GIT_REF_KIND | all | **git:** pick `branch`, `tag`, `commit`, or `pr` (no auto). **release:** leave it as it is. |
 | DEEPSEEK_MODEL | all | `deepseek-flash` (catalog default; or `deepseek-v4-pro`). iCode sends this id to `https://api.deepseek.com/v1` with provider `DeepSeek` and reasoning effort `high` |
 
-A build locks every core of the worker it lands on, and Harbor sizes its slots from them ([optimization.md](optimization.md)). `AGENT_LABEL`, pins, canary and `SHARD_SIZE` are developer parameters: they show only when the controller has `jenkins_job.ui_profile: developer`, and otherwise keep their config defaults. The developer page is this same table followed by those extras, each labelled `Developer (testing):`. The pipeline itself is not a parameter: each worker runs the one built into its installed `mac-k3d`, and `artifact.json` names that commit. See [workflow.md](workflow.md#development-loop-commit-push-redeploy) and [commands.md](commands.md#jenkins-job-parameters).
+A build locks every core of the worker it lands on, and Harbor sizes its slots from them ([optimization.md](optimization.md)). `AGENT_LABEL`, pins and `SHARD_SIZE` are developer parameters: they show only when the controller has `jenkins_job.ui_profile: developer`, and otherwise keep their config defaults. The developer page is this same table followed by those extras, each labelled `Developer (testing):`. The pipeline itself is not a parameter: each worker runs the one built into its installed `mac-k3d`, and every build refuses a binary built from uncommitted `src/` or `pipeline/`. `artifact.json` names that commit. See [workflow.md](workflow.md#development-loop-commit-push-redeploy) and [commands.md](commands.md#jenkins-job-parameters).
+
+Before the canary or any rollout, the console prints one line: `iCode under test: git <kind> <ref> -> <sha> (<subject>)`, or `iCode under test: release <file> sha256 <hex>`. The same line is the first bullet of `summary.md` and a sentence in `report.html`. A sharded run prints `iCode under test (N shards): <sha>` after the merge, or `MIXED:` when the shards disagree. For a release drop, `eval_protocol.icode.version` is that sha256.
 
 Git-mode CI: set `ICODE_MODE=git`, fill `ICODE_GIT_URL` / `ICODE_GIT_REF` / `ICODE_GIT_REF_KIND`. The archived JSON includes `icode_git` (resolved SHA + subject). Full split: [icode-harness-inputs.md](icode-harness-inputs.md).
 
-Release-mode CI: **upload** `ICODE_RELEASE_FILE` in this UI. `mac-k3d eval --job` cannot attach a file.
+Release-mode CI: **upload** `ICODE_RELEASE_FILE` on any of the three jobs. `mac-k3d eval --job` cannot attach a file. On `_some_task` and `_full_suite_task` the dispatcher hashes the upload, archives it, and each shard copies that file and checks the sha256.
 
 3. Click **Build**. Console must say `Running on <this-worker-name>`. The build is allowed **96 hours**. Re-run `mac-k3d config` on the controller so the Jenkins job picks up that limit; an already installed job still has the old cap.
 4. Download **Build Artifacts** → `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, plus `summary.md` and `report.html` in that same folder. Token totals are input, output, and the sum.
@@ -209,8 +211,8 @@ mac-k3d eval --job one --task abs-module-cache-flags --icode-mode git \
 mac-k3d eval --job some --tasks a,b,c --n-rollouts 4
 mac-k3d eval --job full
 # Developer fields go through --param (or the developer page):
-mac-k3d eval --job some --tasks a,b --shard-size 1 --param CANARY=on
-# Release mode: open the job page and upload ICODE_RELEASE_FILE; the CLI cannot attach a file.
+mac-k3d eval --job some --tasks a,b --shard-size 1 --param AGENT_LABEL=lolbench
+# Release mode: open any of the three job pages and upload ICODE_RELEASE_FILE; the CLI cannot attach a file.
 ```
 
 All flags and what each job refuses: [commands.md](commands.md#queue-a-jenkins-job-from-the-cli). `--yes` without `--local` is the same as `--job one`.

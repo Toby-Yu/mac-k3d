@@ -180,7 +180,7 @@ pub fn extract_to(root: &Path, require_clean: bool) -> Result<BuildInfo> {
 fn extract_to_with(root: &Path, require_clean: bool, info: &BuildInfo) -> Result<()> {
     if require_clean && !info.is_clean() {
         return Err(Error::Config(format!(
-            "this mac-k3d binary was built from {} and an official run needs one clean commit. \
+            "this mac-k3d binary was built from {} and every Jenkins build needs one clean commit. \
              Commit, push and run scripts/redeploy.sh, then rebuild.",
             describe_commit(info)
         )));

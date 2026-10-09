@@ -9,7 +9,6 @@ source "$PIPELINE_LIB/icode_input.sh"
 
 ICODE_MODE="$(icode_normalize_mode)"
 export ICODE_MODE
-icode_apply_official_pin
 echo "icode: resolving iCode ($ICODE_MODE)"
 
 # Do not reuse git identity from an earlier git-mode run in this WORKDIR.
@@ -48,8 +47,10 @@ else
 fi
 echo "OK icode helps ($ICODE_BIN)"
 if [ -s "$WORKDIR/icode_git.json" ]; then
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print("OK iCode git kind={kind} ref={ref} sha={sha}".format(**d))' "$WORKDIR/icode_git.json" || true
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print("OK iCode git kind={kind} ref={ref} sha={sha}".format(**d)); print("iCode under test: git {kind} {ref} -> {sha} ({subject})".format(**d))' "$WORKDIR/icode_git.json" || true
   cp "$WORKDIR/icode_git.json" "$OUTPUT_DIR/icode_git.json"
+elif [ -s "$WORKDIR/icode_release.json" ]; then
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print("iCode under test: release {filename} sha256 {sha256}".format(**d))' "$WORKDIR/icode_release.json" || true
 fi
 if [ "$ICODE_MODE" = "git" ] && [ -n "${HOST_ROOT:-}" ]; then
   icode_assert_clean_checkout "$HOST_ROOT"

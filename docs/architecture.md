@@ -233,7 +233,7 @@ Scale workers, not controllers. Lockable-resources state is per-controller, so a
 | `artifact.json` | `eval_protocol.pipeline` → `source: binary` plus the same four fields |
 | Aggregate of shards | `pipeline_status: same`, or `mixed` with each commit/hash when a worker missed a redeploy |
 
-`OFFICIAL=1` extracts with `--require-clean`, which refuses a dirty build or an unknown commit, and `check_report.py` rejects a dirty or mixed pipeline. A commit reaches every host through `scripts/redeploy.sh` — see [workflow.md](workflow.md#development-loop-commit-push-redeploy). There is no GitHub clone on the worker and no pipeline URL or ref parameter.
+Every Jenkins build extracts with `--require-clean`, which refuses a dirty build or an unknown commit, and `check_report.py` rejects a dirty or mixed pipeline. A commit reaches every host through `scripts/redeploy.sh` — see [workflow.md](workflow.md#development-loop-commit-push-redeploy). There is no GitHub clone on the worker and no pipeline URL or ref parameter.
 
 ## Cross-network operation (not necessarily LAN)
 

@@ -342,12 +342,13 @@ def build_eval_protocol(
     else:
         icode = {
             "mode": os.environ.get("ICODE_MODE") or "release",
-            "version": _icode_version_from_path(bin_path),
+            "version": (release_doc or {}).get("sha256") or _icode_version_from_path(bin_path),
             "bin_path": bin_path,
             "source": bin_path,
         }
     if release_doc:
         icode["release"] = release_doc
+        icode["version"] = release_doc["sha256"]
     cpu_lock = inputs.get("cpu_lock_qty")
     if not isinstance(cpu_lock, int) or isinstance(cpu_lock, bool):
         raw_lock = os.environ.get("CPU_LOCK_QTY") or ""
@@ -628,6 +629,25 @@ def _empty_patch_markdown(items: list) -> list[str]:
     return lines
 
 
+def icode_under_test(protocol: dict | None) -> str:
+    """One line naming the iCode this run actually graded: git SHA or release sha256."""
+    icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
+    git = icode.get("git") if isinstance(icode.get("git"), dict) else {}
+    if icode.get("mode") != "release" and (git.get("sha") or icode.get("mode") == "git"):
+        kind = git.get("kind") or "-"
+        ref = git.get("ref") or "-"
+        sha = git.get("sha") or icode.get("version") or "-"
+        subject = str(git.get("subject") or "").strip()
+        line = f"git {kind} {ref} -> {sha}"
+        if subject:
+            line += f" ({subject})"
+        return line
+    release = icode.get("release") if isinstance(icode.get("release"), dict) else {}
+    name = release.get("filename") or "-"
+    digest = release.get("sha256") or icode.get("version") or "-"
+    return f"release {name} sha256 {digest}"
+
+
 def summary_markdown(doc: dict) -> str:
     suite = doc.get("suite")
     title = _suite_title(suite)
@@ -649,6 +669,7 @@ def summary_markdown(doc: dict) -> str:
         lines.append(f"- iCode mode: `{icode.get('mode') or '-'}`")
         lines.append(f"- iCode version: `{icode.get('version') or '-'}`")
         lines.append(f"- iCode source: `{icode.get('source') or '-'}`")
+        lines.append(f"- iCode under test: `{icode_under_test(protocol)}`")
         lines.append(
             "- Model params: "
             f"provider `{params.get('provider') or '-'}` · "
@@ -965,7 +986,7 @@ def skipped_reasons(doc: dict) -> dict[str, str]:
 def questions_without_score(doc: dict) -> list[tuple[str, str]]:
     """``(question, cause)`` for every question with no scored rollout.
 
-    The cause is the skip reason (an OFFICIAL leak hit), else the rollouts' own
+    The cause is the skip reason (a leak-scan hit), else the rollouts' own
     causes, such as an `infra:` note or `no trial`.
     """
     arm = doc.get("icode") if isinstance(doc.get("icode"), dict) else {}

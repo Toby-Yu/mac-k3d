@@ -36,6 +36,53 @@ from score_results import (  # noqa: E402
 FIXTURE = LIB / "testdata" / "report-min.json"
 
 
+def official_protocol_inputs() -> dict:
+    """The provenance a comparison artifact must carry on every run."""
+    return {
+        "harbor": {"version": "0.22.0"},
+        "benchmark": {
+            "url": "https://github.com/datacurve-ai/deep-swe",
+            "sha": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+            "task_count": 113,
+            "tasks": {},
+        },
+        "grader_overlay": {"marker": "mac-k3d-lolbench-fix-rewards-v1", "sha256": "abc"},
+        "images": {},
+        "worker": {
+            "node": "n",
+            "nproc": 1,
+            "memory_kb": 1,
+            "docker_version": "27",
+            "kernel": "7",
+            "cpu_model": "cpu",
+        },
+        "requester": {"user": "unknown", "build_url": "unknown"},
+        "pipeline": {"commit": "abcdef", "dirty": False},
+        "isolation": valid_isolation(),
+    }
+
+
+def stamp_official(doc: dict) -> dict:
+    doc["eval_protocol"] = {
+        "icode": {"mode": "git"},
+        "model_params": {
+            "provider": "DeepSeek",
+            "reasoning_effort": "high",
+            "thinking": {"type": "enabled"},
+        },
+        "resources": {},
+        **official_protocol_inputs(),
+    }
+    doc["anticheat"] = {"status": "ok", "version": "mac-k3d-anticheat-v1"}
+    doc["icode_git"] = {
+        "url": "https://gitcode.com/michaelling/jiuwenicode",
+        "kind": "commit",
+        "ref": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
+        "sha": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
+    }
+    return doc
+
+
 def valid_isolation() -> dict:
     return {
         "mode": "git",
@@ -2312,6 +2359,7 @@ class EvalReportTests(unittest.TestCase):
             "cpus_each": 1,
             "icode": arm,
         }
+        stamp_official(doc)
         self.assertEqual(validate(doc), [])
         text = summary_markdown(doc)
         self.assertIn("Pass@1..k (padded, missing=fail): Pass@1 **33.3%**", text)
@@ -2685,6 +2733,28 @@ class EvalReportTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (work / "harness" / "skipped_questions.txt").write_text("beta\n", encoding="utf-8")
+            (work / "eval_protocol_inputs.json").write_text(
+                json.dumps(official_protocol_inputs()) + "\n", encoding="utf-8"
+            )
+            (work / "icode_git.json").write_text(
+                json.dumps(
+                    {
+                        "url": "https://gitcode.com/michaelling/jiuwenicode",
+                        "kind": "commit",
+                        "ref": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
+                        "sha": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
+                        "subject": "pin",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            anticheat = work / "harness" / "anticheat"
+            anticheat.mkdir(parents=True)
+            (anticheat / "summary.json").write_text(
+                json.dumps({"status": "ok", "version": "mac-k3d-anticheat-v1", "counts": {"clean": 1}}) + "\n",
+                encoding="utf-8",
+            )
             backup = root / "backup"
             env = os.environ.copy()
             env.pop("BUILD_NUMBER", None)
@@ -2964,22 +3034,14 @@ class ProvenanceTests(unittest.TestCase):
             (root / "a.txt").write_text("b\n", encoding="utf-8")
             self.assertTrue(pipeline_facts(root)["dirty"])
 
-    def test_official_check_refuses_a_dirty_or_mixed_pipeline(self):
+    def test_every_run_refuses_a_dirty_or_mixed_pipeline(self):
         from check_report import official_provenance_errors
 
-        old = os.environ.get("OFFICIAL")
-        os.environ["OFFICIAL"] = "1"
-        try:
-            dirty = official_provenance_errors({"eval_protocol": {"pipeline": {"commit": "abc", "dirty": True}}})
-            clean = official_provenance_errors({"eval_protocol": {"pipeline": {"commit": "abc", "dirty": False}}})
-            mixed = official_provenance_errors(
-                {"pipeline_status": "mixed", "eval_protocol": {"pipeline": {"commit": "abc", "dirty": False}}}
-            )
-        finally:
-            if old is None:
-                os.environ.pop("OFFICIAL", None)
-            else:
-                os.environ["OFFICIAL"] = old
+        dirty = official_provenance_errors({"eval_protocol": {"pipeline": {"commit": "abc", "dirty": True}}})
+        clean = official_provenance_errors({"eval_protocol": {"pipeline": {"commit": "abc", "dirty": False}}})
+        mixed = official_provenance_errors(
+            {"pipeline_status": "mixed", "eval_protocol": {"pipeline": {"commit": "abc", "dirty": False}}}
+        )
         self.assertTrue(any("clean pipeline commit" in e for e in dirty))
         self.assertFalse(any("clean pipeline commit" in e or "pipeline_status" in e for e in clean))
         self.assertTrue(any("pipeline_status mixed" in e for e in mixed))
@@ -3198,20 +3260,10 @@ class ProvenanceTests(unittest.TestCase):
             "ref": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
             "sha": "eea9d66dd00f137c3400b79c1c8574d8ae7debd1",
         }
-        previous = os.environ.get("OFFICIAL")
-        os.environ.pop("OFFICIAL", None)
-        try:
-            self.assertEqual(validate(doc), [])
-            os.environ["OFFICIAL"] = "1"
-            errors = validate(doc)
-            self.assertTrue(any("eval_protocol.harbor.version" in err for err in errors), errors)
-            doc["eval_protocol"]["harbor"] = {"version": "0.22.0"}
-            self.assertEqual(validate(doc), [])
-        finally:
-            if previous is None:
-                os.environ.pop("OFFICIAL", None)
-            else:
-                os.environ["OFFICIAL"] = previous
+        errors = validate(doc)
+        self.assertTrue(any("eval_protocol.harbor.version" in err for err in errors), errors)
+        doc["eval_protocol"]["harbor"] = {"version": "0.22.0"}
+        self.assertEqual(validate(doc), [])
 
     def test_official_isolation_rules(self):
         from check_report import official_isolation_errors
@@ -3219,7 +3271,7 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(official_isolation_errors(valid_isolation()), [])
         self.assertEqual(official_isolation_errors(None), ["missing eval_protocol.isolation"])
         cases = [
-            ("mode", "release", "mode must be git"),
+            ("mode", "binary", "mode must be git or release"),
             ("sanitizer", "", "missing eval_protocol.isolation.sanitizer"),
             ("sourceless", False, "sourceless must be true"),
             ("tree_sha256", "short", "tree_sha256 must be a sha256"),
@@ -3241,7 +3293,7 @@ class ProvenanceTests(unittest.TestCase):
             self.assertTrue(any("one read-only mount" in err for err in official_isolation_errors(iso)), mount)
         iso = valid_isolation()
         iso["leak_scan"]["hit_tasks"] = ["cpython_5"]
-        # OFFICIAL=1 skipped the hit question: it has no trial, so nothing leaked.
+        # A leak hit with no trial was skipped, so nothing leaked.
         skipped = {"icode": {"tasks": [{"id": "cpython_5", "n_scored": 0, "rollouts": []}]}}
         self.assertEqual(official_isolation_errors(iso, skipped), [])
         ran = {"icode": {"tasks": [{"id": "cpython_5", "n_scored": 0, "rollouts": [{"trial": "cpython_5__a"}]}]}}
@@ -3266,6 +3318,34 @@ class ProvenanceTests(unittest.TestCase):
         iso["canary"]["status"] = "fail"
         iso["canary"]["failed_tasks"] = ["alpha"]
         self.assertTrue(any("canary.status must be pass" in err for err in official_isolation_errors(iso)))
+
+    def test_release_mode_checks_the_binary_sha256_and_skips_the_git_runtime(self):
+        from check_report import official_isolation_errors, official_provenance_errors
+        from render_report import icode_under_test
+
+        iso = valid_isolation()
+        iso["mode"] = "release"
+        iso["sanitizer"] = ""
+        iso["sourceless"] = None
+        iso["tree_sha256"] = ""
+        iso["runtime_sha256"] = ""
+        iso["manifest_matches_tree"] = None
+        self.assertEqual(official_isolation_errors(iso), [])
+        digest = "e" * 64
+        doc = {
+            "eval_protocol": {
+                "isolation": iso,
+                "icode": {"mode": "release", "release": {"filename": "icode-drop", "sha256": digest}},
+            }
+        }
+        errors = official_provenance_errors(doc)
+        self.assertFalse(any("icode.release.sha256" in err or "missing icode_git" in err for err in errors), errors)
+        bare = {"eval_protocol": {"isolation": iso, "icode": {"mode": "release"}}}
+        self.assertTrue(any("release.sha256" in err for err in official_provenance_errors(bare)))
+        self.assertEqual(
+            icode_under_test(doc["eval_protocol"]),
+            f"release icode-drop sha256 {digest}",
+        )
 
     def test_a_merged_report_carries_each_shards_hashes_in_its_rows(self):
         from check_report import official_isolation_errors
@@ -3812,7 +3892,7 @@ class AgentIsolationTests(unittest.TestCase):
             proc = leakscan("big,fine", "1")
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("WARNING: leak scan found task gold for 1 of 2 questions (big;", proc.stdout)
-            self.assertIn("OFFICIAL=1 skips those questions", proc.stdout)
+            self.assertIn("skipping those questions", proc.stdout)
             self.assertEqual(skipped.read_text(encoding="utf-8"), "big\tleak scan hit\n")
             recorded = json.loads((work / "eval_protocol_inputs.json").read_text(encoding="utf-8"))
             self.assertEqual(recorded["isolation"]["leak_scan"]["hit_tasks"], ["big"])
@@ -3821,11 +3901,12 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("leak scan found task gold for every selected question (big;", proc.stdout + proc.stderr)
 
-            # A smoke run warns and skips nothing; the earlier build's list is gone.
+            # The same skip happens with OFFICIAL unset: every run skips a hit.
+            skipped.unlink()
             proc = leakscan("big,fine", "0")
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("Smoke run continues", proc.stdout)
-            self.assertFalse(skipped.exists())
+            self.assertIn("skipping those questions", proc.stdout)
+            self.assertEqual(skipped.read_text(encoding="utf-8"), "big\tleak scan hit\n")
 
     def test_the_evaluate_phase_leaves_skipped_questions_out_of_harbor(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4156,15 +4237,15 @@ class AgentIsolationTests(unittest.TestCase):
             )
             self.assertTrue((work / "canary" / "jenkins-dry" / "alpha" / "canary_spec.json").is_file())
 
-    def test_canary_off_prints_no_canary_line(self):
+    def test_canary_runs_on_every_scored_dry_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             proc, _ = self._run_eval_dry(Path(tmp))
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertNotIn("canary dry-run", proc.stdout)
+            self.assertIn("canary dry-run", proc.stdout)
 
     def test_canary_allow_host_opens_one_host_for_the_canary_only(self):
         with tempfile.TemporaryDirectory() as tmp:
-            proc, _ = self._run_eval_dry(Path(tmp), extra_env={"CANARY": "on", "CANARY_ALLOW_HOST": "github.com"})
+            proc, _ = self._run_eval_dry(Path(tmp), extra_env={"CANARY": "only", "CANARY_ALLOW_HOST": "github.com"})
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             icode = self._dry_line(proc.stdout, "harbor dry-run")
             canary = self._dry_line(proc.stdout, "canary dry-run")
@@ -4174,11 +4255,11 @@ class AgentIsolationTests(unittest.TestCase):
             spec = json.loads(Path(spec_arg[len("spec="):]).read_text(encoding="utf-8"))
             self.assertEqual(spec["allow_host"], "github.com")
 
-    def test_official_refuses_canary_off_and_allow_host(self):
+    def test_a_scored_run_refuses_canary_off_and_an_opened_host(self):
         cases = (
-            ({"OFFICIAL": "1", "CANARY": "off"}, "OFFICIAL=1 runs the isolation canary"),
-            ({"OFFICIAL": "1", "CANARY_ALLOW_HOST": "github.com"}, "OFFICIAL=1 refuses it"),
-            ({"CANARY": "sometimes"}, "CANARY must be official, on, only or off"),
+            ({"CANARY": "off"}, "CANARY must be on, or only"),
+            ({"CANARY_ALLOW_HOST": "github.com"}, "a scored run cannot open a host"),
+            ({"CANARY": "sometimes"}, "CANARY must be on, or only"),
         )
         for extra, message in cases:
             with tempfile.TemporaryDirectory() as tmp:

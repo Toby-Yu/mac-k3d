@@ -46,11 +46,6 @@ REQUIRED_TASK = (
 REQUIRED_BASELINE = ("reward", "tok_in", "tok_out", "dur_s", "dur_min")
 
 
-def official_enabled() -> bool:
-    raw = os.environ.get("OFFICIAL", "").strip().lower()
-    return raw in ("1", "true", "yes", "on")
-
-
 def _nonempty_str(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
@@ -92,17 +87,19 @@ def official_isolation_errors(isolation: object, doc: dict | None = None) -> lis
     ran = _ran_shards(protocol)
     errors: list[str] = []
     loc = "eval_protocol.isolation"
-    if isolation.get("mode") != "git":
-        errors.append(f"{loc}.mode must be git")
-    if not _nonempty_str(isolation.get("sanitizer")):
-        errors.append(f"missing {loc}.sanitizer")
-    if isolation.get("sourceless") is not True:
-        errors.append(f"{loc}.sourceless must be true")
-    for key in ("tree_sha256", "runtime_sha256"):
-        if not _SHA256.match(str(isolation.get(key) or "")):
-            errors.append(f"{loc}.{key} must be a sha256")
-    if isolation.get("manifest_matches_tree") is not True:
-        errors.append(f"{loc}.manifest_matches_tree must be true (the tree changed after sanitizing)")
+    mode = isolation.get("mode")
+    if mode == "git":
+        if not _nonempty_str(isolation.get("sanitizer")):
+            errors.append(f"missing {loc}.sanitizer")
+        if isolation.get("sourceless") is not True:
+            errors.append(f"{loc}.sourceless must be true")
+        for key in ("tree_sha256", "runtime_sha256"):
+            if not _SHA256.match(str(isolation.get(key) or "")):
+                errors.append(f"{loc}.{key} must be a sha256")
+        if isolation.get("manifest_matches_tree") is not True:
+            errors.append(f"{loc}.manifest_matches_tree must be true (the tree changed after sanitizing)")
+    elif mode != "release":
+        errors.append(f"{loc}.mode must be git or release")
     mount = isolation.get("mount") if isinstance(isolation.get("mount"), dict) else {}
     if mount.get("count") != 1 or mount.get("target") != "/opt/icode-host" or mount.get("read_only") is not True:
         errors.append(f"{loc}.mount must be one read-only mount at /opt/icode-host")
@@ -116,7 +113,7 @@ def official_isolation_errors(isolation: object, doc: dict | None = None) -> lis
     elif not isinstance(hits, list):
         errors.append(f"{loc}.leak_scan.hit_tasks must be a list")
     else:
-        # OFFICIAL=1 skips a hit question (tasks/leakscan); one with trials leaked.
+        # A leak hit is skipped (tasks/leakscan); one that still has trials leaked.
         leaked = sorted({str(t) for t in hits} & tasks_with_trials(doc))
         if leaked:
             errors.append(f"{loc}.leak_scan: hit questions have trials ({', '.join(leaked)})")
@@ -133,9 +130,7 @@ def official_isolation_errors(isolation: object, doc: dict | None = None) -> lis
 
 
 def official_provenance_errors(doc: dict) -> list[str]:
-    """Required when OFFICIAL=1. Smoke artifacts stay valid without these fields."""
-    if not official_enabled():
-        return []
+    """Every comparison artifact must record the same provenance. There is no smoke exception."""
     errors: list[str] = []
     protocol = doc.get("eval_protocol")
     if not isinstance(protocol, dict):
@@ -174,16 +169,23 @@ def official_provenance_errors(doc: dict) -> list[str]:
     if not isinstance(pipe.get("dirty"), bool):
         errors.append("missing eval_protocol.pipeline.dirty")
     elif pipe.get("dirty"):
-        errors.append("eval_protocol.pipeline.dirty: an official run needs a clean pipeline commit")
+        errors.append("eval_protocol.pipeline.dirty: a run needs a clean pipeline commit")
     if doc.get("pipeline_status") == "mixed":
         errors.append("pipeline_status mixed: the shards ran different pipeline builds")
     errors.extend(official_isolation_errors(protocol.get("isolation"), doc))
     anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else {}
     if anticheat.get("status") != "ok" or not _nonempty_str(anticheat.get("version")):
         errors.append("anticheat must have run (anticheat/verdict)")
-    git = doc.get("icode_git")
-    if not isinstance(git, dict) or not _nonempty_str(git.get("sha")):
-        errors.append("missing icode_git")
+    isolation = protocol.get("isolation") if isinstance(protocol.get("isolation"), dict) else {}
+    icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
+    if isolation.get("mode") == "release" or icode.get("mode") == "release":
+        release = icode.get("release") if isinstance(icode.get("release"), dict) else {}
+        if not _SHA256.match(str(release.get("sha256") or "")):
+            errors.append("eval_protocol.icode.release.sha256 must be a sha256")
+    else:
+        git = doc.get("icode_git")
+        if not isinstance(git, dict) or not _nonempty_str(git.get("sha")):
+            errors.append("missing icode_git")
     return errors
 
 
@@ -361,8 +363,8 @@ def validate(doc: object) -> list[str]:
                 if key not in icode_git:
                     errors.append(f"missing icode_git.{key}")
             kind = icode_git.get("kind")
-            if kind is not None and kind not in ("branch", "tag", "commit"):
-                errors.append("icode_git.kind should be branch, tag, or commit")
+            if kind is not None and kind not in ("branch", "tag", "commit", "pr"):
+                errors.append("icode_git.kind should be branch, tag, commit, or pr")
     n_rollouts = doc.get("n_rollouts")
     if n_rollouts is not None and (
         isinstance(n_rollouts, bool) or not isinstance(n_rollouts, int) or n_rollouts < 1

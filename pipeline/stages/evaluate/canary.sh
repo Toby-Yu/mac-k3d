@@ -11,10 +11,6 @@ source "$(cd "$(dirname "$0")" && pwd)/harbor_cmd.sh"
 
 check_canary_settings
 CANARY_MODE="$(canary_mode)"
-if [ "$CANARY_MODE" = off ]; then
-  echo "canary: off (CANARY=${CANARY:-official}, OFFICIAL=${OFFICIAL:-0})"
-  exit 0
-fi
 load_eval_state
 write_harbor_env
 

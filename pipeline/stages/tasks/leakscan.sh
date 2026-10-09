@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # tasks/leakscan: the mounted iCode tree must not contain any selected task's
-# gold patch. Smoke runs warn. OFFICIAL=1 lists each hit question in
-# skipped_tasks.txt, so the evaluate phase runs the others; it stops here only
-# when every selected question is hit.
+# gold patch. A hit question is listed in skipped_tasks.txt and left out of
+# the evaluate phase; the build stops here only when every selected question
+# is hit.
 set -euo pipefail
 # shellcheck source=../_common.sh
 source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
@@ -31,9 +31,8 @@ fi
 case "$leak_rc" in
   0) echo "OK leak scan: no task gold in $HOST_ICODE" ;;
   2)
-    if official_run; then
-      counts="$(
-        python3 - "$LEAKSCAN_OUT" "$WORKDIR/selected_tasks.txt" "$SKIPPED_TASKS" <<'PY'
+    counts="$(
+      python3 - "$LEAKSCAN_OUT" "$WORKDIR/selected_tasks.txt" "$SKIPPED_TASKS" <<'PY'
 import json, sys
 from pathlib import Path
 
@@ -44,16 +43,13 @@ skip = [tid for tid in ids if tid in {str(h) for h in hits}]
 out.write_text("".join(f"{tid}\tleak scan hit\n" for tid in skip), encoding="utf-8")
 print(len(skip), len(ids), ",".join(skip))
 PY
-      )"
-      read -r n_hit n_selected hit_ids <<<"$counts"
-      if [ "$n_hit" -ge "$n_selected" ]; then
-        die "leak scan found task gold for every selected question ($hit_ids; see $LEAKSCAN_OUT); OFFICIAL=1 stops here"
-      fi
-      echo "WARNING: leak scan found task gold for $n_hit of $n_selected questions ($hit_ids; see $LEAKSCAN_OUT)."
-      echo "leak scan: OFFICIAL=1 skips those questions (listed in $SKIPPED_TASKS); the other $((n_selected - n_hit)) run"
-    else
-      echo "WARNING: leak scan found task gold in the mounted iCode tree (see $LEAKSCAN_OUT). Smoke run continues; OFFICIAL=1 would skip the hit questions."
+    )"
+    read -r n_hit n_selected hit_ids <<<"$counts"
+    if [ "$n_hit" -ge "$n_selected" ]; then
+      die "leak scan found task gold for every selected question ($hit_ids; see $LEAKSCAN_OUT); the run stops here"
     fi
+    echo "WARNING: leak scan found task gold for $n_hit of $n_selected questions ($hit_ids; see $LEAKSCAN_OUT)."
+    echo "leak scan: skipping those questions (listed in $SKIPPED_TASKS); the other $((n_selected - n_hit)) run"
     ;;
   *) die "leak scanner failed (exit $leak_rc)" ;;
 esac

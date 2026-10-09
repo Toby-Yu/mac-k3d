@@ -149,13 +149,13 @@ It asks each host's SSH password once and copies the binary to every remote host
 
 - **Did my fix work?** Redeploy, rebuild, compare `pipeline.commit` with the previous build's.
 - **Did that commit break it?** Check out the known-good commit, redeploy, rebuild.
-- **Reproduce an old number?** Redeploy its `pipeline.commit`. An `OFFICIAL=1` build runs `mac-k3d pipeline --require-clean`, which refuses a dirty build or an unknown commit, so an official number always names one commit.
+- **Reproduce an old number?** Redeploy its `pipeline.commit`. Every Jenkins build runs `mac-k3d pipeline --require-clean`, which refuses a dirty build or an unknown commit, so a number always names one commit.
 
-A sharded run merges builds from several workers. If they report different `pipeline.commit` or `pipeline_hash` (a worker missed a redeploy), the aggregate `artifact.json` says `pipeline_status: mixed` and lists each one; `OFFICIAL=1` rejects it.
+A sharded run merges builds from several workers. If they report different `pipeline.commit` or `pipeline_hash` (a worker missed a redeploy), the aggregate `artifact.json` says `pipeline_status: mixed` and lists each one; the report check rejects it.
 
 Worker `config` downloads `agent.jar` next to the running one and swaps it in only when the bytes differ. The agent is restarted only when the jar, `launch-agent.sh` or the systemd unit / LaunchAgent changed; otherwise it prints `Jenkins agent unchanged, left running`, so a redeploy does not drop a connected worker.
 
-Developer parameters (pins, canary, `AGENT_LABEL`, `SHARD_SIZE`) show only in the `developer` profile. Switch while developing and back for handover:
+Developer parameters (pins, `AGENT_LABEL`, `SHARD_SIZE`) show only in the `developer` profile. Switch while developing and back for handover:
 
 ```bash
 mac-k3d set --ui-profile developer && mac-k3d config --skip-secrets   # on the controller

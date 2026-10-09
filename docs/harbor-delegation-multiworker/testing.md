@@ -17,8 +17,8 @@ The cases that cover this branch:
 - `some_task_dispatches_to_one_task` / `full_suite_dispatches_shards_then_aggregates` — the dispatchers take no executor, no lock and no Docker until the merge; they queue `<suite>_one_task` shards (`SHARD_SIZE`, at least one per online worker) and merge them in their own `Aggregate` stage by child build number
 - `each_shape_shows_only_its_params` / `user_profile_hides_dev_params` / `developer_profile_shows_dev_params` / `harness_llm_benchmark_always_visible` / `groovy_and_xml_param_sets_match` — the per-shape parameter lists, the `ui_profile` switch, and Groovy and XML rendering from one table
 - `agent_registers_with_one_executor` — one eval build per worker
-- `bootstrap_extracts_pipeline_from_installed_binary` / `no_mac_k3d_git_params` — every phase uses `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline` (`--require-clean` when `OFFICIAL=1`), only the first stage (Environment) clears it, and no job carries a `MAC_K3D_GIT_*` parameter, a `git fetch` or a `mac-k3d-src` clone
-- `extract_writes_build_json` / `require_clean_refuses_dirty_build` / `version_string_has_commit` / `pipeline_extract_needs_no_config` — `BUILD.json` carries the baked commit, dirty flag and pipeline hash; a dirty or unknown build is refused for official runs; `--version` names the commit
+- `bootstrap_extracts_pipeline_from_installed_binary` / `no_mac_k3d_git_params` — every phase uses `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline --require-clean`, only the first stage (Environment) clears it, and no job carries a `MAC_K3D_GIT_*` parameter, a `git fetch` or a `mac-k3d-src` clone
+- `extract_writes_build_json` / `require_clean_refuses_dirty_build` / `version_string_has_commit` / `pipeline_extract_needs_no_config` — `BUILD.json` carries the baked commit, dirty flag and pipeline hash; a dirty or unknown build is refused; `--version` names the commit
 - `agent_restart_only_when_jar_or_script_changed` — `agent.jar` is swapped by rename only when its bytes differ, and the agent restarts only when the jar or launch script changed
 - `test_pipeline_facts_reads_build_json` / `test_pipeline_facts_falls_back_to_a_git_checkout` / `test_shards_from_different_pipeline_builds_are_marked_mixed` — `eval_protocol.pipeline` comes from `BUILD.json` (`source: binary`) or git (`source: checkout`); an aggregate of two different builds says `pipeline_status: mixed`
 - `test_report_renders_when_the_task_declares_float_cpus` / `test_render_report_accepts_a_float_cpus_each` / `test_a_whole_float_cpu_count_is_an_int` — build #51's report crash: `cpus = 2.0` becomes `cpus_each: 2`
@@ -46,7 +46,7 @@ Every test names a commit, so a bad change is revertible and a good result is re
 
    It must end with `All hosts run mac-k3d 0.5.2 (<sha>).` and each worker's `config` should say `Jenkins agent unchanged, left running` unless the controller's `agent.jar` changed.
 2. Open `deepswe_one_task` -> **Build with Parameters**. There is no pipeline field: the build runs the worker's binary.
-3. To re-run an exact past build, check out the `pipeline.commit` from that build's `artifact.json`, redeploy, and rebuild. An `OFFICIAL=1` build refuses a dirty binary (`--require-clean`).
+3. To re-run an exact past build, check out the `pipeline.commit` from that build's `artifact.json`, redeploy, and rebuild. Every build refuses a dirty binary (`--require-clean`).
 
 Console signals, in order:
 

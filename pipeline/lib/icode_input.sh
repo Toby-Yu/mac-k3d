@@ -138,34 +138,6 @@ open(path, "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
 PY
 }
 
-# Official runs pin iCode PR 2. Smoke runs leave ICODE_GIT_REF_KIND=pr alone.
-OFFICIAL_ICODE_URL="https://gitcode.com/michaelling/jiuwenicode"
-OFFICIAL_ICODE_SHA="eea9d66dd00f137c3400b79c1c8574d8ae7debd1"
-
-icode_official_enabled() {
-  case "$(printf '%s' "${OFFICIAL:-0}" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on) return 0 ;;
-  esac
-  return 1
-}
-
-icode_apply_official_pin() {
-  local url kind ref
-  icode_official_enabled || return 0
-  [ "$(icode_normalize_mode)" = "git" ] || die "OFFICIAL=1 requires ICODE_MODE=git"
-  url="${ICODE_GIT_URL:-}"
-  url="${url%/}"
-  url="${url%.git}"
-  [ "$url" = "$OFFICIAL_ICODE_URL" ] || die "OFFICIAL=1 requires ICODE_GIT_URL=${OFFICIAL_ICODE_URL}"
-  ref="${ICODE_GIT_REF:-}"
-  kind="$(icode_normalize_ref_kind "${ICODE_GIT_REF_KIND:-commit}" "$ref")"
-  [ "$kind" = "commit" ] || die "OFFICIAL=1 requires ICODE_GIT_REF_KIND=commit"
-  [ "$ref" = "$OFFICIAL_ICODE_SHA" ] || die "OFFICIAL=1 requires ICODE_GIT_REF=${OFFICIAL_ICODE_SHA}"
-  if [ -z "${ICODE_EXPECT_SHA:-}" ]; then
-    export ICODE_EXPECT_SHA="$OFFICIAL_ICODE_SHA"
-  fi
-}
-
 icode_assert_expect_sha() {
   local dest="$1" expect head
   expect="$(printf '%s' "${ICODE_EXPECT_SHA:-}" | tr '[:upper:]' '[:lower:]')"
@@ -224,6 +196,11 @@ icode_record_release() {
   fi
   [ -f "$target" ] || die "ICODE_MODE=release: checksum target is not a file"
   hash="$(icode_sha256 "$target")"
+  if [ -n "${ICODE_RELEASE_SHA256:-}" ]; then
+    local expect
+    expect="$(printf '%s' "$ICODE_RELEASE_SHA256" | tr '[:upper:]' '[:lower:]')"
+    [ "$hash" = "$expect" ] || die "ICODE_RELEASE_SHA256=$expect but this file is $hash"
+  fi
   python3 - "$WORKDIR/icode_release.json" "$name" "$hash" <<'PY'
 import json, sys
 path, name, digest = sys.argv[1:4]
@@ -384,19 +361,8 @@ icode_write_sandbox_pth() {
   } >"$stdlib/site-packages/icode-host.pth"
 }
 
-# Sourceless stdlib is on for every benchmark, so all suites and models see the same runtime.
-# ICODE_SOURCELESS_STDLIB=0 turns it off for a non-official debug run; OFFICIAL=1 refuses that.
+# Sourceless stdlib is on for every run, so all suites and models see the same runtime.
 icode_sourceless_enabled() {
-  local raw
-  raw="$(printf '%s' "${ICODE_SOURCELESS_STDLIB:-}" | tr '[:upper:]' '[:lower:]')"
-  case "$raw" in
-    0|false|no|off)
-      if icode_official_enabled; then
-        die "OFFICIAL=1 requires the sourceless stdlib on every benchmark; unset ICODE_SOURCELESS_STDLIB"
-      fi
-      return 1
-      ;;
-  esac
   return 0
 }
 
@@ -409,12 +375,7 @@ icode_sanitize_host_tree() {
   local -a args
   [ -n "$dest" ] && [ -d "$dest/.venv/sandbox-cpython" ] || return 0
   lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  args=(--tree "$dest")
-  if icode_sourceless_enabled; then
-    args+=(--sourceless)
-  else
-    echo "WARNING: ICODE_SOURCELESS_STDLIB=${ICODE_SOURCELESS_STDLIB} leaves stdlib source readable at /opt/icode-host; this run is not comparable with default runs" >&2
-  fi
+  args=(--tree "$dest" --sourceless)
   python3 "$lib/icode_sanitize.py" "${args[@]}" >&2 || rc=$?
   if [ "$rc" = 3 ]; then
     echo "icode sanitize: re-embedding $dest/.venv/sandbox-cpython for the current sanitizer" >&2

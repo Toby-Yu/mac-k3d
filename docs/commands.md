@@ -100,7 +100,7 @@ A flag the job has no field for is refused rather than ignored: `--tasks` and `-
 | `--n-tasks N` | Number of tasks when `--task` is empty (default 1 locally). With `--job some` or `full`: `N_TASKS` |
 | `--benchmark deepswe\|lolbench\|swebenchpro` | Suite (default `deepswe`; Jenkins job follows this) |
 | `--task ID` | One question id (empty DeepSWE/SWE-bench Pro = first alphabetical; LoLBench example `ruff_1`) |
-| `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref); default `release` locally. With `--job one` only `git` is accepted; dispatchers always clone git. See [icode-harness-inputs.md](icode-harness-inputs.md) |
+| `--icode-mode release\|git` | `release` (`*-full-*` drop; `binary` is an alias) or `git` (clone URL + ref); default `release` locally. With `--job`, `release` is refused on every shape: the CLI cannot attach a file, so upload `ICODE_RELEASE_FILE` on the job page. See [icode-harness-inputs.md](icode-harness-inputs.md) |
 | `--icode-release PATH\|URL` | `release` mode for `--local` / `--stage`; empty = persist file then `~/.local/share/mac-k3d/icode-*-full-*` or `icode`. Jenkins release uses UI upload `ICODE_RELEASE_FILE` (the CLI does not attach a file) |
 | `--icode-git-url URL` | `git` mode: `https://` on github.com or gitcode.com (no tokens in the URL) |
 | `--icode-git-ref REF` | `git` mode: branch name, tag, commit SHA, or pull-request number when kind is `pr`. Default `main` |
@@ -126,8 +126,8 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 | Job | Parameters |
 |---|---|
 | `<suite>_one_task` | `TASK`, `N_ROLLOUTS` (default 1), `ICODE_MODE`, `ICODE_RELEASE_FILE`, `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `DEEPSEEK_MODEL` |
-| `<suite>_some_task` | `TASKS` (a list; wins if set), `N_TASKS` (first N sorted when `TASKS` is empty), `N_ROLLOUTS` (default 4), the three `ICODE_GIT_*`, `DEEPSEEK_MODEL` |
-| `<suite>_full_suite_task` | `N_ROLLOUTS` (default 4), the three `ICODE_GIT_*`, `DEEPSEEK_MODEL` |
+| `<suite>_some_task` | `TASKS` (a list; wins if set), `N_TASKS` (first N sorted when `TASKS` is empty), `N_ROLLOUTS` (default 4), `ICODE_MODE`, `ICODE_RELEASE_FILE`, the three `ICODE_GIT_*`, `DEEPSEEK_MODEL` |
+| `<suite>_full_suite_task` | `N_ROLLOUTS` (default 4), `ICODE_MODE`, `ICODE_RELEASE_FILE`, the three `ICODE_GIT_*`, `DEEPSEEK_MODEL` |
 
 **Developer profile only.** In `user` profile these are hidden parameters (Hidden Parameter plugin) that keep their defaults:
 
@@ -135,12 +135,11 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 |---|---|---|
 | `AGENT_LABEL` | `lolbench` | label a worker must carry (every worker has `lolbench`). On a dispatcher, a label no online worker carries fails the build at once, naming the online workers |
 | `AGGREGATE_LABEL` | empty | `some_task` / `full_suite_task`: label of the worker that runs the `Aggregate` stage (merge, cost report, combined archive). Empty means `AGENT_LABEL`. Shards ignore it |
-| `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF`, `ICODE_EXPECT_SHA` | pinned | `env` (Harbor, default from `pipeline/config/toolchain.env`) and `tasks` (benchmark and iCode) pins |
-| `OFFICIAL`, `CANARY`, `CANARY_ALLOW_HOST` | `0`, `official`, empty | provenance gate and isolation canary |
+| `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF` | pinned | `env` (Harbor, default from `pipeline/config/toolchain.env`) and `tasks` (benchmark) pins. The iCode SHA is not a field: the build prints and records the commit or release sha256 it actually ran |
 | `SHARD_SIZE` | `default_shard_size` (2) | `some_task` / `full_suite_task`: questions per shard for the whole run, not per worker. Shards = ceil(questions / `SHARD_SIZE`), raised to at least the number of online workers |
 | `N_TASKS` | suite size | `full_suite_task` only: lower it for a rehearsal |
 
-**Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`. A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API.
+**Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`, `ICODE_RELEASE_FROM`, `ICODE_RELEASE_SHA256`. A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API. `mac-k3d eval --job … --param OFFICIAL=1` (and `CANARY`, `CANARY_ALLOW_HOST`, `ICODE_EXPECT_SHA`) is refused: those fields are gone.
 
 There is no `CPU_LOCK_QTY`, `SHARDS` or `RESUME` parameter. A build locks every core of its worker (one executor per worker), and the dispatcher picks the shard count from `SHARD_SIZE` and the number of online workers. There is no pipeline URL or ref parameter either: the pipeline is the worker binary's, and `scripts/redeploy.sh` is how a commit reaches it.
 
@@ -170,7 +169,7 @@ Extract the `pipeline/` this binary was built with. Every Jenkins eval build run
 
 ```bash
 mac-k3d pipeline --extract-to "$WORKSPACE/mac-k3d-pipeline"
-mac-k3d pipeline --extract-to "$WORKSPACE/mac-k3d-pipeline" --require-clean   # OFFICIAL=1
+mac-k3d pipeline --extract-to "$WORKSPACE/mac-k3d-pipeline" --require-clean   # every Jenkins build
 mac-k3d --version     # mac-k3d 0.5.2 (<commit>[, dirty])
 ```
 
