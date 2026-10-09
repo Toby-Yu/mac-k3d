@@ -2258,6 +2258,57 @@ class EvalReportTests(unittest.TestCase):
             row = _attempt_from_trial(trial, trial / "verifier" / "reward.json")
             self.assertAlmostEqual(row["dur_s"], 1.5)
 
+    def test_a_suite_that_did_not_compile_stays_unsolved_and_is_noted(self):
+        from render_report import _attempt_from_trial
+
+        reward = json.dumps(
+            {
+                "reward": 0,
+                "f2p": 0.0,
+                "f2p_pass": 0,
+                "f2p_total": 5,
+                "p2p": 0.0,
+                "p2p_pass": 0,
+                "p2p_total": 4,
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            trial = Path(tmp)
+            verifier = trial / "verifier"
+            verifier.mkdir()
+            (verifier / "reward.json").write_text(reward, encoding="utf-8")
+            (verifier / "test-stdout.txt").write_text(
+                "FAIL\tgithub.com/open-policy-agent/opa/v1/rego [build failed]\n",
+                encoding="utf-8",
+            )
+            row = _attempt_from_trial(trial, verifier / "reward.json")
+            self.assertFalse(row["resolved"])
+            self.assertEqual(row["p2p"], 0.0)
+            self.assertEqual(row["p2p_pass"], 0)
+            self.assertEqual(row["p2p_total"], 4)
+            self.assertEqual(row["f2p_pass"], 0)
+            self.assertEqual(row["f2p_total"], 5)
+            self.assertEqual(row["notes"], "suite did not compile (tests did not run)")
+
+            (verifier / "test-stdout.txt").write_text(
+                "FAIL\tTestEvalPartialFormattedOutput\n",
+                encoding="utf-8",
+            )
+            ordinary = _attempt_from_trial(trial, verifier / "reward.json")
+            self.assertFalse(ordinary["resolved"])
+            self.assertEqual(ordinary["p2p_pass"], 0)
+            self.assertEqual(ordinary["p2p_total"], 4)
+            self.assertNotIn("suite did not compile", ordinary["notes"])
+
+            (verifier / "test-stdout.txt").write_text("ok\n", encoding="utf-8")
+            (verifier / "run.log").write_text(
+                '{"Action":"fail","FailedBuild":"github.com/open-policy-agent/opa/v1/topdown"}\n',
+                encoding="utf-8",
+            )
+            from_log = _attempt_from_trial(trial, verifier / "reward.json")
+            self.assertEqual(from_log["notes"], "suite did not compile (tests did not run)")
+            self.assertEqual(from_log["p2p_total"], 4)
+
     def test_wall_seconds_spans_attempt_timestamps(self):
         from eval_metrics import summarize_arm
 

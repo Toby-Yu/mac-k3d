@@ -151,6 +151,9 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None, max_tokens: int |
     if row["icode_exit"] == 137:
         row["oom_killed"] = True
         row["notes"] = _add_note(row["notes"], "iCode killed (exit 137, likely out of memory)")
+    # The grader's reward, F2P and P2P stand. The note says the named tests never ran.
+    if has_reward and _suite_did_not_compile(trial):
+        row["notes"] = _add_note(row["notes"], "suite did not compile (tests did not run)")
     exception = trial_exception(trial) if not has_reward else None
     if exception is not None:
         row["infra_failure"] = True
@@ -170,6 +173,20 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None, max_tokens: int |
 
 def _add_note(notes: str, note: str) -> str:
     return f"{notes}; {note}" if notes else note
+
+
+def _suite_did_not_compile(trial: Path) -> bool:
+    """The grader wrote a score, but `go test` (or the suite) never started because the patch did not build."""
+    needles = ("[build failed]", "FailedBuild")
+    for name in ("test-stdout.txt", "run.log"):
+        path = trial / "verifier" / name
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if any(needle in text for needle in needles):
+            return True
+    return False
 
 
 def _missing_attempt() -> dict:
