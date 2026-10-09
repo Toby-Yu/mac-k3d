@@ -333,15 +333,42 @@ fn urlencoding_simple(s: &str) -> String {
         .collect()
 }
 
-pub fn default_agent_name() -> String {
-    let host = Command::new("hostname")
+pub fn short_hostname() -> String {
+    Command::new("hostname")
         .arg("-s")
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "mac".into());
-    format!("mac-{host}")
+        .unwrap_or_else(|| "host".into())
+}
+
+/// Jenkins node name: the machine OS, then the short hostname.
+/// `linux` or `macos`, from [`crate::platform::host_os`].
+pub fn agent_name(os: &str, host: &str) -> String {
+    format!("{os}-{host}")
+}
+
+pub fn default_agent_name() -> String {
+    agent_name(crate::platform::host_os().as_str(), &short_hostname())
+}
+
+/// True when `saved` is the old default `mac-<hostname>` and the OS-prefixed
+/// name is different. A custom name is left alone.
+pub fn saved_name_needs_os_prefix(saved: &str, host: &str, os: &str) -> bool {
+    let legacy = format!("mac-{host}");
+    saved == legacy && saved != agent_name(os, host)
+}
+
+/// The saved `jenkins_agent.name` when this host still uses `mac-<hostname>`.
+pub fn legacy_mac_name(config: &crate::config::MacK3dConfig) -> Option<String> {
+    let host = short_hostname();
+    let saved = config.jenkins_agent.name.as_deref().unwrap_or("");
+    if saved_name_needs_os_prefix(saved, &host, crate::platform::host_os().as_str()) {
+        Some(saved.to_string())
+    } else {
+        None
+    }
 }
 
 pub fn default_remote_fs() -> PathBuf {
@@ -590,6 +617,41 @@ mod tests {
     fn parse_modern_jnlp_secret() {
         let xml = r#"<jnlp><application-desc><argument>abc123secret</argument><argument>mac-host</argument><argument>-webSocket</argument></application-desc></jnlp>"#;
         assert_eq!(parse_jnlp_secret(xml).as_deref(), Some("abc123secret"));
+    }
+
+    #[test]
+    fn agent_name_is_os_then_hostname() {
+        assert_eq!(agent_name("linux", "Michael-Ubuntu"), "linux-Michael-Ubuntu");
+        assert_eq!(
+            agent_name("linux", "iZt4ndd2dff7gqjta7mppaZ"),
+            "linux-iZt4ndd2dff7gqjta7mppaZ"
+        );
+        assert_eq!(agent_name("macos", "studio"), "macos-studio");
+    }
+
+    #[test]
+    fn legacy_mac_prefix_migrates_only_for_this_hostname() {
+        assert!(saved_name_needs_os_prefix(
+            "mac-Michael-Ubuntu",
+            "Michael-Ubuntu",
+            "linux"
+        ));
+        assert!(saved_name_needs_os_prefix("mac-studio", "studio", "macos"));
+        assert!(!saved_name_needs_os_prefix(
+            "linux-Michael-Ubuntu",
+            "Michael-Ubuntu",
+            "linux"
+        ));
+        assert!(!saved_name_needs_os_prefix(
+            "custom-worker",
+            "Michael-Ubuntu",
+            "linux"
+        ));
+        assert!(!saved_name_needs_os_prefix(
+            "mac-other",
+            "Michael-Ubuntu",
+            "linux"
+        ));
     }
 
     #[test]

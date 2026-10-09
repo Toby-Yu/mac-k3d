@@ -238,6 +238,8 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 
 `jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys. A worker's YAML always has both keys; `''` means not filled in yet, and `config` then prints which keys to fill in. `mac-k3d export` writes `api_token: ''`.
 
+`jenkins.remote_trigger_token` is the shared secret for **Trigger builds remotely** on the nine eval jobs. It lives only in the controller `config.yaml`. `config` generates it once when the field is empty. `mac-k3d export` omits it.
+
 ### `jenkins_job` (controller)
 
 | Field | Default | Meaning |

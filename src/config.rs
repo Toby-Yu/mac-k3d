@@ -130,6 +130,10 @@ pub struct JenkinsConfig {
     pub namespace: String,
     pub release_name: String,
     pub host_port: u16,
+    /// Shared secret for "Trigger builds remotely" on every eval job.
+    /// Local to this controller's config.yaml; `export` omits it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub remote_trigger_token: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -364,6 +368,7 @@ impl Default for MacK3dConfig {
                 namespace: "jenkins".into(),
                 release_name: "jenkins".into(),
                 host_port: 17070,
+                remote_trigger_token: String::new(),
             },
             docker: DockerConfig {
                 startup_timeout_secs: 120,
@@ -518,6 +523,7 @@ impl MacK3dConfig {
         out.jenkins_agent.agent_jar = None;
         out.jenkins_agent.cpu_cores = 0;
         out.jenkins_agent.api_token = None;
+        out.jenkins.remote_trigger_token.clear();
         out
     }
 
@@ -739,6 +745,7 @@ mod tests {
         cfg.jenkins_agent.cpu_cores = 8;
         cfg.jenkins_agent.api_user = Some("admin".into());
         cfg.jenkins_agent.api_token = Some("test-jenkins-token".into());
+        cfg.jenkins.remote_trigger_token = "remote-trigger-secret".into();
         cfg.jenkins_job.default_task = "ruff_1".into();
         cfg.jenkins_job.default_eval_mode = "binary".into();
         cfg
@@ -761,6 +768,7 @@ mod tests {
         assert_eq!(exported.jenkins_agent.name.as_deref(), Some("linux-eval-1"));
         assert_eq!(exported.jenkins_agent.api_user.as_deref(), Some("admin"));
         assert!(exported.jenkins_agent.api_token.is_none());
+        assert!(exported.jenkins.remote_trigger_token.is_empty());
         assert!(exported.jenkins_agent.remote_fs.is_none());
         assert!(exported.jenkins_agent.agent_jar.is_none());
         assert_eq!(exported.jenkins_agent.cpu_cores, 0);
@@ -778,6 +786,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("sanitized export"));
         assert!(!text.contains("test-jenkins-token"));
+        assert!(!text.contains("remote-trigger-secret"));
         assert!(text.contains("api_token: ''"), "{text}");
         assert!(text.contains("default_task: ruff_1"));
         let loaded = MacK3dConfig::load_file(&path).unwrap();

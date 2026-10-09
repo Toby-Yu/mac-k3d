@@ -13,11 +13,51 @@ pub fn run(args: &ConfigArgs, config: &MacK3dConfig, config_path: &Path) -> Resu
     if args.skip_agent {
         return Ok(());
     }
+    let mut config = config.clone();
+    if let Some(old) = jenkins_agent::legacy_mac_name(&config) {
+        let new_name = jenkins_agent::default_agent_name();
+        println!("Renaming Jenkins agent '{old}' to '{new_name}'…");
+        let _ = crate::prepare::agent_service::stop_and_uninstall();
+        if let Some(url) = config.jenkins_agent.controller_url.as_deref() {
+            let user = config.jenkins_agent.api_user();
+            let token = config.jenkins_agent.api_token();
+            if let Err(err) = jenkins_agent::delete_node(url, &old, user, token) {
+                println!(
+                    "Warning: could not delete Jenkins agent '{old}' ({err}). Remove it under Manage Jenkins → Nodes if it remains."
+                );
+            }
+            let cores = if config.jenkins_agent.cpu_cores > 0 {
+                config.jenkins_agent.cpu_cores
+            } else {
+                crate::prepare::resources::logical_cpu_cores()
+            };
+            if let Err(err) = crate::prepare::resources::remove_agent_cpu_cores(
+                url,
+                &old,
+                &config.resources.cpu_cores_label,
+                cores,
+                user,
+                token,
+            ) {
+                println!(
+                    "Warning: could not remove '{old}-core-N' ({err}). Remove those locks in Jenkins if they remain."
+                );
+            }
+        }
+        config.jenkins_agent.name = Some(new_name.clone());
+        match config.save(Some(config_path)) {
+            Ok(()) => println!("Agent name {old} -> {new_name} (saved in {}).", config_path.display()),
+            Err(err) => println!(
+                "Warning: could not write the new agent name to {} ({err}). The node is still registered as {new_name} this run.",
+                config_path.display()
+            ),
+        }
+    }
     if config.jenkins_agent.api_credentials().is_none() {
         println!("{}", wizard::blank_api_keys_hint(config_path));
     }
     println!("Ensuring Jenkins agent registration…");
-    jenkins_agent::ensure_worker_agent(config)
+    jenkins_agent::ensure_worker_agent(&config)
 }
 
 /// Warn only: the env phase of every build fails on a wrong Harbor anyway, and

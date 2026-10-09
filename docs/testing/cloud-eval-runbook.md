@@ -231,7 +231,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 | Harbor | Not asked: setup installs the pinned 0.22.0 with `uv` (no root) |
 | Jenkins controller URL | type `http://43.107.42.252:17070` (or export `JENKINS_URL` first). Wizard default is localhost. |
 | API user / token | `admin` + the **token secret** (or Enter to skip; the YAML keeps both keys empty) |
-| Agent name | Distinct default (hostname) is fine |
+| Agent name | Distinct default (`linux-<hostname>` or `macos-<hostname>`) is fine |
 | Write + apply | **yes** |
 
 If the token was empty, edit `~/.config/mac-k3d/worker.yaml` (`api_user` / `api_token` / `controller_url`) then:

@@ -222,7 +222,7 @@ launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>&1 | head -20
 
 ### 5. Confirm the node in Jenkins
 
-In the Jenkins UI: **Manage Jenkins → Nodes** (or **Build Executor Status** on the left). The agent name from YAML (for example `mac-Michael-Ubuntu`) should be **online**.
+In the Jenkins UI: **Manage Jenkins → Nodes** (or **Build Executor Status** on the left). The agent name from YAML (for example `linux-Michael-Ubuntu`) should be **online**.
 
 Then this machine can take queued jobs (`lolbench_one_task`) when an executor and locks are free.
 

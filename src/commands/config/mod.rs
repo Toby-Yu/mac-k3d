@@ -50,7 +50,9 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig, config_path: Option<&P
 
     match config.role {
         NodeRole::Worker => worker::run(&args, config, &config_path)?,
-        NodeRole::Controller | NodeRole::Standalone => controller::run(&args, config).await?,
+        NodeRole::Controller | NodeRole::Standalone => {
+            controller::run(&args, config, &config_path).await?
+        }
     }
     extract_share_pipeline();
 

@@ -78,7 +78,7 @@ mac-k3d eval --job some --tasks ipython-session-bundle-replay,ytt-jsonpath-query
 wazero-multi-module-snapshots,abs-module-cache-flags --n-rollouts 1 --shard-size 2
 
 mac-k3d eval --job full                                   # the whole suite, job defaults
-mac-k3d eval --job one --task abs-module-cache-flags --param AGENT_LABEL=mac-Michael-Ubuntu
+mac-k3d eval --job one --task abs-module-cache-flags --param AGENT_LABEL=linux-Michael-Ubuntu
 ```
 
 Run it on any machine whose config (or `~/.config/mac-k3d/worker.yaml`) has `jenkins_agent.controller_url`, `api_user` and `api_token`. curl gets the credentials on stdin, never in its arguments or the URL. Before queueing, the CLI reads the live job's field names; a field the live job lacks means its jobs are older than this binary, and it stops and asks for a controller redeploy instead of letting Jenkins drop the value.
@@ -237,7 +237,7 @@ If the config file already exists and stdin is a TTY, `prepare` (without `-i`) p
 2. **Storage**: scan volumes, default to the one with most free space, prompt for base directory under that volume.
 3. **Role**: standalone / controller / worker; set `jenkins.enabled` for controller.
 4. **Tools for that role only**: worker → Docker, Java, git; controller → Docker, k3d, kubectl, helm; standalone → Docker, k3d, kubectl, and Harbor + git when it will run `eval --local`. Harbor is not a question: it is installed at `HARBOR_VERSION` from `pipeline/config/toolchain.env` with `uv` (no root). Nor is a worker's Java: one at or above `JAVA_MAJOR` (the controller image's Java) is used, otherwise it is installed ([dependencies.md](dependencies.md)).
-5. **Worker agent block**: Jenkins URL, API user and token (Enter skips both; the YAML keeps `api_user: ''` / `api_token: ''`), agent name, labels, remote root. **Controller**: cluster, job defaults, CI secrets to the pending file.
+5. **Worker agent block**: Jenkins URL, API user and token (Enter skips both; the YAML keeps `api_user: ''` / `api_token: ''`), agent name (default `{os}-<hostname>`), labels, remote root. **Controller**: cluster, job defaults, CI secrets to the pending file.
 6. **Save** the YAML, then **apply**: storage directories, installs (root steps that cannot run here are printed as one block), worker host settings.
 7. **Disk check**: fail if free space on storage volume is below role minimum (standalone 40 GB, controller 60 GB, worker 40 GB). RAM preflight is 8 GB.
 8. Validate. Agent registration and the `<agent>-core-1..N` lockable resources are done by `config`, not here.
@@ -275,7 +275,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 2. Poll `docker info` until ready or timeout (`docker.startup_timeout_secs`).
 3. If cluster missing: `k3d cluster create` with port mappings from config.
 4. If cluster exists but stopped: `k3d cluster start`.
-5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins with `additionalPlugins` (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`), then create/update the nine eval jobs (and delete a leftover `eval_aggregate`) unless `--skip-job`.
+5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins with `additionalPlugins` (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`), then create/update the nine eval jobs (and delete a leftover `eval_aggregate`) unless `--skip-job`. That rewrite uses `jenkins.remote_trigger_token` from `config.yaml`, generating and saving one the first time, so "Trigger builds remotely" stays ticked.
 6. Write state file under `~/.local/state/mac-k3d/`.
 
 `--jenkins` overrides `jenkins.enabled` for this invocation only. If omitted, the config file value is used.
@@ -311,8 +311,8 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline jobs `deepswe_one_task` / `lolbench_one_task` with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md) and [icode-harness-inputs.md](icode-harness-inputs.md).
-5. **Worker:** warn when the installed Harbor is not `HARBOR_VERSION` or git is missing; using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node (one executor), write the node's connection secret to `{remote_fs}/.agent-secret` (mode 600) and rewrite `launch-agent.sh` (mode 700), which passes it as `-secret @<file>` so it never appears in the agent's arguments (an older script's inline secret moves to the file), create the `<agent>-core-1..N` resources (labelled with the shared `CPU_CORES` label and the agent name, N = `jenkins_agent.cpu_cores`) and delete any `<agent>-core-M` above N that no build holds, and **start the agent daemon** (systemd user unit `mac-k3d-jenkins-agent.service` on Linux, LaunchAgent `com.mac-k3d.jenkins-agent` on macOS) unless `--skip-agent`. With blank keys it prints which keys to fill in and the command to re-run. `config` is the only command that registers an agent.
+4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update the nine eval jobs with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`. Parameter defaults come from `jenkins_job.*`. See [lolbench-jenkins.md](lolbench-jenkins.md) and [icode-harness-inputs.md](icode-harness-inputs.md). The same rewrite sets `<authToken>` from `jenkins.remote_trigger_token`, which ticks **Trigger builds remotely** on every job. The first time that field is empty, `config` generates a token, saves it in `config.yaml` (mode 600), and prints one example URL (`…/job/deepswe_one_task/buildWithParameters?token=…`). Later `config` and `start` reuse the saved token and do not print it again. `mac-k3d eval` still queues with the API user; the token is only for that remote URL.
+5. **Worker:** warn when the installed Harbor is not `HARBOR_VERSION` or git is missing; using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node (one executor), write the node's connection secret to `{remote_fs}/.agent-secret` (mode 600) and rewrite `launch-agent.sh` (mode 700), which passes it as `-secret @<file>` so it never appears in the agent's arguments (an older script's inline secret moves to the file), create the `<agent>-core-1..N` resources (labelled with the shared `CPU_CORES` label and the agent name, N = `jenkins_agent.cpu_cores`) and delete any `<agent>-core-M` above N that no build holds, and **start the agent daemon** (systemd user unit `mac-k3d-jenkins-agent.service` on Linux, LaunchAgent `com.mac-k3d.jenkins-agent` on macOS) unless `--skip-agent`. A blank `jenkins_agent.name` becomes `{os}-<hostname>` (`linux` or `macos`, then the short hostname). A saved name that is exactly the old default `mac-<hostname>` is renamed the same way: the old node and its `<old>-core-N` locks are removed, the new name is written into the YAML, and the agent starts under the new node. Any other saved name is left alone. With blank keys it prints which keys to fill in and the command to re-run. `config` is the only command that registers an agent.
 6. Every role: extract `~/.local/share/mac-k3d/pipeline` for `eval --local` and manual runs (does not overwrite `icode`). Builds extract their own copy.
 
 `config` first sets the YAML it loaded to mode 600, since it holds `jenkins_agent.api_token`; every YAML mac-k3d writes is 600 too. Its Jenkins REST calls give curl the API token, the CSRF crumb and any Groovy script on stdin, never as arguments ([secrets.md](secrets.md#never-in-process-arguments)).
@@ -325,7 +325,7 @@ A `-c` path that does not exist fails at once with `no config at <path>; run mac
 
 ## `export`
 
-Write a **sanitized** copy of this machine’s config YAML (controller `config.yaml` or worker `worker.yaml`). Host paths are stripped and `jenkins_agent.api_token` is blanked (a worker file keeps `api_token: ''` so the slot stays visible). `credentials.pending.yaml` is never read or copied.
+Write a **sanitized** copy of this machine’s config YAML (controller `config.yaml` or worker `worker.yaml`). Host paths are stripped, `jenkins_agent.api_token` is blanked (a worker file keeps `api_token: ''` so the slot stays visible), and `jenkins.remote_trigger_token` is omitted. `credentials.pending.yaml` is never read or copied.
 
 ```bash
 mac-k3d export -o /tmp/controller.yaml

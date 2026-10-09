@@ -44,6 +44,7 @@ pub(super) fn ask(discovered: &DiscoveredDeps) -> Result<MacK3dConfig> {
             namespace: "jenkins".into(),
             release_name: "jenkins".into(),
             host_port,
+            remote_trigger_token: String::new(),
         },
         dependencies: DependenciesConfig {
             docker,

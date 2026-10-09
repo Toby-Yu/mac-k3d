@@ -1,6 +1,7 @@
 //! Controller (and standalone) `config`: kubeconfig, Jenkins admin, CI
 //! credentials, then the eval jobs.
 
+use std::path::Path;
 use std::time::Duration;
 
 use super::ConfigArgs;
@@ -9,8 +10,9 @@ use crate::error::Result;
 use crate::prepare::{jenkins_credentials, jenkins_job};
 use crate::runtime::{jenkins, k3d, kubectl, Tools};
 
-pub async fn run(args: &ConfigArgs, config: &MacK3dConfig) -> Result<()> {
-    let tools = Tools::from_config(config)?;
+pub async fn run(args: &ConfigArgs, config: &MacK3dConfig, config_path: &Path) -> Result<()> {
+    let mut config = config.clone();
+    let tools = Tools::from_config(&config)?;
     let has_cluster = k3d::inspect(&tools.k3d, &config.cluster.name)
         .await
         .map(|i| !matches!(i.state, k3d::ClusterState::Missing))
@@ -26,7 +28,7 @@ pub async fn run(args: &ConfigArgs, config: &MacK3dConfig) -> Result<()> {
     }
 
     let admin_password = if config.jenkins.enabled || args.show_jenkins {
-        show_jenkins_admin(&tools, config).await
+        show_jenkins_admin(&tools, &config).await
     } else {
         None
     };
@@ -34,16 +36,20 @@ pub async fn run(args: &ConfigArgs, config: &MacK3dConfig) -> Result<()> {
         return Ok(());
     }
 
-    let credential_ids = credential_ids(args, config, admin_password.as_deref());
+    let credential_ids = credential_ids(args, &config, admin_password.as_deref());
     match credential_ids {
         Some(ids) if !args.skip_job => {
+            if let Err(err) = jenkins_job::ensure_remote_trigger_token(&mut config, Some(config_path))
+            {
+                println!("Warning: could not prepare the remote trigger token ({err}).");
+            }
             println!(
                 "Ensuring Jenkins eval jobs (one / some / full suite for {}; ui_profile={})…",
                 jenkins_job::EVAL_BENCHMARKS.join(", "),
                 config.jenkins_job.ui_profile
             );
             if let Err(err) =
-                jenkins_job::ensure_eval_jobs_from_cluster(&tools.kubectl, config, ids).await
+                jenkins_job::ensure_eval_jobs_from_cluster(&tools.kubectl, &config, ids).await
             {
                 println!("Warning: could not ensure the eval jobs ({err}).");
             }

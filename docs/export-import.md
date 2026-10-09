@@ -148,7 +148,7 @@ If that path is a **working** agent with a token: **stop**. Do not import onto i
 
 3. Edit live `~/.config/mac-k3d/worker.yaml`:
 
-- `jenkins_agent.name` → **new unique** name (not `mac-Michael-Ubuntu` if that node is still Online)
+- `jenkins_agent.name` → **new unique** name (not `linux-Michael-Ubuntu` if that node is still Online). The wizard default is `{os}-<hostname>`.
 - `jenkins_agent.api_user: admin`
 - `jenkins_agent.api_token:` paste a **new** API token from Jenkins (admin → API Token; the **secret**, not the token name)
 

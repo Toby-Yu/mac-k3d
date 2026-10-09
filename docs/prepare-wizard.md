@@ -125,12 +125,12 @@ export PATH="$HOME/.local/bin:$PATH"
 Jenkins controller URL [http://43.107.42.252:17070]:
 Jenkins API user (Enter to skip and fill in worker.yaml later):
 Jenkins API token (stored plaintext in config for now):
-Agent name [mac-<hostname>]:
+Agent name [{os}-<hostname>]:
 Agent labels (space-separated) [linux docker lolbench]:
 Agent remote root directory [~/jenkins-agent]:
 ```
 
-`MAC_K3D_JENKINS_URL` or `JENKINS_URL` changes the URL default. Pressing **Enter** at the API user skips both keys: `worker.yaml` still gets them, empty, so the user can see where they go and fill them in with an editor later:
+The agent-name default is the machine OS, then the short hostname: `linux-<hostname>` or `macos-<hostname>`. `MAC_K3D_JENKINS_URL` or `JENKINS_URL` changes the URL default. Pressing **Enter** at the API user skips both keys: `worker.yaml` still gets them, empty, so the user can see where they go and fill them in with an editor later:
 
 ```yaml
 jenkins_agent:

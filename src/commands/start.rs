@@ -119,6 +119,11 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig, config_path: Option<&Pa
                 }
             };
             if let Some(credential_ids) = credential_ids {
+                if let Err(err) =
+                    jenkins_job::ensure_remote_trigger_token(&mut config, config_path)
+                {
+                    println!("Warning: could not prepare the remote trigger token ({err}).");
+                }
                 println!(
                     "Ensuring Jenkins eval jobs (one / some / full suite for {}; ui_profile={})…",
                     jenkins_job::EVAL_BENCHMARKS.join(", "),

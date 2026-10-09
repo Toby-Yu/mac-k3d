@@ -413,7 +413,7 @@ launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>&1 | head -20
 
 #### Confirm the node in Jenkins
 
-**Manage Jenkins → Nodes** (or **Build Executor Status**). The name from YAML (e.g. `mac-Michael-Ubuntu`) is **online**.
+**Manage Jenkins → Nodes** (or **Build Executor Status**). The name from YAML (e.g. `linux-Michael-Ubuntu`) is **online**.
 
 Optional job (no model cost): **lolbench_one_task** → **Build with Parameters** → **HARNESS** `oracle`, **TASK** `ruff_1`.
 

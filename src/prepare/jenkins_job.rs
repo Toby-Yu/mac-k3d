@@ -222,6 +222,8 @@ pub struct JobOpts {
     pub ui_profile: UiProfile,
     /// Credential IDs present in Jenkins (only these are bound in the Pipeline).
     pub credential_ids: Vec<String>,
+    /// Non-empty value ticks "Trigger builds remotely" on every eval job.
+    pub remote_trigger_token: String,
 }
 
 impl JobOpts {
@@ -302,8 +304,54 @@ impl JobOpts {
             },
             ui_profile: UiProfile::parse(&config.jenkins_job.ui_profile),
             credential_ids,
+            remote_trigger_token: config.jenkins.remote_trigger_token.trim().to_string(),
         }
     }
+}
+
+/// Fill `jenkins.remote_trigger_token` when it is empty, save the controller
+/// config, and print the remote-trigger URL only on that first write.
+pub fn ensure_remote_trigger_token(
+    config: &mut crate::config::MacK3dConfig,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    if !config.jenkins.remote_trigger_token.trim().is_empty() {
+        return Ok(());
+    }
+    let token = generate_remote_trigger_token()?;
+    config.jenkins.remote_trigger_token = token.clone();
+    let path_label = config_path
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| crate::config::MacK3dConfig::default_config_path().display().to_string());
+    match config.save(config_path) {
+        Ok(()) => {
+            let base = crate::runtime::jenkins::ui_url(config);
+            println!(
+                "Remote build trigger enabled on all 9 jobs.\n\
+                 Token saved in {path_label} as jenkins.remote_trigger_token (export omits it).\n\
+                 Example: {base}/job/{DEEPSWE_ONE_TASK}/buildWithParameters?token={token}"
+            );
+        }
+        Err(err) => {
+            println!(
+                "Warning: generated a remote trigger token but could not save it to {path_label} ({err}). \
+                 This rewrite still ticks the checkbox; the next config generates a new token."
+            );
+        }
+    }
+    Ok(())
+}
+
+fn generate_remote_trigger_token() -> Result<String> {
+    use std::io::Read;
+    let mut buf = [0u8; 18];
+    let mut file = std::fs::File::open("/dev/urandom").map_err(|e| {
+        Error::Config(format!("could not read /dev/urandom for the remote trigger token: {e}"))
+    })?;
+    file.read_exact(&mut buf).map_err(|e| {
+        Error::Config(format!("could not read /dev/urandom for the remote trigger token: {e}"))
+    })?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn normalize_eval_mode(s: &str) -> String {
@@ -1453,6 +1501,12 @@ fn eval_job_xml(
     </hudson.plugins.copyartifact.CopyArtifactPermissionProperty>
 "#
     );
+    let token = opts.remote_trigger_token.trim();
+    let auth_token = if token.is_empty() {
+        String::new()
+    } else {
+        format!("  <authToken>{}</authToken>\n", xml_escape(token))
+    };
     format!(
         r#"<?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
@@ -1471,7 +1525,7 @@ fn eval_job_xml(
   </definition>
   <triggers/>
   <disabled>false</disabled>
-</flow-definition>
+{auth_token}</flow-definition>
 "#
     )
 }
@@ -1710,6 +1764,7 @@ mod tests {
             default_shard_size: 2,
             ui_profile: UiProfile::Developer,
             credential_ids: vec!["deepseek-api-key".into(), "gitcode-pat".into()],
+            remote_trigger_token: String::new(),
         }
     }
 
@@ -1732,7 +1787,46 @@ mod tests {
             default_shard_size: 2,
             ui_profile: UiProfile::User,
             credential_ids,
+            remote_trigger_token: String::new(),
         }
+    }
+
+    #[test]
+    fn every_eval_job_ticks_remote_trigger_when_a_token_is_set() {
+        let mut opts = sample_opts();
+        opts.remote_trigger_token = "trigger-token".into();
+        for bench in EVAL_BENCHMARKS {
+            for shape in EVAL_SHAPES {
+                let xml = eval_job_xml(bench, *shape, "d", &opts);
+                assert!(
+                    xml.contains("<authToken>trigger-token</authToken>"),
+                    "{bench} {shape:?} missing authToken"
+                );
+            }
+        }
+        let bare = eval_job_xml("deepswe", JobShape::One, "d", &sample_opts());
+        assert!(!bare.contains("<authToken>"), "{bare}");
+        opts.remote_trigger_token = "a&b".into();
+        let escaped = eval_job_xml("deepswe", JobShape::One, "d", &opts);
+        assert!(escaped.contains("<authToken>a&amp;b</authToken>"));
+    }
+
+    #[test]
+    fn remote_trigger_token_is_generated_once_and_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        let mut cfg = crate::config::MacK3dConfig::default();
+        cfg.jenkins.host_port = 17070;
+        cfg.save(Some(&path)).unwrap();
+        ensure_remote_trigger_token(&mut cfg, Some(&path)).unwrap();
+        let first = cfg.jenkins.remote_trigger_token.clone();
+        assert_eq!(first.len(), 36, "{first}");
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()), "{first}");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(&first), "{text}");
+        let mut again = crate::config::MacK3dConfig::load_file(&path).unwrap();
+        ensure_remote_trigger_token(&mut again, Some(&path)).unwrap();
+        assert_eq!(again.jenkins.remote_trigger_token, first);
     }
 
     /// The `parameters { ... }` block of a Jenkinsfile.

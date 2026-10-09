@@ -208,7 +208,7 @@ launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>&1 | head -20
 
 ### 5. Confirm the node in Jenkins
 
-In the Jenkins UI: **Manage Jenkins → Nodes** (or **Build Executor Status** on the left). The agent name from YAML (for example `mac-Michael-Ubuntu`) should be **online**.
+In the Jenkins UI: **Manage Jenkins → Nodes** (or **Build Executor Status** on the left). The agent name from YAML (for example `linux-Michael-Ubuntu`) should be **online**.
 
 Then this machine can take queued jobs when an executor and locks are free.
 
@@ -222,7 +222,7 @@ On the new computer:
 
 1. Download the matching Release asset (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, or `mac-k3d-darwin-x86_64`). No Rust.
 2. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml` — role **CI worker**; let it install Docker, Java and git if asked (Harbor installs itself); Jenkins URL defaults to `http://127.0.0.1:17070` or type/export `http://<controller-ip>:17070`.
-3. Use a **distinct** agent name (the wizard default includes the hostname).
+3. Use a **distinct** agent name. The wizard default is `{os}-<hostname>` (`linux-Michael-Ubuntu` on this PC, `macos-<hostname>` on a Mac).
 4. Create or reuse a Jenkins API token; put `api_user` / `api_token` in that machine’s `worker.yaml`.
 5. `mac-k3d config -c ~/.config/mac-k3d/worker.yaml` — node **online** in Jenkins.
 
