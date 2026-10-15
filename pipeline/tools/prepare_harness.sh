@@ -50,6 +50,11 @@ case "$HARNESS" in
     ;;
 esac
 echo "prepare harness: $(harness_display) ($(harness_mode)) for ${HARNESS_BUNDLE_PLATFORM}"
+# The build and its probes run in containers of that platform: Rosetta or
+# QEMU when it is not this host's.
+if [ "$HARNESS_BUNDLE_PLATFORM" != "$(docker_host_platform)" ]; then
+  ensure_platform_runs "$HARNESS_BUNDLE_PLATFORM"
+fi
 
 harness_resolve "$HARNESS_BUNDLE_PLATFORM" 1
 [ -n "$HARNESS_ENTRY" ] || die "prepare harness: the $(harness_display) tree was not stored"

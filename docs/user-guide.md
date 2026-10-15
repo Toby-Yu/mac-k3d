@@ -180,7 +180,7 @@ Extract the pipeline on the worker (`mac-k3d config -c worker.yaml`, or any `mac
 
 | Field | Jobs | Value |
 |-------|------|--------|
-| HARNESS / LLM / BENCHMARK | all | `icode` / `deepseek` / `deepswe`, `lolbench` or `swebenchpro` (fixed on that job) |
+| HARNESS / LLM / BENCHMARK | all | `icode` or, on the DeepSWE jobs, `jiuwenswarm` ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md); the page then shows the `JIUWENSWARM_*` fields instead of the `ICODE_*` ones) / `deepseek` / `deepswe`, `lolbench` or `swebenchpro` (fixed on that job). Both harnesses run on Linux and macOS workers |
 | TASK | `_one_task` | One question id. Empty runs the first sorted id. LoLBench default `ruff_1` |
 | TASKS | `_some_task` | Comma-separated ids. Wins over N_TASKS. Example: `ruff_1,fastapi_1` |
 | N_TASKS | `_some_task` | Used only when TASKS is empty: first N sorted ids. Full suite: DeepSWE `113`, LoLBench `20`, SWE-bench Pro `731` |

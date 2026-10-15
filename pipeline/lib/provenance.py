@@ -21,7 +21,7 @@ from pathlib import Path
 
 import harness as harness_table
 from icode_sanitize import MANIFEST_NAME, runtime_sha256, tree_sha256
-from task_resources import cpu_count
+from task_resources import cpu_count, docker_machine
 
 OVERLAY_MARKER = "mac-k3d-lolbench-fix-rewards-v1"
 PROVENANCE_KEYS = (
@@ -303,6 +303,8 @@ def _docker_version() -> str:
 
 
 def worker_facts(workdir: Path | None = None) -> dict:
+    """The worker the trials ran on. On macOS they run in Docker Desktop's VM, so
+    nproc and memory_kb are the VM's, and host_nproc / host_memory_kb the Mac's."""
     node = os.environ.get("NODE_NAME") or platform.node() or ""
     facts = {
         "node": node,
@@ -313,6 +315,11 @@ def worker_facts(workdir: Path | None = None) -> dict:
         "kernel": platform.release(),
         "cpu_model": _cpu_model(),
     }
+    if facts["os"] == "Darwin":
+        vm = docker_machine()
+        if vm:
+            facts["host_nproc"], facts["host_memory_kb"] = facts["nproc"], facts["memory_kb"]
+            facts.update(vm)
     facts.update(container_platform_facts(workdir))
     return facts
 
@@ -901,6 +908,7 @@ def provenance_view(protocol: dict | None) -> dict | None:
         "node": str(worker.get("node") or ""),
         "nproc": worker.get("nproc"),
         "memory_kb": worker.get("memory_kb"),
+        "host": host_text(worker),
         "docker_version": str(worker.get("docker_version") or ""),
         "kernel": str(worker.get("kernel") or ""),
         "cpu_model": str(worker.get("cpu_model") or ""),
@@ -917,6 +925,13 @@ def provenance_view(protocol: dict | None) -> dict | None:
             protocol.get("model_params_mismatch") if isinstance(protocol.get("model_params_mismatch"), dict) else {}
         ),
     }
+
+
+def host_text(worker: dict) -> str:
+    """The Mac's own CPUs and memory when nproc / memory_kb are Docker Desktop's VM."""
+    if worker.get("host_nproc") is None and worker.get("host_memory_kb") is None:
+        return ""
+    return f"nproc {worker.get('host_nproc')} memory_kb {worker.get('host_memory_kb')}"
 
 
 def containers_text(worker: dict) -> str:
@@ -975,6 +990,7 @@ def shard_views(shards: object) -> list[dict]:
                 "node": str(worker.get("node") or ""),
                 "nproc": worker.get("nproc"),
                 "memory_kb": worker.get("memory_kb"),
+                "host": host_text(worker),
                 "docker_version": str(worker.get("docker_version") or ""),
                 "kernel": str(worker.get("kernel") or ""),
                 "cpu_model": str(worker.get("cpu_model") or ""),
@@ -1032,6 +1048,8 @@ def shard_worker_lines(view: dict) -> list[str]:
             parts = [f"{name} {_cell(shard[key])}" for key, name in SHARD_WORKER_FIELDS]
             if shard.get("os"):
                 parts.append(f"os {shard['os']}")
+            if shard.get("host"):
+                parts.append(f"Docker VM of a host with {shard['host']}")
             if shard.get("containers"):
                 parts.append(f"containers {shard['containers']}")
             if shard.get("egress"):
@@ -1098,6 +1116,8 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
         )
         if view["os"]:
             worker += f" · os `{view['os']}`"
+        if view["host"]:
+            worker += f" · Docker VM of a host with `{view['host']}`"
         if view["containers"]:
             worker += f" · containers `{view['containers']}`"
         lines.append(worker)

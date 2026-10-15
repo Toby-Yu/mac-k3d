@@ -166,7 +166,13 @@ fi
 rm -f "$KIND_TMP/c-clean/extra.txt"
 printf '%s\n' '#!/bin/sh' >"$KIND_TMP/c-clean/icode"
 icode_assert_clean_checkout "$KIND_TMP/c-clean"
-ok "porcelain allows only the icode launcher"
+printf '%s\n' 'version = 1' >"$KIND_TMP/c-clean/uv.lock"
+git -C "$KIND_TMP/c-clean" add uv.lock
+git -C "$KIND_TMP/c-clean" -c user.email=t@t -c user.name=t commit -q -m lock
+echo 'revision = 2' >>"$KIND_TMP/c-clean/uv.lock"
+out="$( (icode_assert_clean_checkout "$KIND_TMP/c-clean") 2>&1)" && fail "a rewritten uv.lock should fail"
+grep -q "uv.lock is out of date with its pyproject.toml" <<<"$out" || fail "no stale uv.lock message: $out"
+ok "porcelain allows only the icode launcher; a rewritten uv.lock says the commit's lock is out of date"
 resolve_kind() {
   ICODE_GIT_URL="$ORIGIN" ICODE_GIT_REF="$1" ICODE_GIT_REF_KIND="$2" \
     MAC_K3D_ICODE_GIT_ALLOW_FILE=1 bash "$IN" --resolve-sha

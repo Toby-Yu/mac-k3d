@@ -75,9 +75,30 @@ Any other file stops the build with the list of names it holds. The bundle is th
 
 The build records `icode_release.json` with the file name, its sha256 and the format, and prints `JiuwenSwarm under test: release <file> (<format>) sha256 <hash>`. To compare runs, upload the same file to each.
 
-A dispatcher hands a wheel or a wheelhouse to its shards too, archived as `jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE`, so a shard whose task platform differs from the dispatcher's can build its own from the same file. An uploaded bundle is used as it is, so every shard must run its platform.
+A dispatcher hands a wheel or a wheelhouse to its shards too, archived as `jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE`, so a shard whose task platform differs from the dispatcher's can build its own from the same file. An uploaded bundle is used as it is, so every shard runs its platform: on an Apple silicon worker, DeepSWE questions then run on the published `linux/amd64` image ([Linux and macOS workers](#linux-and-macos-workers)).
 
 `mac-k3d eval` cannot attach a file, so a release run starts from the job's **Build with Parameters** page. Outside Jenkins, `JIUWENSWARM_RELEASE` names the file: a path on the worker or an `https://` URL.
+
+## Linux and macOS workers
+
+JiuwenSwarm runs inside the DeepSWE task container, which is Linux on every worker, so the tree is always a Linux build for that container's CPU type. Which platform a question runs on is the same choice as for iCode ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers), [pipeline.md](pipeline.md#deepswe-on-linux-and-macos)): `linux/amd64` on an x86-64 worker; on Apple silicon (or Linux arm64), `linux/arm64` for the questions `mac-k3d eval prepare` proved, the published `linux/amd64` image under Rosetta (QEMU on Linux) for the rest.
+
+**Git mode** works on either platform. The build runs in `ICODE_LINUX_BUILD_IMAGE` for the task platform on every worker: natively for `linux/arm64` on a Mac, under Rosetta for `linux/amd64`. A dispatcher prepares `linux/amd64` (`HARNESS_BUNDLE_PLATFORM`), so a Mac shard on native questions builds its own `linux/arm64` tree from the same pinned commit (`source` `worker`); the store keeps both, under different input keys, and a second shard on the same Mac waits for the first one's build instead of building again ([the harness store](pipeline.md#harness-store)).
+
+The build runs in the container's own filesystem: `/opt/jiuwenswarm-host` is a tmpfs there, and the checkout is copied to `/tmp/src` before `make offline-tarballs-ci`. Only the finished tree is copied to the workspace. Two things follow:
+
+- The tmpfs holds the whole tree while it is built, about 1.5 GB of Docker's memory (Docker Desktop's VM on a Mac).
+- The build drops every CPython `share/terminfo` folder. It holds names that differ only by case (`E/Eterm` and `e/eterm`, 33 pairs in the offline pack's CPython), which a Mac's case-insensitive disk would merge, and a headless runner reads no terminfo. Any other pair of names that differ only by case stops the build with the list. Linux trees lose the same folder, so both OSes get the same files.
+
+**Release mode** depends on what the file holds:
+
+| Upload | On `linux/amd64` questions | On native `linux/arm64` questions |
+|--------|----------------------------|-----------------------------------|
+| Wheel | built for amd64 | built for arm64 when its tag allows it (`py3-none-any`, or an `aarch64` platform tag); an x86-64-only wheel runs every question emulated |
+| Wheelhouse | built for amd64 | the same, for the `workswarm` wheel and every dependency in it: one dependency with no `aarch64` (or pure-Python) wheel runs every question emulated |
+| Bundle | used as it is when built for `linux/amd64` | used as it is when built for `linux/arm64`; else every question runs emulated |
+
+The fallback reason is `the JiuwenSwarm release under test has no linux/arm64 build (it runs on linux/amd64)`, in `env_check.json`, `provenance.md` and the merged summary. With `DEEPSWE_DOCKER_PLATFORM=linux/arm64` the build stops with that reason instead. A `JIUWENSWARM_RELEASE` URL is downloaded only after this choice, so a URL to a bundle of the other platform stops the build in `tasks/harness`; upload the file or give a path.
 
 ## One rollout
 
@@ -124,7 +145,7 @@ mac-k3d eval --job some --harness jiuwenswarm --tasks abs-module-cache-flags,ytt
 mac-k3d eval --job full --harness jiuwenswarm --yes
 ```
 
-Without `--tasks`, `--job some` runs the first `N_TASKS` questions, as the page does. Each harness takes only its own flags: `--icode-git-*` with `--harness jiuwenswarm` is refused, and so is `--jiuwenswarm-git-*` without it. Every flag: [commands.md](commands.md#mac-k3d-eval).
+Without `--tasks`, `--job some` runs the first `N_TASKS` questions, as the page does. Each harness takes only its own flags: `--icode-git-*` with `--harness jiuwenswarm` is refused, and so is `--jiuwenswarm-git-*` without it. Every flag: [commands.md](commands.md#eval).
 
 `mac-k3d eval --local` evaluates iCode only. To build and store JiuwenSwarm on a worker without a rollout, run the dispatcher's prepare step from an extracted pipeline:
 

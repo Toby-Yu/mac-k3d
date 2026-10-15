@@ -227,8 +227,13 @@ pub fn worker_host_root_steps() -> Vec<super::RootStep> {
     }
     if crate::prepare::toolchain::on_agent_path("python3").is_none() {
         steps.push(super::RootStep {
-            why: "python3 for the pipeline's host scripts".into(),
-            command: "apt-get install -y python3".into(),
+            why: "python3 for the pipeline's host scripts, PyYAML for the anti-cheat harness labels".into(),
+            command: "apt-get install -y python3 python3-yaml".into(),
+        });
+    } else if crate::prepare::toolchain::pyyaml_problem().is_some() {
+        steps.push(super::RootStep {
+            why: "PyYAML for the anti-cheat harness labels".into(),
+            command: "apt-get install -y python3-yaml".into(),
         });
     }
     steps

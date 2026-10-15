@@ -13,8 +13,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import platform
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -42,13 +44,40 @@ def _meminfo_kb(key: str) -> int | None:
     return None
 
 
+def docker_machine() -> dict:
+    """CPUs and memory (kB) of the machine Docker runs containers on, from `docker info`.
+
+    On macOS that is Docker Desktop's VM, smaller than the Mac; empty when the
+    daemon does not answer.
+    """
+    try:
+        proc = subprocess.run(
+            ["docker", "info", "--format", "{{.NCPU}} {{.MemTotal}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    parts = proc.stdout.split() if proc.returncode == 0 else []
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        return {}
+    return {"nproc": int(parts[0]), "memory_kb": int(parts[1]) // 1024}
+
+
 def mem_available_kb() -> int | None:
-    """Free right now. Decides how many trials start, not whether any can."""
+    """Free right now. Decides how many trials start, not whether any can.
+
+    macOS has no such figure for Docker Desktop's VM: None.
+    """
     return _meminfo_kb("MemAvailable")
 
 
 def mem_total_kb() -> int | None:
-    """Installed RAM. Decides whether this worker can host the suite at all."""
+    """Installed RAM where the trials run: the host, or Docker Desktop's VM on macOS."""
+    if platform.system() == "Darwin":
+        return docker_machine().get("memory_kb")
     return _meminfo_kb("MemTotal")
 
 

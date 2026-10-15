@@ -5,11 +5,13 @@ evicted only when it has not been used for a day."""
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -77,6 +79,23 @@ class PackTest(unittest.TestCase):
         subprocess.run(["tar", "-czf", str(plain), "-C", str(self.tree), "."], check=True)
         with self.assertRaises(hs.StoreError):
             hs.read_meta(plain)
+
+    def test_case_collisions_groups_names_that_differ_only_in_case(self):
+        names = ["share/terminfo/E/Eterm", "share/terminfo/e/eterm", "share/terminfo/e", "share/terminfo/E", "bin/x"]
+        self.assertEqual(
+            sorted(hs.case_collisions(names)),
+            [["share/terminfo/E", "share/terminfo/e"], ["share/terminfo/E/Eterm", "share/terminfo/e/eterm"]],
+        )
+        self.assertEqual(hs.case_collisions(["a/B", "a/b/c", "a/B"]), [])
+
+    @unittest.skipIf(sys.platform == "darwin", "a case-insensitive disk cannot hold both names")
+    def test_pack_refuses_names_that_differ_only_in_case(self):
+        (self.tree / "venv" / "lib" / "Mod.py").write_text("x = 3\n")
+        out = self.tmp / "out" / "bundle.tar.gz"
+        with self.assertRaises(hs.StoreError) as err:
+            hs.pack(self.tree, {**meta(), "schema": hs.SCHEMA}, out)
+        self.assertIn("venv/lib/Mod.py vs venv/lib/mod.py", str(err.exception))
+        self.assertFalse(out.exists())
 
 
 class StoreTest(unittest.TestCase):
@@ -173,6 +192,49 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(err.exception.code, 1)
         self.assertEqual(hs.put(self.store, "jiuwenswarm", self.bundle), entry)
         self.assertTrue((entry / hs.READY).is_file())
+
+    def colliding_bundle(self) -> Path:
+        """A bundle another tool packed, holding venv/lib/mod.py and venv/lib/MOD.py."""
+        bundle = self.tmp / "colliding.tar.gz"
+        doc = json.dumps({**meta(), "schema": hs.SCHEMA}).encode()
+        with tarfile.open(bundle, "w:gz") as tar:
+            for name, body in ((hs.META, doc), (f"{hs.TREE}/venv/lib/mod.py", b"x = 1\n"),
+                               (f"{hs.TREE}/venv/lib/MOD.py", b"x = 2\n")):
+                info = tarfile.TarInfo(name)
+                info.size, info.mode = len(body), 0o644
+                tar.addfile(info, io.BytesIO(body))
+        return bundle
+
+    def test_put_refuses_a_colliding_bundle_on_a_case_insensitive_disk(self):
+        bundle = self.colliding_bundle()
+        with mock.patch.object(hs, "case_insensitive", return_value=True):
+            with self.assertRaises(hs.StoreError) as err:
+                hs.put(self.store, "jiuwenswarm", bundle)
+        self.assertIn("tree/venv/lib/MOD.py vs tree/venv/lib/mod.py", str(err.exception))
+        self.assertFalse((self.store / "jiuwenswarm" / hs.file_sha256(bundle)).exists())
+        leftovers = [p.name for p in (self.store / "jiuwenswarm").iterdir() if p.name != hs.LOCK]
+        self.assertEqual(leftovers, [])
+
+    @unittest.skipIf(sys.platform == "darwin", "a case-insensitive disk cannot hold both names")
+    def test_put_keeps_both_names_on_a_case_sensitive_disk(self):
+        with mock.patch.object(hs, "case_insensitive", return_value=False):
+            entry = hs.put(self.store, "jiuwenswarm", self.colliding_bundle())
+        self.assertEqual((entry / hs.TREE / "venv" / "lib" / "MOD.py").read_text(), "x = 2\n")
+        self.assertEqual((entry / hs.TREE / "venv" / "lib" / "mod.py").read_text(), "x = 1\n")
+
+    def test_case_insensitive_matches_this_disk(self):
+        probe = self.tmp / "probe"
+        probe.mkdir()
+        (probe / "Name").write_text("")
+        self.assertEqual(hs.case_insensitive(self.tmp / "store-probe"), (probe / "NAME").exists())
+        self.assertEqual(list((self.tmp / "store-probe").iterdir()), [])
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS disks (APFS) are case-insensitive by default")
+    def test_put_refuses_a_colliding_bundle_on_apfs(self):
+        self.assertTrue(hs.case_insensitive(self.tmp / "apfs"))
+        with self.assertRaises(hs.StoreError):
+            hs.put(self.store, "jiuwenswarm", self.colliding_bundle())
+        self.assertFalse((self.store / "jiuwenswarm" / hs.file_sha256(self.colliding_bundle())).exists())
 
     def test_concurrent_puts_unpack_once(self):
         results: list[Path] = []
@@ -272,6 +334,14 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(str(hs.default_store()), stages)
             os.environ["MAC_K3D_HARNESS_STORE"] = str(self.store)
             self.assertEqual(hs.default_store(), self.store)
+
+
+class ScenarioTest(unittest.TestCase):
+    def test_build_store_and_shard_scenarios(self):
+        script = LIB.parent / "tools" / "test_harness_store.sh"
+        proc = subprocess.run(["bash", str(script)], check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("OK test_harness_store.sh", proc.stdout)
 
 
 if __name__ == "__main__":

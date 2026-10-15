@@ -145,6 +145,7 @@ pub fn install_package(name: &str) -> Result<()> {
         "java" => vec!["install", "--cask", temurin.as_str()],
         "bash" => vec!["install", "bash"],
         "python" => vec!["install", "python"],
+        "pyyaml" => vec!["install", "pyyaml"],
         "docker" => vec!["install", "--cask", "docker"],
         "k3d" => vec!["install", "k3d"],
         "kubectl" => vec!["install", "kubectl"],

@@ -402,6 +402,61 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((inputs["provider"], inputs["reasoning_effort"], inputs["max_iterations"]), ("OpenAI", "default", 120))
         self.assertIn("timeout_seconds 900", provenance.harness_line(record))
 
+    def test_the_run_record_has_no_icode_reply_cap(self):
+        import render_report
+
+        env = {"HARNESS": "jiuwenswarm", "ICODE_MAX_TOKENS": "65536", "ICODE_MAX_ITERATIONS": "500",
+               "JIUWENSWARM_MAX_TURNS": "120"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, env):
+            work = Path(tmp)
+            (work / "harness.json").write_text(json.dumps({"name": "jiuwenswarm", "mode": "git"}), encoding="utf-8")
+            protocol = render_report.build_eval_protocol(
+                workdir=work, model="deepseek-v4-pro", api_base="", n_rollouts=1, concurrency=1, cpus_each=2
+            )
+            (work / "harness.json").write_text(json.dumps({"name": "icode", "mode": "git"}), encoding="utf-8")
+            icode = render_report.build_eval_protocol(
+                workdir=work, model="deepseek-v4-pro", api_base="", n_rollouts=1, concurrency=1, cpus_each=2
+            )
+        self.assertEqual(render_report.protocol_harness_name(protocol), "jiuwenswarm")
+        self.assertIsNone(protocol["model_params"]["max_tokens"])
+        self.assertEqual(protocol["model_params"]["max_iterations"], 120)
+        self.assertEqual((icode["model_params"]["max_tokens"], icode["model_params"]["max_iterations"]), (65536, 500))
+
+
+class CaseCollisionTest(unittest.TestCase):
+    """jiuwenswarm_build.sh's last step: a tree every worker, macOS included, can unpack."""
+
+    def drop(self, root: Path) -> subprocess.CompletedProcess:
+        script = 'eval "$(sed -n "/^drop_case_collisions() {/,/^}/p" "$1")"; ROOT="$2"; drop_case_collisions'
+        return subprocess.run(["bash", "-c", script, "_", str(LIB / "jiuwenswarm_build.sh"), str(root)],
+                              capture_output=True, text=True, check=False)
+
+    def test_cpython_terminfo_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            terminfo = root / "python" / "cpython-3.11" / "share" / "terminfo"
+            names = ["E/Eterm"] if sys.platform == "darwin" else ["E/Eterm", "e/eterm"]
+            for name in names:
+                (terminfo / name).parent.mkdir(parents=True, exist_ok=True)
+                (terminfo / name).write_text("x")
+            (root / "venv" / "bin").mkdir(parents=True)
+            (root / "venv" / "bin" / "jiuwenswarm-process").write_text("#!/bin/sh\n")
+            proc = self.drop(root)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertFalse(terminfo.exists())
+            self.assertTrue((root / "venv" / "bin" / "jiuwenswarm-process").is_file())
+
+    @unittest.skipIf(sys.platform == "darwin", "a case-insensitive disk cannot hold both names")
+    def test_any_other_pair_fails_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "venv" / "lib").mkdir(parents=True)
+            (root / "venv" / "lib" / "Mod.py").write_text("x = 1\n")
+            (root / "venv" / "lib" / "mod.py").write_text("x = 2\n")
+            proc = self.drop(root)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("./venv/lib/Mod.py vs ./venv/lib/mod.py", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

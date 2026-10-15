@@ -403,4 +403,67 @@ grep -q "nothing to prepare: Linux workers use the published images, which Harbo
 [ ! -s "$MACHINE/docker/docker.log" ] && [ "$(harbor_calls)" = 0 ] || { show; fail "the x86-64 engine touched images"; }
 ok "the prepare engine summarises each question, exits 1 when a rerun may help, and is a no-op on x86-64"
 
+# 15. A harness release with no linux/arm64 build runs even a proven question
+#     emulated, with the reason; git inputs and releases with an arm64 build stay native.
+new_machine mac-harness
+prepare alpha aarch64 || { show; fail "prepare for the harness cases failed"; }
+REL="$MACHINE/releases"
+mkdir -p "$REL"
+python3 - "$REL" <<'PY'
+import io, sys, tarfile, zipfile
+from pathlib import Path
+
+rel = Path(sys.argv[1])
+
+def elf(machine):
+    return b"\x7fELF\x02\x01\x01" + b"\0" * 11 + machine.to_bytes(2, "little") + b"\0" * 44
+
+def drop(name, *arches):
+    with tarfile.open(rel / name, "w:gz") as tar:
+        for arch, machine in arches:
+            body = elf(machine)
+            info = tarfile.TarInfo(f"icode-linux-{arch}-full-v1.0.0/icode")
+            info.size, info.mode = len(body), 0o755
+            tar.addfile(info, io.BytesIO(body))
+
+def wheel(name, tag):
+    with zipfile.ZipFile(rel / name, "w") as zf:
+        zf.writestr("workswarm-0.2.5b1.dist-info/WHEEL", f"Wheel-Version: 1.0\nTag: {tag}\n")
+
+drop("icode-linux-x86_64-full-v1.0.0.tar.gz", ("x86_64", 62))
+drop("icode-both-full-v1.0.0.tar.gz", ("x86_64", 62), ("aarch64", 183))
+wheel("workswarm-0.2.5b1-cp311-cp311-manylinux_2_28_x86_64.whl", "cp311-cp311-manylinux_2_28_x86_64")
+wheel("workswarm-0.2.5b1-py3-none-any.whl", "py3-none-any")
+PY
+X86_ICODE=(ICODE_MODE=release ICODE_RELEASE="$REL/icode-linux-x86_64-full-v1.0.0.tar.gz")
+X86_JW=(HARNESS=jiuwenswarm JIUWENSWARM_MODE=release JIUWENSWARM_RELEASE="$REL/workswarm-0.2.5b1-cp311-cp311-manylinux_2_28_x86_64.whl")
+run_images alpha aarch64 "${X86_ICODE[@]}" || { show; fail "eval with an x86-64 iCode release failed"; }
+[ "$(entry alpha mode)" = emulated ] \
+  && [ "$(entry alpha reason)" = "the iCode release under test has no linux/arm64 build (it runs on linux/amd64)" ] \
+  || fail "x86-64 iCode release: $(record 'd["tasks"]["alpha"]')"
+[ "$(entry alpha hint)" = "" ] || fail "a release without an arm64 build has a prepare hint"
+[ "$(record 'd["platform"]')" = linux/amd64 ] || fail "x86-64 iCode release platform $(record 'd["platform"]')"
+[ "$(harbor_calls)" = 0 ] && [ "$(docker_calls build)" = 0 ] || { show; fail "the eval checked or built"; }
+run_images alpha aarch64 "${X86_JW[@]}" || { show; fail "eval with an x86-64 JiuwenSwarm wheel failed"; }
+[ "$(entry alpha reason)" = "the JiuwenSwarm release under test has no linux/arm64 build (it runs on linux/amd64)" ] \
+  || fail "x86-64 JiuwenSwarm wheel: $(record 'd["tasks"]["alpha"]')"
+for good in "ICODE_MODE=release ICODE_RELEASE=$REL/icode-both-full-v1.0.0.tar.gz" \
+  "HARNESS=jiuwenswarm JIUWENSWARM_MODE=release JIUWENSWARM_RELEASE=$REL/workswarm-0.2.5b1-py3-none-any.whl" \
+  "HARNESS=jiuwenswarm" "HARNESS=icode"; do
+  # shellcheck disable=SC2086
+  run_images alpha aarch64 $good || { show; fail "eval with $good failed"; }
+  [ "$(entry alpha mode)" = native ] && [ "$(record 'd["platform"]')" = linux/arm64 ] \
+    || fail "$good: $(record 'd["tasks"]["alpha"]')"
+done
+if run_images alpha aarch64 DEEPSWE_DOCKER_PLATFORM=linux/arm64 "${X86_JW[@]}"; then
+  show
+  fail "forced linux/arm64 ran a JiuwenSwarm release with no arm64 build"
+fi
+grep -q "DEEPSWE_DOCKER_PLATFORM=linux/arm64, but the JiuwenSwarm release under test has no linux/arm64 build" "$MACHINE/out.txt" \
+  || { show; fail "forced arm64 harness message"; }
+run_images alpha,beta aarch64 HARNESS=jiuwenswarm || { show; fail "mixed JiuwenSwarm eval failed"; }
+[ "$(entry alpha reason)" = "another selected question runs emulated (one JiuwenSwarm build per run)" ] \
+  || fail "mixed JiuwenSwarm reason: $(entry alpha reason)"
+ok "a harness release with no arm64 build runs every question emulated; git and arm64-capable releases stay native"
+
 echo "OK test_env_check.sh"

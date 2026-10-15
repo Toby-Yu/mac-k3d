@@ -8,8 +8,9 @@
 #   venv/    workswarm and its dependencies (uv sync, wheel, wheelhouse)
 #   bin/jiuwenswarm-run, bin/jiuwenswarm-python   runtime.json  freeze.txt
 #
-# The tree is always built in ICODE_LINUX_BUILD_IMAGE on the task platform
-# with the tree mounted at /opt/jiuwenswarm-host (jiuwenswarm_build.sh).
+# The tree is always built in ICODE_LINUX_BUILD_IMAGE on the task platform,
+# at /opt/jiuwenswarm-host in the container's own tmpfs, then copied to
+# WORKDIR (jiuwenswarm_build.sh).
 #
 #   git      JIUWENSWARM_GIT_URL / _REF / _REF_KIND, or the dispatcher's
 #            JIUWENSWARM_GIT_SHA; the commit's Linux offline pack
@@ -65,7 +66,7 @@ jiuwenswarm_offline_platform() {
 
 # Part of the store key: a change here builds a new tree.
 jiuwenswarm_recipe() {
-  printf 'jiuwenswarm-v2 offline=%s python=%s wheels=%s image=%s\n' "$(jiuwenswarm_offline_platform)" \
+  printf 'jiuwenswarm-v3 offline=%s python=%s wheels=%s image=%s\n' "$(jiuwenswarm_offline_platform)" \
     "$(jiuwenswarm_python)" "$(jiuwenswarm_python_platform)" "$(hgit_linux_image)"
 }
 
@@ -238,13 +239,15 @@ print(f"{dist}-{tags[0] if tags else 'py3-none-any'}.whl")
 PY
 }
 
-# One build in the Linux image: the tree at /opt/jiuwenswarm-host, the input at
+# One build in the Linux image: the tree in a tmpfs at /opt/jiuwenswarm-host,
+# copied to TREE (mounted at its own path) when it starts; the input at
 # /mac-k3d-src (git) or /mac-k3d-in (release), and pipeline/lib.
 jiuwenswarm_container_build() {
   local tree="$1" input="$2" input_target="$3"
   shift 3
   local -a HGIT_LINUX_EXTRA
-  HGIT_LINUX_EXTRA=(-v "$tree:$JIUWENSWARM_TARGET" -v "$input:$input_target"
+  HGIT_LINUX_EXTRA=(--tmpfs "$JIUWENSWARM_TARGET:rw,exec,mode=1777" -v "$input:$input_target"
+    -e "JIUWENSWARM_OUT=$tree"
     -e "JIUWENSWARM_PYTHON=$(jiuwenswarm_python)"
     -e "JIUWENSWARM_PYTHON_PLATFORM=$(jiuwenswarm_python_platform)"
     -e "JIUWENSWARM_OFFLINE_PLATFORM=$(jiuwenswarm_offline_platform)"

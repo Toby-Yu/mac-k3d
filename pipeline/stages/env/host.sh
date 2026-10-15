@@ -23,6 +23,11 @@ want = tuple(int(p) for p in sys.argv[1].split("."))
 sys.exit(0 if sys.version_info[: len(want)] >= want else 1)
 PY
 echo "OK python3 ${python_version} (min ${PYTHON_MIN})"
+if python3 -c 'import yaml' 2>/dev/null; then
+  echo "OK python3 has PyYAML"
+else
+  echo "WARNING: python3 has no PyYAML, so the anti-cheat report labels no attempt tuned_on or hint. Linux: apt-get install -y python3-yaml; macOS: brew install pyyaml" >&2
+fi
 
 have git || die "git not on PATH; the tasks phase clones every benchmark with it. Linux: apt-get install -y git; macOS: brew install git"
 echo "OK $(git --version)"

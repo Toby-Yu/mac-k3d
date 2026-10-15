@@ -108,27 +108,39 @@ pub fn ram_kb_meets(kb: u64, min_gb: u64) -> bool {
 
 /// Eval hosts need MIN_RAM_GB (pipeline/config/toolchain.env); the env phase checks the same.
 pub fn ensure_ram_min(min_gb: u64) -> Result<()> {
-    let kb = mem_total_kb().unwrap_or(0);
-    if kb == 0 {
-        tracing::warn!("could not read MemTotal; skipping RAM preflight");
-        return Ok(());
-    }
-    if !ram_kb_meets(kb, min_gb) {
-        #[cfg(target_os = "macos")]
-        let problem = format!(
-            "Docker Desktop has only {} MB memory; need at least {min_gb} GB for eval. \
-             Raise Docker Desktop > Settings > Resources > Memory",
-            kb / 1024
-        );
-        #[cfg(not(target_os = "macos"))]
-        let problem = format!(
-            "only {} MB RAM; need at least {min_gb} GB for eval (keep N_TASKS=1)",
-            kb / 1024
-        );
+    if let Some(problem) = ram_problem(min_gb) {
         return Err(Error::Validation(problem));
     }
     tracing::info!(min_gb, "RAM check passed");
     Ok(())
+}
+
+/// Why this host's memory is below `min_gb`, or None (also when it cannot be read).
+pub fn ram_problem(min_gb: u64) -> Option<String> {
+    let kb = mem_total_kb().unwrap_or(0);
+    if kb == 0 {
+        tracing::warn!("could not read MemTotal; skipping RAM preflight");
+        return None;
+    }
+    (!ram_kb_meets(kb, min_gb)).then(|| ram_problem_text(kb, min_gb, cfg!(target_os = "macos")))
+}
+
+/// Docker Desktop's VM reports a little less than its Memory Limit, and the
+/// env phase rounds down the same way.
+fn ram_problem_text(kb: u64, min_gb: u64, macos: bool) -> String {
+    if macos {
+        format!(
+            "Docker Desktop has only {} MB memory; need at least {min_gb} GB for eval. \
+             Raise Docker Desktop > Settings > Resources > Memory Limit to {} GB or more",
+            kb / 1024,
+            min_gb + 2
+        )
+    } else {
+        format!(
+            "only {} MB RAM; need at least {min_gb} GB for eval (keep N_TASKS=1)",
+            kb / 1024
+        )
+    }
 }
 
 fn mem_total_kb() -> Option<u64> {
@@ -415,6 +427,15 @@ mod tests {
     fn ram_kb_meets_thresholds() {
         assert!(ram_kb_meets(8 * 1024 * 1024, 8));
         assert!(!ram_kb_meets(7 * 1024 * 1024, 8));
+    }
+
+    #[test]
+    fn low_memory_names_docker_desktop_on_a_mac() {
+        let mac = ram_problem_text(7_800_000, 8, true);
+        assert!(mac.starts_with("Docker Desktop has only 7617 MB memory"), "{mac}");
+        assert!(mac.contains("Memory Limit to 10 GB or more"), "{mac}");
+        let linux = ram_problem_text(7_800_000, 8, false);
+        assert!(linux.starts_with("only 7617 MB RAM"), "{linux}");
     }
 
     #[test]

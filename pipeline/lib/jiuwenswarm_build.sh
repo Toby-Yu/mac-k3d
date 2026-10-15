@@ -15,9 +15,16 @@
 # the oldest glibc the wheels may need (uv --python-platform), so the runtime
 # also starts in task images older than this build image. The offline pack
 # pins the same glibc itself (scripts/offline/lib.sh).
+#
+# /opt/jiuwenswarm-host is the container's own tmpfs and the checkout is
+# copied to /tmp/src, so the build never writes to a macOS worker's
+# case-insensitive disk. Once the probes pass, the tree is copied to
+# JIUWENSWARM_OUT, the host directory the build mounts at its own path.
 set -euo pipefail
 
 ROOT=/opt/jiuwenswarm-host
+OUT="${JIUWENSWARM_OUT:?}"
+SRC=/tmp/src
 PY_VERSION="${JIUWENSWARM_PYTHON:?}"
 PY_PLATFORM="${JIUWENSWARM_PYTHON_PLATFORM:?}"
 PY_CACHE="${UV_PYTHON_INSTALL_DIR:?}"
@@ -50,7 +57,7 @@ managed_python() {
 offline_pack() {
   local plat="${JIUWENSWARM_OFFLINE_PLATFORM:?}" pack tops log status
   local -a packs
-  cd /mac-k3d-src
+  cd "$SRC"
   rm -rf dist/offline
   # The pack prunes __pycache__, so bytecode is compiled after unpacking.
   # setuptools lists every file it copies into the wheel, three times. The
@@ -94,12 +101,36 @@ offline_pack() {
 }
 
 has_offline_pack() {
-  [ -f /mac-k3d-src/Makefile ] && grep -q '^offline-tarballs-ci:' /mac-k3d-src/Makefile \
-    && [ -f /mac-k3d-src/scripts/offline/build-ci-tarballs.sh ]
+  [ -f "$SRC/Makefile" ] && grep -q '^offline-tarballs-ci:' "$SRC/Makefile" \
+    && [ -f "$SRC/scripts/offline/build-ci-tarballs.sh" ]
+}
+
+# CPython's terminfo database holds names that differ only in case (E/Eterm
+# and e/eterm); the headless runner never reads it. Any other such pair fails
+# the build: a macOS worker would merge it.
+drop_case_collisions() {
+  local found
+  find "$ROOT" -type d -path '*/share/terminfo' -prune -exec rm -rf {} +
+  found="$(cd "$ROOT" && find . | python3 -c '
+import sys
+seen = {}
+for line in sys.stdin:
+    path = line.rstrip("\n")
+    seen.setdefault(path.lower(), []).append(path)
+for group in seen.values():
+    if len(group) > 1:
+        print(" vs ".join(sorted(group)))
+')"
+  if [ -n "$found" ]; then
+    echo "ERROR: the JiuwenSwarm tree has paths that differ only in case, which a macOS worker would merge:" >&2
+    printf '%s\n' "$found" | head -n 10 >&2
+    exit 1
+  fi
 }
 
 case "${1:-}" in
   git)
+    cp -a /mac-k3d-src "$SRC"
     if has_offline_pack; then
       BUILD=offline-tarballs-ci
       offline_pack
@@ -107,7 +138,7 @@ case "${1:-}" in
       echo "jiuwenswarm: this commit has no make offline-tarballs-ci; building with uv sync --frozen" >&2
       BUILD=uv-sync
       managed_python
-      cd /mac-k3d-src
+      cd "$SRC"
       UV_PROJECT_ENVIRONMENT="$ROOT/venv" uv sync --frozen --no-dev --no-editable \
         --python "$PY_VERSION" --python-platform "$PY_PLATFORM"
     fi
@@ -155,6 +186,7 @@ exec $RUNNER "\$@"
 WRAP
 chmod 755 "$ROOT/bin/jiuwenswarm-run" "$ROOT/bin/jiuwenswarm-python"
 
+drop_case_collisions
 cd "$(mktemp -d)"
 uv pip freeze --python "$PY" >"$ROOT/freeze.txt"
 "$PY" -I - "$ROOT/runtime.json" "$PY_PLATFORM" "$BUILD" "$ROOT/BUNDLE" <<'PY'
@@ -187,3 +219,4 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 "$ROOT/bin/jiuwenswarm-run" --help >
 env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 "$ROOT/bin/jiuwenswarm-python" -c \
   'import jiuwenswarm.channels.process_cli.machine_entry, jiuwenswarm.common.utils'
 echo "OK JiuwenSwarm runtime $("$PY" -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$ROOT/runtime.json") ($BUILD) starts in $ROOT"
+cp -a "$ROOT"/. "$OUT"/

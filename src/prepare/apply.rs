@@ -51,6 +51,10 @@ pub fn apply(config: &mut MacK3dConfig, config_path: &Path) -> Result<()> {
         for problem in toolchain::host_tool_problems() {
             println!("Warning: {problem}; every build's env phase refuses it.");
         }
+        #[cfg(not(target_os = "macos"))]
+        if let Some(problem) = toolchain::pyyaml_problem() {
+            println!("Warning: {problem}.");
+        }
     }
     if matches!(config.role, NodeRole::Controller) {
         controller_notes(config);

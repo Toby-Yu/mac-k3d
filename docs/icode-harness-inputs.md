@@ -113,7 +113,7 @@ iCode always runs inside the task container, which is Linux on every worker, so 
 
 Emulated means Rosetta in Docker Desktop on a Mac, QEMU on Linux. It keeps the exact image a Linux x86_64 worker runs, with the same digest, so the scores stay comparable.
 
-**Release mode.** The build picks the `icode` whose ELF header matches the task platform. An upload holding only the other CPU type fails before any trial, naming the drop to use. For a Mac, or a suite that mixes platforms, upload one `.tar.gz` holding both `icode-linux-x86_64-full-vX.Y.Z` and `icode-linux-aarch64-full-vX.Y.Z` of the same version:
+**Release mode.** The build picks the `icode` whose ELF header matches the task platform. On DeepSWE, an arm64 worker given an upload with only `icode-linux-x86_64` runs every question of the build on the published `linux/amd64` image (emulated), with the reason `the iCode release under test has no linux/arm64 build (it runs on linux/amd64)` in `env_check.json` and the report; `DEEPSWE_DOCKER_PLATFORM=linux/arm64` stops with that reason instead. On LoLBench an upload holding only the other CPU type fails before any trial, naming the drop to use. For a Mac, or a suite that mixes platforms, upload one `.tar.gz` holding both `icode-linux-x86_64-full-vX.Y.Z` and `icode-linux-aarch64-full-vX.Y.Z` of the same version:
 
 ```bash
 tar -czf icode-linux-full-v0.1.41.tar.gz icode-linux-x86_64-full-v0.1.41 icode-linux-aarch64-full-v0.1.41
@@ -121,7 +121,7 @@ tar -czf icode-linux-full-v0.1.41.tar.gz icode-linux-x86_64-full-v0.1.41 icode-l
 
 `icode_release.json` records the sha256 of the file you uploaded, so upload the same file to every build you want to compare. Locally, keep both drops in one folder and run `mac-k3d set --icode-release <folder>`; each run takes the one whose name matches.
 
-**Git mode.** On a Linux worker whose CPU type matches the task containers, `uv sync` runs on the host as before. Otherwise (every Mac, or a Linux arm64 worker running an amd64 task) the same `uv sync`, the sandbox CPython, the sanitizer and the probes run inside `ICODE_LINUX_BUILD_IMAGE` (pinned in `pipeline/config/toolchain.env`) on the task platform. The PAT reaches that container by variable name, never on its command line. uv's cache is kept per platform in `~/.local/share/mac-k3d/uv-cache-linux-<arch>`, so the second build of a commit does not download again. The tree, the manifest and the `/opt/icode-host` mount are the same as on Linux.
+**Git mode.** On a Linux worker whose CPU type matches the task containers, `uv sync` runs on the host as before. Otherwise (every Mac, or a Linux arm64 worker running an amd64 task) the same `uv sync`, the sandbox CPython, the sanitizer and the probes run inside `ICODE_LINUX_BUILD_IMAGE` (pinned in `pipeline/config/toolchain.env`) on the task platform. The PAT reaches that container by variable name, never on its command line. uv's cache is kept per platform in `~/.local/share/mac-k3d/uv-cache-linux-<arch>`, so the second build of a commit does not download again. The tree, the manifest and the `/opt/icode-host` mount are the same as on Linux. A dispatcher prepares `linux/amd64`, so a Mac shard on native DeepSWE questions builds its own `linux/arm64` tree from the same pinned commit, once per Mac: a second shard waits for the first one's build ([the harness store](pipeline.md#harness-store)).
 
 ## Jenkins Build with Parameters
 

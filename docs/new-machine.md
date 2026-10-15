@@ -142,7 +142,7 @@ Setup runs everything it can as you. Harbor and the Jenkins agent never need roo
 
 | Linux | macOS |
 |-------|-------|
-| When a step needs root and you cannot use `sudo` (common on a shared cloud VM), setup does **not** fail half-way: your answers are already saved, and it stops with one block for an administrator (below) | There is no root block: Homebrew installs as you (`brew install --cask temurin@21`, plus `brew install bash` and `brew install python`, because macOS ships bash 3.2 and python3 3.9). The one `sudo` step is `pmset` in [Mac mini worker](#mac-mini-worker) |
+| When a step needs root and you cannot use `sudo` (common on a shared cloud VM), setup does **not** fail half-way: your answers are already saved, and it stops with one block for an administrator (below) | There is no root block: Homebrew installs as you (`brew install --cask temurin@21`, plus `brew install bash` and `brew install python`, because macOS ships bash 3.2 and python3 3.9, and `brew install pyyaml` for the anti-cheat harness labels). The one `sudo` step is `pmset` in [Mac mini worker](#mac-mini-worker) |
 
 The Linux block lists only what is missing on this machine, for example:
 
@@ -285,7 +285,8 @@ A Mac worker runs the same seven phases and writes the same files as a Linux wor
 
 3. **Docker Desktop** > Settings:
    - General: **Start Docker Desktop when you sign in**, and **Use Rosetta for x86_64/amd64 emulation on Apple Silicon** (SWE-bench Pro's published images are linux/amd64 only, and a DeepSWE question without a prepared native build runs its published amd64 image; that path refuses to start without it).
-   - Resources: memory at least 18 GB (two 8 GB DeepSWE tasks plus 2 GB), CPUs as many as you will set `cpu_cores` to, and a disk image of about 200 GB.
+   - Resources: memory at least 18 GB (two 8 GB DeepSWE tasks plus 2 GB; a JiuwenSwarm build also holds its tree of about 1.5 GB in memory while it runs), CPUs as many as you will set `cpu_cores` to, and a disk image of about 200 GB. The VM reports a little less than the Memory Limit, and the RAM check reads what it reports.
+   - Resources > File sharing: the folders the harness builds mount at their own paths, `~/.local/share/mac-k3d` and the agent's `remote_fs`, must be under a shared folder. `/Users`, `/Volumes`, `/private`, `/tmp` and `/var/folders` are shared by default, so only a `remote_fs` elsewhere needs adding.
    - Apply & restart.
 4. **Download** `mac-k3d-darwin-aarch64` and clear quarantine as in [step 1](#1-download-the-binary).
 
@@ -296,8 +297,10 @@ Then follow [B. Worker](#b-worker--jenkins-agent). What `setup` and `config` do 
 | Memory the RAM check reads | `/proc/meminfo` | Docker Desktop's memory limit |
 | Default `cpu_cores` | logical CPUs | the smaller of the Mac's CPUs and Docker Desktop's; a larger value is refused |
 | Agent service | systemd user unit, kept after logout by linger | LaunchAgent, restarts 5 s after it exits; needs automatic login |
-| `config` / `status` warnings | none | automatic login off; sleep not 0 |
+| bash, python3, PyYAML | the system ones; `python3-yaml` is a root step when missing | Homebrew's, installed as you (`brew install bash python pyyaml`), ahead of `/bin` and `/usr/bin` on the agent's PATH |
+| `config` warnings | no PyYAML or curl; Docker memory below `MIN_RAM_GB`; a folder Docker cannot mount; on an arm64 host, no `linux/amd64` containers | the same, plus: automatic login off; sleep not 0; Rosetta off |
 | DeepSWE images | nothing to do: Harbor pulls the published images at the trial | `mac-k3d eval prepare --benchmark deepswe` once, below |
+| Harness builds | iCode git: `uv sync` on the host; JiuwenSwarm: in `ICODE_LINUX_BUILD_IMAGE` | both in `ICODE_LINUX_BUILD_IMAGE`: natively for `linux/arm64`, under Rosetta for `linux/amd64`, each kept in the harness store |
 
 **Prepare DeepSWE**, once, after the agent is online. Run it as the user that runs the agent:
 
@@ -319,8 +322,25 @@ iCode under test on a Mac:
 
 | Mode | What the Mac needs |
 |------|--------------------|
-| release | A Linux drop for the task containers' CPU type: `icode-linux-aarch64-full-v*` for LoLBench and natively prepared DeepSWE, `icode-linux-x86_64-full-v*` for SWE-bench Pro and emulated DeepSWE. Upload one `.tar.gz` holding both and the build picks the right one ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
-| git | Nothing extra. The iCode runtime is built inside a Linux container of the task platform (`ICODE_LINUX_BUILD_IMAGE`), because a macOS venv cannot run in a Linux container |
+| release | A Linux drop for the task containers' CPU type: `icode-linux-aarch64-full-v*` for LoLBench and natively prepared DeepSWE, `icode-linux-x86_64-full-v*` for SWE-bench Pro and emulated DeepSWE. Upload one `.tar.gz` holding both and the build picks the right one. With only the x86-64 drop, DeepSWE runs every question of the build emulated ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
+| git | Nothing extra. The iCode runtime is built inside a Linux container of the task platform (`ICODE_LINUX_BUILD_IMAGE`), because a macOS venv cannot run in a Linux container. A private repo needs the controller's `gitcode-pat` (or `github-pat`) credential |
+
+JiuwenSwarm under test on a Mac (DeepSWE only):
+
+| Mode | What the Mac needs |
+|------|--------------------|
+| git | Nothing extra: the offline pack is built in `ICODE_LINUX_BUILD_IMAGE` for the task platform. A private repo, or a private dependency on gitcode.com, needs the controller's `gitcode-pat` credential |
+| release | A wheel or wheelhouse with `aarch64` (or pure-Python) wheels, or a bundle built for `linux/arm64`, for native questions. Anything else runs every question of the build emulated ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md#linux-and-macos-workers)) |
+
+**Check the Mac**, as the agent's user from a checkout of this repo, once `config` has brought the agent online:
+
+```bash
+SKIP_DOWNLOAD=1 JENKINS_USER=admin JENKINS_API_TOKEN=<token> RUN_HARNESS_SMOKE=1 \
+  ICODE_MODE=git ICODE_GIT_URL=https://gitcode.com/michaelling/jiuwenicode ICODE_GIT_REF=2 ICODE_GIT_REF_KIND=pr \
+  ./scripts/env_set_up/run_all.sh
+```
+
+It checks the binary, the controller's jobs and credentials, the LaunchAgent and the node, Homebrew bash and python3 with PyYAML, Docker Desktop's memory, Rosetta, file sharing and the build image, then builds iCode and JiuwenSwarm for `linux/arm64` and `linux/amd64` ([scripts/env_set_up/README.md](../scripts/env_set_up/README.md)). The iCode build needs an input with an arm64 build: a git ref as above, or `ICODE_RELEASE=<a .tar.gz with both drops>`.
 
 Before the first real run, do the parity trial in [testing/mac-mini-worker.md](testing/mac-mini-worker.md).
 

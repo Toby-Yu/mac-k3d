@@ -56,6 +56,8 @@ jobs:
         run: |
           set -uo pipefail
           /bin/bash -n pipeline/stages/run_all.sh
+          # scripts/env_set_up runs on a new Mac before setup installs Homebrew bash.
+          for f in scripts/env_set_up/*.sh; do /bin/bash -n "$f" || exit 1; done
           # GitHub runs this step with -e. The guard's exit 1 is the result we
           # check, so capture it instead of aborting before the message is printed.
           set +e

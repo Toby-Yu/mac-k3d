@@ -82,7 +82,10 @@ Copy-paste commands. Use `--n-tasks 1` until E4–E6 are green.
 | **E5** Baseline, manual only | `DEEPSEEK_MODEL=deepseek-v4-pro mac-k3d eval --stage baseline --n-tasks 1` | Not part of `run_all`. A hand run still writes `baseline/<task>/agent.patch` and `baseline/summary.json`. That output is not published | | |
 | **E6** Report fields | `mac-k3d eval --stage anticheat`, then `--stage score`, `--stage report --n-tasks 1` and `--stage archive`; then `./pipeline/tools/check_report.sh` | `eval-runs/output/deepswe/<run>/artifact.json` with `icode`, plus `summary.md`, `report.html` and `cost-token-report.md`; `output/deepswe/<run>.tar.gz` | | |
 | **E7** Jenkins `deepswe_one_task` | UI **Build with Parameters**: `ICODE_MODE=release`, upload `ICODE_RELEASE_FILE`, `DEEPSEEK_MODEL=deepseek-v4-pro`, `AGENT_LABEL=lolbench`. Git: same UI with `ICODE_MODE=git` (or `mac-k3d eval --icode-mode git … --yes` without `--local`). Release `--yes` cannot attach a file | Build on **this** node; seven stages, `lock` only around Evaluate; archived JSON; same schema | | |
+| **E7j** Jenkins `deepswe_one_task`, JiuwenSwarm | `mac-k3d eval --job one --harness jiuwenswarm --task abs-module-cache-flags --model deepseek-v4-pro --yes`, or the UI with `HARNESS=jiuwenswarm` (git, or upload `JIUWENSWARM_RELEASE_FILE`). The local `--stage` path is iCode only | `JiuwenSwarm under test: …` before the canary; `OK JiuwenSwarm runtime … starts in /opt/jiuwenswarm-host` or a store hit; seven stages; `eval_protocol.harness.name` `jiuwenswarm`; `model_params.max_tokens` empty | | After E7 |
 | **E8** optional N>1 | Same as E6/E7 with `--n-tasks` > 1 | Same schema; `n_tasks` matches N | | After E6 green |
+
+A Mac worker runs E1, E2, E7 and E7j the same way, plus `mac-k3d eval prepare --benchmark deepswe` and the comparison with this PC in [mac-mini-worker.md](mac-mini-worker.md). `scripts/env_set_up/run_all.sh` checks either OS before E2 ([README](../../scripts/env_set_up/README.md)).
 
 ### E2 commands
 

@@ -324,18 +324,21 @@ hgit_username_for_host() {
 }
 
 # Fail-fast: no credential helper prompt, abort stalled HTTPS instead of hanging.
+# macOS has no timeout(1); perl's alarm outlives its exec, and SIGALRM exits 142.
 hgit_git() {
-  local rc
+  local rc=0 secs="${HGIT_TIMEOUT:-90}"
   if have timeout; then
-    timeout "${HGIT_TIMEOUT:-90}" "$@"
-    rc=$?
-    if [ "$rc" -eq 124 ]; then
-      echo "ERROR: git timed out after ${HGIT_TIMEOUT:-90}s (often a private repo with no PAT)" >&2
-      return 124
-    fi
-    return "$rc"
+    timeout "$secs" "$@" || rc=$?
+  elif have perl; then
+    perl -e 'alarm shift @ARGV; exec { $ARGV[0] } @ARGV or exit 127' "$secs" "$@" || rc=$?
+    [ "$rc" -ne 142 ] || rc=124
+  else
+    "$@" || rc=$?
   fi
-  "$@"
+  if [ "$rc" -eq 124 ]; then
+    echo "ERROR: git timed out after ${secs}s (often a private repo with no PAT)" >&2
+  fi
+  return "$rc"
 }
 
 hgit_clone_fail() {

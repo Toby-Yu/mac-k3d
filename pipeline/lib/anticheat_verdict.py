@@ -421,7 +421,7 @@ def arm_metrics(task_rows: list[tuple[str, list[dict]]], n_rollouts: int) -> dic
 
 def rescore(run: Path, harbor_runs: Path | None = None, tasks_dir: Path | None = None) -> tuple[dict, str]:
     """artifact.anticheat.json content and report.md text for an output run folder. Writes nothing."""
-    from render_report import _attempt_from_trial
+    from render_report import _attempt_from_trial, protocol_harness_name
 
     artifact = load_json(run / "artifact.json")
     if not isinstance(artifact, dict):
@@ -435,6 +435,7 @@ def rescore(run: Path, harbor_runs: Path | None = None, tasks_dir: Path | None =
     n_rollouts = int(artifact.get("n_rollouts") or 1)
     params = (artifact.get("eval_protocol") or {}).get("model_params") or {}
     max_tokens = params.get("max_tokens") if isinstance(params.get("max_tokens"), int) else None
+    harness = protocol_harness_name(artifact.get("eval_protocol"))
     ids = [ln.strip() for ln in (run / "tasks.txt").read_text(encoding="utf-8").splitlines() if ln.strip()]
     docs: list[dict] = []
     task_rows: list[tuple[str, list[dict]]] = []
@@ -447,7 +448,7 @@ def rescore(run: Path, harbor_runs: Path | None = None, tasks_dir: Path | None =
             doc = apply_override(evaluate(ctx, tid, n, attempt, transcript_root=source), overrides)
             docs.append(doc)
             reward = attempt / "verifier" / "reward.json"
-            row = _attempt_from_trial(attempt, reward if reward.is_file() else None, max_tokens)
+            row = _attempt_from_trial(attempt, reward if reward.is_file() else None, max_tokens, harness)
             row["anticheat"] = doc["verdict"]
             rows.append(row)
         task_rows.append((tid, rows))

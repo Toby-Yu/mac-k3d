@@ -77,10 +77,25 @@ if have systemctl; then
   fi
 fi
 if [ "$(uname -s)" = "Darwin" ]; then
-  if launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" >/dev/null 2>&1 \
-    || launchctl list 2>/dev/null | grep -q 'com.mac-k3d.jenkins-agent'; then
-    pass "macOS LaunchAgent com.mac-k3d.jenkins-agent loaded"
+  # Loaded is not enough: a LaunchAgent whose java exited is loaded and not running.
+  LAUNCHD="$(launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>/dev/null || true)"
+  if printf '%s\n' "$LAUNCHD" | grep -q 'state = running'; then
+    pass "macOS LaunchAgent com.mac-k3d.jenkins-agent running"
     AGENT_OK=1
+  elif [ -n "$LAUNCHD" ]; then
+    note "LaunchAgent com.mac-k3d.jenkins-agent is loaded but not running (see $(yaml_field "$WORKER_CONFIG" jenkins_agent remote_fs)/jenkins-agent.stderr.log)"
+  fi
+  # The agent and Docker Desktop live in the login session.
+  if [ -z "$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null || true)" ]; then
+    note "automatic login is off: after a restart the agent and Docker Desktop stay down until someone logs in (System Settings > Users & Groups > Automatically log in as)"
+  else
+    pass "automatic login on"
+  fi
+  SLEEP_MIN="$(pmset -g 2>/dev/null | awk '$1 == "sleep" { print $2; exit }')"
+  if [ -n "$SLEEP_MIN" ] && [ "$SLEEP_MIN" != 0 ]; then
+    note "the Mac sleeps after ${SLEEP_MIN} minutes idle and drops its Jenkins connection mid-build (sudo pmset -a sleep 0)"
+  else
+    pass "the Mac does not sleep when idle"
   fi
 fi
 
@@ -90,6 +105,27 @@ if [ "$AGENT_OK" -ne 1 ]; then
   fi
   note "agent daemon not active — paste API token and re-run worker config"
   exit 1
+fi
+
+# The controller's view: the node is online and big enough for DeepSWE.
+NODE="$(yaml_field "$WORKER_CONFIG" jenkins_agent name)"
+if ! have_jenkins_token; then
+  note "JENKINS_USER / JENKINS_API_TOKEN unset — skipping the node ${NODE:-?} online and fits-deepswe check"
+elif [ -z "$NODE" ]; then
+  die "worker.yaml has no jenkins_agent.name"
+else
+  NODE_JSON="$(jenkins_api "/computer/${NODE}/api/json?tree=offline,assignedLabels[name]")" \
+    || die "the controller at $JENKINS_URL has no node ${NODE}; run: $MAC_K3D_BIN config -c $WORKER_CONFIG"
+  printf '%s' "$NODE_JSON" | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+labels = {l.get("name") for l in doc.get("assignedLabels", [])}
+if doc.get("offline"):
+    sys.exit("node is offline")
+if "fits-deepswe" not in labels:
+    sys.exit("node has no fits-deepswe label (its cpu_cores is below what a DeepSWE question declares): " + " ".join(sorted(l for l in labels if l)))
+' || die "Jenkins node ${NODE} cannot run DeepSWE (see above)"
+  pass "Jenkins node ${NODE} online with fits-deepswe"
 fi
 
 pass "03_check_worker complete"

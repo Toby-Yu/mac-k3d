@@ -213,6 +213,33 @@ pub fn host_tool_problems() -> Vec<String> {
         .collect()
 }
 
+/// The anti-cheat phase reads the harness labels (tuned_on, hint) with PyYAML;
+/// without it every attempt is unlabelled. None when python3 itself is missing,
+/// which `version_problem` reports.
+pub fn pyyaml_problem() -> Option<String> {
+    let python = on_agent_path("python3")?;
+    let ok = Command::new(&python)
+        .args(["-c", "import yaml"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    (!ok).then(|| {
+        format!(
+            "{} has no PyYAML, so the anti-cheat report labels no attempt tuned_on or hint ({})",
+            python.display(),
+            pyyaml_hint()
+        )
+    })
+}
+
+pub fn pyyaml_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "brew install pyyaml; a python3 that formula does not cover: python3 -m pip install --user --break-system-packages pyyaml"
+    } else {
+        "sudo apt-get install -y python3-yaml"
+    }
+}
+
 /// macOS ships bash 3.2 and python3 3.9. Homebrew installs newer ones as this
 /// user, and the agent PATH puts the Homebrew bin first.
 #[cfg(target_os = "macos")]
@@ -225,6 +252,15 @@ pub fn ensure_brew_shell_tools() -> Result<()> {
         platform::install_package(package)?;
         if let Some(problem) = version_problem(tool, agent_tool_version(tool), want) {
             return Err(Error::DependencyMissing(problem));
+        }
+    }
+    if pyyaml_problem().is_some() {
+        println!("PyYAML: installing with Homebrew (pyyaml)");
+        if let Err(err) = platform::install_package("pyyaml") {
+            println!("Warning: brew install pyyaml failed ({err}).");
+        }
+        if let Some(problem) = pyyaml_problem() {
+            println!("Warning: {problem}.");
         }
     }
     Ok(())

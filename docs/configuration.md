@@ -100,7 +100,7 @@ All fields are optional; omitted keys use defaults above.
 |-------|---------|
 | `standalone` | Local k3d only |
 | `controller` | Jenkins in-cluster on this Mac |
-| `worker` | Jenkins agent + the pinned Harbor, Java (at least `JAVA_MAJOR`, the controller image's Java) and git; no cluster, no in-cluster Jenkins |
+| `worker` | Jenkins agent + the pinned Harbor, Java (at least `JAVA_MAJOR`, the controller image's Java), git, bash, python3 and PyYAML; no cluster, no in-cluster Jenkins. A Linux or Mac worker runs every benchmark; DeepSWE with iCode or JiuwenSwarm is the confirmed path on a Mac ([new-machine.md](new-machine.md#mac-mini-worker)) |
 
 ### `cluster`
 
@@ -284,22 +284,16 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `MAC_K3D_BUILD_NETWORK` | Worker pipeline: `docker run --network` for the harness build container, for example `host` when the bridge cannot reach PyPI. Trials keep their own network |
 | `JIUWENSWARM_TIMEOUT_SECONDS` | Worker pipeline: `timeout_seconds` in JiuwenSwarm's run document. Unset leaves JiuwenSwarm's default |
 
-## Multi-Mac setup guidance
+## Several machines
 
-`mac-k3d` currently manages one local cluster per Mac. For a team of Macs:
+One machine is the controller (`role: controller`, Jenkins in its k3d cluster); every other Linux PC or Mac is a worker (`role: worker`) that joins it as a Jenkins agent and hosts no cluster. A worker's `jenkins_agent` block names the controller (`controller_url`), the node (`name`, `labels`) and the agent's folder (`remote_fs`); `mac-k3d config -c worker.yaml` registers the node and starts the agent. Shared CI secrets (LLM keys, Git PATs) live on the controller only ([secrets.md](secrets.md)). Step by step: [new-machine.md](new-machine.md); a full worker file: [examples/worker.yaml.example](examples/worker.yaml.example).
 
-1. Choose one Mac as Jenkins controller (`jenkins.enabled: true`).
-2. Keep other Macs with `jenkins.enabled: false`.
-3. Register those Macs to Jenkins as build workers using Jenkins-native agent setup.
-4. Put shared CI secrets (LLM keys, Git PATs) on the controller only — see [secrets.md](secrets.md).
-
-This keeps Kubernetes local on each Mac while still enabling centralized CI orchestration.
-
-### Example: controller Mac
+### Example: controller
 
 ```yaml
+role: controller
 cluster:
-  name: ci-controller
+  name: mac-k3d
   agents: 0
 jenkins:
   enabled: true
@@ -308,26 +302,19 @@ docker:
   startup_timeout_secs: 180
 ```
 
-### Example: worker Mac
+### Example: Mac worker
 
 ```yaml
-cluster:
-  name: ci-worker-a
-  agents: 0
-jenkins:
-  enabled: false
-docker:
-  startup_timeout_secs: 120
+role: worker
+platform: macos
+jenkins_agent:
+  controller_url: http://CONTROLLER_HOST:17070
+  name: macos-mac-mini
+  labels: [macos, docker, lolbench]
+  remote_fs: /Users/YOU/jenkins-agent   # under a folder Docker Desktop shares
+  cpu_cores: 8                          # at most Docker Desktop's CPUs
+  api_user: admin
 ```
-
-### Future config extensions (planned, not implemented)
-
-The following keys may be added later for better controller/worker automation:
-
-- `role: controller | worker`
-- `controller.url: https://jenkins.example.com`
-- `controller.tunnel: ssh | inbound | websocket`
-- `worker.labels: ["macos", "docker", "k3d"]`
 
 ## Install commands (prepare)
 

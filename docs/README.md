@@ -42,7 +42,7 @@ Copy-paste checklists with this lab’s IPs live under [testing/](testing/).
 | [testing/README.md](testing/README.md) | What belongs in `testing/` |
 | [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | E0–E8 / pipeline phases |
 | [testing/cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | This cloud VM + this PC |
-| [testing/mac-mini-worker.md](testing/mac-mini-worker.md) | Onboard a Mac mini worker and compare it with this PC on the same questions |
+| [testing/mac-mini-worker.md](testing/mac-mini-worker.md) | Onboard a Mac mini worker, check it with `scripts/env_set_up`, and compare it with this PC on the same DeepSWE questions with iCode and JiuwenSwarm |
 | [testing/testing-binary-initializer.md](testing/testing-binary-initializer.md) | Bootstrap sign-off |
 | [testing/clean-machine-binary-test.md](testing/clean-machine-binary-test.md) | Wipe or new PC → eval-ready |
 | [testing/question-coverage.md](testing/question-coverage.md) | Questions run on this worker, and Docker memory per question |

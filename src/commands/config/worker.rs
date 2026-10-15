@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use super::ConfigArgs;
 use crate::config::MacK3dConfig;
 use crate::error::Result;
-use crate::prepare::{discovery, docker_plugins, jenkins_agent, toolchain, wizard};
+use crate::prepare::{
+    discovery, docker_checks, docker_plugins, eval_assets, jenkins_agent, resources, toolchain, wizard,
+};
 
 pub fn run(args: &ConfigArgs, config: &MacK3dConfig, config_path: &Path) -> Result<()> {
     check_toolchain(config, config_path);
@@ -85,11 +87,22 @@ fn check_toolchain(config: &MacK3dConfig, config_path: &Path) {
     for problem in toolchain::host_tool_problems() {
         println!("Warning: {problem}.");
     }
+    if let Some(problem) = toolchain::pyyaml_problem() {
+        println!("Warning: {problem}.");
+    }
     if discovery::which("git").is_none() {
         println!("Warning: git not found; the tasks phase clones benchmarks with it; {fix}.");
     }
+    if discovery::which("curl").is_none() {
+        println!(
+            "Warning: curl not found; the env phase downloads the Docker plugins and the harness releases with it."
+        );
+    }
     for warning in crate::platform::worker_host_warnings() {
         println!("Warning: {warning}.");
+    }
+    if let Some(problem) = resources::ram_problem(toolchain::min_ram_gb()) {
+        println!("Warning: {problem}; every build's env phase refuses it.");
     }
     let docker = config
         .dependencies
@@ -107,6 +120,16 @@ fn check_toolchain(config: &MacK3dConfig, config_path: &Path) {
                 docker_plugins::missing_hint(plugin)
             ),
         }
+    }
+    let mounts: Vec<PathBuf> = config
+        .jenkins_agent
+        .remote_fs
+        .iter()
+        .cloned()
+        .chain([eval_assets::share_dir()])
+        .collect();
+    for problem in docker_checks::worker_docker_problems(&docker, &mounts) {
+        println!("Warning: {problem}.");
     }
 }
 

@@ -1,6 +1,7 @@
 pub mod agent_service;
 pub mod apply;
 pub mod discovery;
+pub mod docker_checks;
 pub mod docker_plugins;
 pub mod eval_assets;
 pub mod icode_paths;

@@ -59,6 +59,7 @@ Current pins:
 | Buildx plugin | `DOCKER_BUILDX_VERSION=v0.29.1` when downloaded; an existing plugin is kept | as above | `toolchain.env` | as above | as above |
 | Java (agent) | `JAVA_MAJOR=21` or newer | pinned (minimum major) | `toolchain.env` | Linux: `apt-get install -y openjdk-21-jre-headless` (sudo or the administrator block); macOS: `brew install --cask temurin@21` | `prepare` validation, worker `config` (`java 21: ok`), `scripts/env_set_up/03_check_worker.sh` |
 | git | distro | floating | — | Linux: apt; macOS: brew | `prepare` validation, `env/host.sh` |
+| curl | distro; macOS's own | floating | — | the OS | worker `config` warns when missing; `env/compose.sh` and the harness release downloads use it |
 | bash | `BASH_MIN=4.4` or newer | pinned (minimum) | `toolchain.env` | Linux: the system bash; macOS: `brew install bash` (setup does it) | `_common.sh` guard (every step), worker validation and `config` |
 | python3 | `PYTHON_MIN=3.11` or newer | pinned (minimum) | `toolchain.env` | Linux: the system python3 (`apt-get install -y python3` root step when missing); macOS: `brew install python` | `env/host.sh`, worker validation and `config` |
 | uv | latest | floating | — | `curl https://astral.sh/uv/install.sh` (setup and `env/harbor.sh`) | `env/harbor.sh` |
@@ -76,21 +77,26 @@ Current pins:
 | Java discovery order | `JAVA_HOME`, `java` on PATH, `/usr/lib/jvm/*/bin/java` | `java_home -v 21+`, `java_home`, `JAVA_HOME`, `java` on PATH |
 | Installer | apt with sudo, or one block for an administrator | Homebrew as the user (no root block) |
 | bash / python3 | system bash and python3 (Ubuntu 24.04: 5.2 / 3.12) | Homebrew bash and python3; `/bin/bash` 3.2 and `/usr/bin/python3` 3.9 are too old |
+| PyYAML | `python3-yaml` (apt) | `pyyaml` (Homebrew); for a python3 that formula does not cover, `python3 -m pip install --user --break-system-packages pyyaml` |
+| 90-second cap on harness `git ls-remote` / `git fetch` | `timeout` | `perl`'s `alarm` (macOS ships no `timeout`) |
 | Agent daemon | systemd user unit `mac-k3d-jenkins-agent.service` + `loginctl enable-linger` | LaunchAgent `com.mac-k3d.jenkins-agent` (runs while the user is logged in) |
 | Agent PATH | shell PATH, then `~/.local/bin`, `~/.cargo/bin`, `/usr/local/bin`, `/usr/bin`, `/snap/bin` | `/opt/homebrew/bin`, `/usr/local/bin` first, then the shell PATH, `~/.local/bin`, Docker.app's bin |
 | Agent restart | systemd `Restart=always`, `RestartSec=5` | LaunchAgent `KeepAlive`, `ThrottleInterval` 5 |
-| Host warnings in `config` / `status` | none | automatic login off; `pmset` sleep not 0 |
+| Host warnings in `config` | no PyYAML or curl; Docker memory below `MIN_RAM_GB`; `remote_fs` or `MAC_K3D_SHARE` that a container cannot mount; on an arm64 host, no `linux/amd64` containers | the same, plus automatic login off, `pmset` sleep not 0, and Rosetta off in Docker Desktop (QEMU instead) |
+| Host warnings in `status` | none | automatic login off; `pmset` sleep not 0 |
 | RAM probe | `/proc/meminfo` | Docker Desktop's limit (`docker info` `MemTotal`); `sysctl -n hw.memsize` when the daemon is down |
 | CPU limit | logical CPUs | `cpu_cores` capped at Docker Desktop's CPUs (`docker info` `NCPU`); `config` refuses more |
 | MTU probe | `ip route get` + `ip link` | `route -n get` + `ifconfig` |
 | Trial network host routes | `ip route` + `ip addr` | `netstat -rn -f inet` + `ifconfig` |
-| Provenance CPU and RAM | `/proc/cpuinfo`, `/proc/meminfo` | `sysctl machdep.cpu.brand_string`, `hw.memsize` |
+| Provenance CPU and RAM | `/proc/cpuinfo`, `nproc`, `/proc/meminfo` | `sysctl machdep.cpu.brand_string`; `nproc` and `memory_kb` from Docker Desktop's VM (`docker info` `NCPU`, `MemTotal`), the Mac's own as `host_nproc` and `host_memory_kb` |
 | Task containers | DeepSWE and SWE-bench Pro `linux/amd64`; LoLBench the Docker host platform | DeepSWE `linux/arm64` when `mac-k3d eval prepare` proved its native build, else the published `linux/amd64` image under Rosetta; SWE-bench Pro `linux/amd64` under Rosetta; LoLBench `linux/arm64` |
 | DeepSWE task image | the published image, which Harbor pulls at the trial; nothing to prepare (an arm64 Linux host is treated like a Mac) | `mac-k3d eval prepare --benchmark deepswe` runs `docker build --build-context …/mars-base:latest=docker-image://$DEEPSWE_BASE_IMAGE` (BuildKit, not yet run on Docker Desktop) and Harbor's oracle and nop agents once per question, stored in `~/.local/share/mac-k3d/env-check/deepswe/`. An eval does no build or check: it runs the proven build, else the published image |
 | linux/amd64 on an arm64 host | QEMU binfmt (`docker run --privileged --rm tonistiigi/binfmt --install amd64`) | Docker Desktop's Rosetta (Settings > General) |
 | iCode release drop | `icode-linux-<task container arch>-full-v*`, picked by ELF header | the same; upload a `.tar.gz` holding both Linux drops |
 | iCode git-mode runtime | `uv sync` on the host when its CPU type matches the containers, else in `ICODE_LINUX_BUILD_IMAGE` | always in `ICODE_LINUX_BUILD_IMAGE` on the task platform |
-| JiuwenSwarm runtime | always in `ICODE_LINUX_BUILD_IMAGE` on the task platform | the same |
+| JiuwenSwarm runtime | always in `ICODE_LINUX_BUILD_IMAGE` on the task platform, built in a tmpfs inside the container and without CPython's `share/terminfo` | the same |
+| JiuwenSwarm or iCode release without an arm64 build | nothing on x86-64; on an arm64 host as on a Mac | DeepSWE runs every question of the build on the published `linux/amd64` image, with the reason in the report |
+| Harness store names that differ only by case | `pack` refuses them | `pack` refuses them, and so does `put` on the case-insensitive APFS |
 | uv cache for the container build | `~/.local/share/mac-k3d/uv-cache-linux-<arch>` | the same |
 
 The code and the CI tests (`ubuntu-latest` and `macos-latest`) cover macOS. The lab trial that runs the same questions on a Linux and a Mac worker and compares them is [testing/mac-mini-worker.md](testing/mac-mini-worker.md); it has not been run yet.
@@ -100,7 +106,7 @@ The code and the CI tests (`ubuntu-latest` and `macos-latest`) cover macOS. The 
 | Component | Version | Pinned? | Source of truth | Installed by | Checked by |
 |-----------|---------|---------|-----------------|--------------|------------|
 | Host scripts (`pipeline/lib/*.py`) | standard library only; `capture_receipt.py` and `canary_verdict.py` need `tomllib` | `PYTHON_MIN=3.11` | `toolchain.env` | python3 on the worker | `env/host.sh` |
-| PyYAML | any | floating | — | not installed by mac-k3d | `harness_labels.py` imports it only when it reads a harness YAML |
+| PyYAML | any | floating | — | worker `setup`: Linux `apt-get install -y python3-yaml` (root step when missing); macOS `brew install pyyaml` | `harness_labels.py` imports it to read the harness labels; without it the anti-cheat report labels no attempt `tuned_on` or `hint`. Worker `config` and `env/host.sh` warn, `scripts/env_set_up/04_check_eval_ready.sh` fails |
 | Harbor agent modules (`patch_harbor_agent.py`, `canary_harbor_agent.py`, `icode_harbor_agent.py`, `jiuwenswarm_harbor_agent.py`) | import `harbor` | follows `HARBOR_VERSION` | `toolchain.env` | Harbor's own uv environment | `tasks/agent.sh`, `harbor run` |
 | In-trial JiuwenSwarm scripts (`jiuwenswarm_trial.py`, `jiuwenswarm_usage.py`) | the bundle's CPython 3.11 | follows the bundle | the bundle's `runtime.json` | uploaded into each trial by `JiuwenSwarmAgent` | the JiuwenSwarm canary's `seed` probe |
 

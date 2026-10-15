@@ -289,6 +289,8 @@ mac-k3d eval --stage tasks --n-tasks 1
 
 **Checkpoint — paste:** the last OK line from each phase and `OK report schema`.
 
+The local stages (`--stage`, `--local`) run iCode only. JiuwenSwarm is checked on Jenkins in [Phase 5c](#phase-5c--jiuwenswarm-on-the-same-job); without a rollout, `HARNESS=jiuwenswarm bash pipeline/tools/prepare_harness.sh` builds and stores it on this worker and prints `OK JiuwenSwarm runtime <version> (offline-tarballs-ci) starts in /opt/jiuwenswarm-host`.
+
 ---
 
 ## Phase 4 — E4–E6 (paid, N=1)
@@ -343,6 +345,16 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 ```
 
 **Checkpoint — paste:** Jenkins build URL / console tail, artifact name, schema OK.
+
+### Phase 5c — JiuwenSwarm on the same job
+
+Only after Phase 5 passes. The same `deepswe_one_task` with `HARNESS=jiuwenswarm`; the page swaps the `ICODE_*` fields for `JIUWENSWARM_*` ([jiuwenswarm-harness-inputs.md](../jiuwenswarm-harness-inputs.md)). From this PC:
+
+```bash
+mac-k3d eval --job one --harness jiuwenswarm --task abs-module-cache-flags --model deepseek-v4-pro --yes
+```
+
+**Expected:** the same seven stages; `JiuwenSwarm under test: git pr 2 -> <sha> (<subject>)` before the canary; `OK JiuwenSwarm runtime … starts in /opt/jiuwenswarm-host` (first build of that commit on this worker, else `… is already prepared on this worker (bundle <sha>); nothing built`); `/logs/agent/jiuwenswarm.jsonl` in the trial; `eval_protocol.harness.name` `jiuwenswarm` with the bundle sha256 and `settings`; `model_params.max_tokens` empty (iCode's cap does not apply). A Mac worker runs the same build in [mac-mini-worker.md](mac-mini-worker.md).
 
 E8 (N>1) is optional after E7.
 

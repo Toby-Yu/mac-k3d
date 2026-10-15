@@ -82,7 +82,9 @@ def _timing_from_result(result: dict) -> tuple[float | None, str | None, str | N
     return None, None, None
 
 
-def _attempt_from_trial(trial: Path, reward_path: Path | None, max_tokens: int | None = None) -> dict:
+def _attempt_from_trial(
+    trial: Path, reward_path: Path | None, max_tokens: int | None = None, harness: str = "icode"
+) -> dict:
     data = load_json(reward_path) if reward_path is not None else None
     data = data if isinstance(data, dict) else {}
     rates = rates_for_trial(trial)
@@ -127,9 +129,10 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None, max_tokens: int |
         "last_output_tokens": None if usage is None else usage.get("last_output_tokens"),
         "icode_exit": icode_exit_code(trial),
     }
-    cap = max_tokens or ICODE_DEFAULT_MAX_TOKENS
+    # JiuwenSwarm keeps its own reply length: a cut-off is known only when a cap was recorded.
+    cap = max_tokens or (ICODE_DEFAULT_MAX_TOKENS if harness == "icode" else None)
     last_out = row["last_output_tokens"]
-    if isinstance(last_out, int) and last_out >= cap:
+    if cap and isinstance(last_out, int) and last_out >= cap:
         row["cut_off_reply"] = True
         row["notes"] = _add_note(row["notes"], "last reply cut off at max_tokens")
     if rates.get("empty_patch"):
@@ -210,7 +213,7 @@ def _missing_attempt() -> dict:
 
 
 def harness_task_attempts(
-    harness_dir: Path, tid: str, n_rollouts: int = 0, max_tokens: int | None = None
+    harness_dir: Path, tid: str, n_rollouts: int = 0, max_tokens: int | None = None, harness: str = "icode"
 ) -> list[dict]:
     """Attempts in `_aNN` order. A missing slot stays put as no-response, not shifted to the end."""
     from score_results import attempt_index, harbor_task_trials, rollout_number
@@ -221,7 +224,7 @@ def harness_task_attempts(
         reward = trial / "verifier" / "reward.json"
         if not reward.is_file():
             reward = trial / "reward.json"
-        row = _attempt_from_trial(trial, reward if reward.is_file() else None, max_tokens)
+        row = _attempt_from_trial(trial, reward if reward.is_file() else None, max_tokens, harness)
         index = rollout_number(trial)
         if index is None:
             index = attempt_index(trial)
@@ -349,8 +352,17 @@ def build_eval_protocol(
         or "high"
     )
     provider = str(inputs.get("provider") or os.environ.get("ICODE_PROVIDER") or "DeepSeek")
-    max_tokens = _limit(inputs.get("max_tokens")) or _limit(os.environ.get("ICODE_MAX_TOKENS"))
-    max_iterations = _limit(inputs.get("max_iterations")) or _limit(os.environ.get("ICODE_MAX_ITERATIONS"))
+    harness = inputs.get("harness") if isinstance(inputs.get("harness"), dict) else None
+    if harness is None:
+        harness = harness_protocol(workdir)
+    max_tokens = _limit(inputs.get("max_tokens"))
+    max_iterations = _limit(inputs.get("max_iterations"))
+    if protocol_harness_name({"harness": harness}) == "jiuwenswarm":
+        # No reply cap is set for JiuwenSwarm; ICODE_MAX_TOKENS is iCode's.
+        max_iterations = max_iterations or _limit(os.environ.get("JIUWENSWARM_MAX_TURNS"))
+    else:
+        max_tokens = max_tokens or _limit(os.environ.get("ICODE_MAX_TOKENS"))
+        max_iterations = max_iterations or _limit(os.environ.get("ICODE_MAX_ITERATIONS"))
     if git_doc:
         icode = {
             "mode": "git",
@@ -376,9 +388,6 @@ def build_eval_protocol(
     if not isinstance(cpu_lock, int) or isinstance(cpu_lock, bool):
         raw_lock = os.environ.get("CPU_LOCK_QTY") or ""
         cpu_lock = int(raw_lock) if raw_lock.isdigit() else None
-    harness = inputs.get("harness") if isinstance(inputs.get("harness"), dict) else None
-    if harness is None:
-        harness = harness_protocol(workdir)
     protocol = {
         "harness": harness,
         "icode": icode,
@@ -432,7 +441,8 @@ def build_artifact(
     del baseline_dir
     params = (eval_protocol or {}).get("model_params")
     max_tokens = _limit(params.get("max_tokens")) if isinstance(params, dict) else None
-    raw_rows = [(tid, harness_task_attempts(harness_dir, tid, n_rollouts, max_tokens)) for tid in task_ids]
+    harness = protocol_harness_name(eval_protocol)
+    raw_rows = [(tid, harness_task_attempts(harness_dir, tid, n_rollouts, max_tokens, harness)) for tid in task_ids]
     icode_rows = [(tid, [adjust_attempt(row) for row in rows]) for tid, rows in raw_rows]
     arm = summarize_arm(icode_rows, n_rollouts, concurrency)
     raw_arm = summarize_arm(raw_rows, n_rollouts, concurrency)
@@ -674,6 +684,12 @@ def harness_display(protocol: dict | None) -> str:
     """The harness's display name from eval_protocol.harness; iCode for runs older than it."""
     harness = protocol.get("harness") if isinstance(protocol, dict) and isinstance(protocol.get("harness"), dict) else {}
     return str(harness.get("display") or "iCode")
+
+
+def protocol_harness_name(protocol: dict | None) -> str:
+    """The harness's name from eval_protocol.harness; icode for runs older than it."""
+    harness = protocol.get("harness") if isinstance(protocol, dict) and isinstance(protocol.get("harness"), dict) else {}
+    return str(harness.get("name") or "icode")
 
 
 def icode_under_test(protocol: dict | None) -> str:

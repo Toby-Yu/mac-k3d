@@ -114,6 +114,10 @@ The input key is the sha256 of the harness, the commit or release sha256, the pl
 
 **Integrity.** `entry.json` holds the bundle sha256 and a digest of the unpacked tree (content, mode and links). Every lookup recomputes that digest, so a tree that changed on disk is never mounted: the entry is removed and the bundle is copied or prepared again (`harness store: a stored … tree was damaged and removed`). An entry is unpacked into a temporary folder under a per-harness lock, made read-only, and renamed into place only after `READY` is written, so a half-unpacked tree is never used and concurrent shards unpack once.
 
+**One build per input.** A build that misses the store takes a lock for that input key on the worker, waiting up to `MAC_K3D_HARNESS_LOCK_WAIT` seconds (default 5400), and looks in the store again once it holds it. Two shards on one worker that need the same input, such as two native arm64 shards on a Mac, therefore build it once; the second takes the first one's entry (`store`). A lock whose holder has exited is taken over.
+
+**Names that differ only by case.** `pack` refuses a tree holding two paths that differ only by case (`E/Eterm` and `e/eterm`), on every OS, and `put` refuses to unpack such a bundle onto a case-insensitive disk (the default APFS on a Mac), which would merge them silently. The error lists the colliding names. JiuwenSwarm's build drops the one known source, CPython's `share/terminfo` ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md#linux-and-macos-workers)).
+
 **Eviction.** After each use, the store keeps the newest `MAC_K3D_HARNESS_STORE_KEEP` entries per harness (default 6) and never removes one used in the last 24 hours. Each entry holds the full tree; the console prints its size when it is stored (`harness store: stored … bundle <sha> (<size>)`).
 
 **Console.** A shard prints one of `harness store: bundle <sha> is already on <node>; not copying it`, `harness store: copied bundle <sha> from <job>#<build>` and `harness store: stored the dispatcher's bundle <sha>`. A direct build prints `… is already prepared on this worker (bundle <sha>); nothing built` on a store hit.
@@ -129,8 +133,10 @@ A build runs the same seven phases, the same steps and the same Harbor command o
 | `env/host` agent service | systemd user unit | LaunchAgent |
 | `env/network` host routes | `ip route` / `ip addr` | `netstat -rn` / `ifconfig` |
 | `tasks/harness` iCode git build | `uv sync` on the host when its CPU type matches the containers | `uv sync` inside `ICODE_LINUX_BUILD_IMAGE` ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
-| `tasks/harness` JiuwenSwarm build | `uv sync` inside `ICODE_LINUX_BUILD_IMAGE` | the same ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md#git-jiuwenswarm_modegit)) |
-| Provenance `Worker` line | `/proc/cpuinfo` | `sysctl` |
+| `tasks/harness` JiuwenSwarm build | the offline pack inside `ICODE_LINUX_BUILD_IMAGE`, in the container's own filesystem | the same ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md#linux-and-macos-workers)) |
+| `tasks/harness` 90-second cap on `git ls-remote` and `git fetch` | `timeout` | `perl`'s `alarm` (macOS ships no `timeout`) |
+| `env/host` PyYAML (the anti-cheat harness labels) | `python3-yaml` | `brew install pyyaml` |
+| Provenance `Worker` line | `/proc/cpuinfo`, `nproc`, `/proc/meminfo` | `sysctl` for the CPU model; `nproc` and `memory_kb` are Docker Desktop's VM (`docker info`), and the line adds the Mac's own as `Docker VM of a host with nproc … memory_kb …` |
 
 SWE-bench Pro always runs `linux/amd64`, because Harbor runs its prebuilt images and those are published for amd64 only. DeepSWE uses that published image on an x86-64 host. On an arm64 host it uses the native build `mac-k3d eval prepare` made of the task Dockerfile, else the published image under emulation ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)). LoLBench runs the Docker host's platform (`linux/arm64` on Apple silicon), unless a selected task's Dockerfile downloads an x86-64-only build. On an arm64 host an amd64 task runs emulated (Rosetta in Docker Desktop, QEMU on Linux). `container_platform.json` records the platform, and the report's `Worker` line ends with `os Darwin · containers linux/arm64` (or `linux/amd64 emulated`). Per-OS command differences for operators are in [dependencies.md](dependencies.md#linux-and-macos).
 
@@ -229,7 +235,8 @@ The result is stored at `$MAC_K3D_SHARE/env-check/deepswe/<id>.json`. Its key is
 
 - `mac-k3d/deepswe-native:<id>` exists;
 - its labels match the current Dockerfile sha256 and `DEEPSWE_BASE_IMAGE`;
-- the store has a pass for its key.
+- the store has a pass for its key;
+- the harness under test runs on `linux/arm64`. A git input always does, because the build makes the tree for the task platform. A release does only when it holds an arm64 build: an iCode upload with an `icode-linux-aarch64` drop, a JiuwenSwarm wheel or wheelhouse whose wheels have `aarch64` (or pure-Python) builds, or a JiuwenSwarm bundle built for `linux/arm64`. A dispatcher's iCode release bundle is read the same way, by the ELF header of each `icode` in it.
 
 Then `docker tag` points the official name at it; the verifier's `tests/Dockerfile` also starts `FROM` that name. Every other question runs emulated. If the official name points at a non-amd64 image, `docker image rm` removes that tag; the native build stays. Harbor then pulls the published image at the trial, as on Linux. `env_check.json` records each question's choice and reason, and the report prints them:
 
@@ -238,12 +245,15 @@ Then `docker tag` points the official name at it; the verifier's `tests/Dockerfi
 | `its Dockerfile downloads an x86-64-only build`, `its Dockerfile is not FROM mars-base:latest (…)` | none: it cannot build natively |
 | `native check failed: oracle f2p 35/37` (a stored fail) | none: the grader's answer |
 | `not prepared on this Mac`, `prepared for another Dockerfile or base pin`, `prepared for other task files or another Harbor version (now …)`, `native check failed: oracle left no reward.json`, `native build failed (see …/build.log)` | `run mac-k3d eval prepare --benchmark deepswe` |
-| `another selected question runs emulated (one iCode build per run)`, `DEEPSWE_DOCKER_PLATFORM=linux/amd64` | none |
+| `another selected question runs emulated (one iCode build per run)` (or `JiuwenSwarm`), `DEEPSWE_DOCKER_PLATFORM=linux/amd64` | none |
+| `the JiuwenSwarm release under test has no linux/arm64 build (it runs on linux/amd64)` (or `iCode`) | none: upload an arm64 (or two-platform) release, or evaluate the same code from git |
 
-Nothing is kept out of Harbor over its image: an emulated question still runs. One iCode build serves the whole run, so if any selected question runs emulated, every question in that run does (`linux/amd64`). A Jenkins `one_task` build is one question, so the choice stays per question. `DEEPSWE_DOCKER_PLATFORM` forces one platform:
+Nothing is kept out of Harbor over its image: an emulated question still runs. One harness build serves the whole run, so if any selected question runs emulated, every question in that run does (`linux/amd64`). A Jenkins `one_task` build is one question, so the choice stays per question. A harness release without an arm64 build runs every question of the build emulated, with that reason, instead of stopping it. `DEEPSWE_DOCKER_PLATFORM` forces one platform:
 
 - `linux/amd64` on a Mac runs every question emulated, for a side-by-side comparison;
-- `linux/arm64` fails the build unless every selected question is prepared and proven.
+- `linux/arm64` fails the build unless every selected question is prepared and proven and the harness release has an arm64 build.
+
+A `JIUWENSWARM_RELEASE` given as an `https://` URL is not downloaded before this choice, so it is not read here; a URL to a bundle of the other platform stops the build in `tasks/harness`. Upload the file, or give a path on the worker.
 
 What this costs:
 

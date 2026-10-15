@@ -91,6 +91,7 @@ icode_assert_clean_checkout() {
     [ -n "$line" ] || continue
     case "$line" in
       "?? icode" | "?? ./icode") ;;
+      " M uv.lock") die "iCode checkout $dest is modified (${line}): uv sync rewrote uv.lock, so this commit's uv.lock is out of date with its pyproject.toml (\`uv lock --check\` fails there). Pick an iCode commit whose uv.lock is current." ;;
       *) die "iCode checkout $dest is modified (${line}). Only the generated icode launcher may be untracked." ;;
     esac
   done < <(git -C "$dest" status --porcelain)

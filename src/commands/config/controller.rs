@@ -126,7 +126,7 @@ fn credential_ids(
         Ok(ids) => {
             if ids.is_empty() {
                 println!(
-                    "No CI credentials in Jenkins yet (oracle still works).\n\
+                    "No CI credentials in Jenkins yet; every eval reads its model key from deepseek-api-key.\n\
                      Re-run with `--update-secrets` or set pending secrets — see docs/secrets.md."
                 );
             }

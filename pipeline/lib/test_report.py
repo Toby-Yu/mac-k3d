@@ -4553,6 +4553,45 @@ class AgentIsolationTests(unittest.TestCase):
         old = next(ln for ln in provenance_markdown({"worker": {"node": "lab"}}) if ln.startswith("- Worker:"))
         self.assertTrue(old.endswith("cpu `-`"), old)
 
+    def test_a_mac_worker_records_docker_desktops_vm_and_the_mac(self):
+        from unittest import mock
+
+        import provenance
+        import task_resources
+
+        info = subprocess.CompletedProcess([], 0, stdout="8 8326045696\n", stderr="")
+        with mock.patch.object(task_resources.subprocess, "run", return_value=info):
+            self.assertEqual(task_resources.docker_machine(), {"nproc": 8, "memory_kb": 8130904})
+            with mock.patch.object(task_resources.platform, "system", return_value="Darwin"):
+                self.assertEqual(task_resources.mem_total_kb(), 8130904)
+        for bad in (subprocess.CompletedProcess([], 1, stdout="", stderr="no daemon"),
+                    subprocess.CompletedProcess([], 0, stdout="8\n", stderr="")):
+            with mock.patch.object(task_resources.subprocess, "run", return_value=bad):
+                self.assertEqual(task_resources.docker_machine(), {})
+
+        vm = {"nproc": 8, "memory_kb": 8130904}
+        with mock.patch.object(provenance, "_nproc", return_value=10), \
+                mock.patch.object(provenance, "_mem_total_kb", return_value=16777216), \
+                mock.patch.object(provenance, "_docker_version", return_value="29.0.0"), \
+                mock.patch.object(provenance, "_cpu_model", return_value="Apple M4"), \
+                mock.patch.object(provenance, "docker_machine", return_value=vm):
+            with mock.patch.object(provenance.platform, "system", return_value="Darwin"):
+                mac = provenance.worker_facts(None)
+            with mock.patch.object(provenance.platform, "system", return_value="Linux"):
+                linux = provenance.worker_facts(None)
+        self.assertEqual((mac["nproc"], mac["memory_kb"]), (8, 8130904))
+        self.assertEqual((mac["host_nproc"], mac["host_memory_kb"]), (10, 16777216))
+        self.assertEqual((linux["nproc"], linux["memory_kb"]), (10, 16777216))
+        self.assertNotIn("host_nproc", linux)
+        self.assertEqual(provenance.host_text(mac), "nproc 10 memory_kb 16777216")
+        self.assertEqual(provenance.host_text(linux), "")
+
+        line = next(ln for ln in provenance.provenance_markdown({"worker": mac}) if ln.startswith("- Worker:"))
+        self.assertIn("nproc `8` · memory_kb `8130904`", line)
+        self.assertIn("· os `Darwin` · Docker VM of a host with `nproc 10 memory_kb 16777216`", line)
+        line = next(ln for ln in provenance.provenance_markdown({"worker": linux}) if ln.startswith("- Worker:"))
+        self.assertNotIn("Docker VM", line)
+
     def test_vpn_mtu_below_docker_bridge_warns(self):
         cases = (
             ("1280", "1500", True),

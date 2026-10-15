@@ -239,6 +239,53 @@ harness_platform_fits() {
   [ "$1" = any ] || [ "$1" = "$2" ]
 }
 
+# Why this build's harness cannot run in PLATFORM's task containers; nothing
+# when it can, or when only preparing can tell (tasks/images asks before
+# choosing native builds). A git input builds for any platform. A release runs
+# where it has a build: the JiuwenSwarm file (a wheel or wheelhouse rebuilds
+# from it), else the dispatcher's bundle, else the iCode release on this worker.
+harness_native_blocker() {
+  local platform="$1" src="" want entry got
+  [ "$(harness_mode)" = release ] || return 0
+  want="$(printf '%s' "${HARNESS_BUNDLE_SHA256:-}" | tr 'A-Z' 'a-z')"
+  entry="$(harness_store_root)/$HARNESS/$want"
+  if [ "$HARNESS" = jiuwenswarm ] && [ -f "${JIUWENSWARM_RELEASE:-}" ]; then
+    src="$JIUWENSWARM_RELEASE"
+  elif [ -n "$want" ] && [ -f "$entry/READY" ]; then
+    src="$entry"
+  elif [ -n "$want" ]; then
+    src="${HARNESS_BUNDLE_FILE:-}"
+  elif [ "$HARNESS" = icode ]; then
+    src="${ICODE_RELEASE:-}"
+    if [ -z "$src" ] && [ "${ICODE_RELEASE_UPLOADED:-}" != 1 ]; then
+      src="$(icode_paths_get release || true)"
+      [ -n "$src" ] || src="$(DEEPSWE_DOCKER_PLATFORM="$platform" discover_icode_release || true)"
+    fi
+  fi
+  [ -n "$src" ] && [ -e "$src" ] || return 0
+  got="$(python3 "$PIPELINE_LIB/harness_platforms.py" "$src" 2>/dev/null)" || return 0
+  case " $got " in
+    *" $platform "*) return 0 ;;
+  esac
+  printf 'the %s release under test has no %s build (it runs on %s)\n' "$(harness_display)" "$platform" "${got// /, }"
+}
+
+# The stored tree for input KEY (IDENTITY in the message) as this build's
+# harness; rc 1 on a miss, or when KEEP=1 needs a tarball the entry lacks.
+harness_stored() {
+  local key="$1" identity="$2" keep="$3" quiet="${4:-}"
+  HARNESS_ENTRY="$(harness_get key "$key" "$quiet")" || return 1
+  if [ "$keep" != 1 ] || [ -s "$HARNESS_ENTRY/bundle.tar.gz" ]; then
+    echo "harness store: $(harness_display) ${identity} is already prepared on this worker (bundle $(harness_entry_sha "$HARNESS_ENTRY" | cut -c1-16)); nothing built" >&2
+    HARNESS_SOURCE=store
+    HARNESS_TREE="$HARNESS_ENTRY/tree"
+    return 0
+  fi
+  echo "harness store: the stored tree for ${identity} has no tarball to hand on; preparing again" >&2
+  HARNESS_ENTRY=""
+  return 1
+}
+
 # Find or make this build's harness for PLATFORM. Sets HARNESS_ENTRY (empty
 # when the tree is not stored), HARNESS_TREE and HARNESS_SOURCE:
 #   dispatcher  the bundle HARNESS_BUNDLE_SHA256 names, on this worker or copied
@@ -249,7 +296,7 @@ harness_platform_fits() {
 #               unpacks in seconds; a test fetch dir)
 # KEEP=1 (the dispatcher) always stores, and keeps the tarball to hand on.
 harness_resolve() {
-  local platform="$1" keep="${2:-0}" want file bp kind identity key="" tree meta bundle sha
+  local platform="$1" keep="${2:-0}" want file bp kind identity key="" tree meta bundle sha locked=0
   HARNESS_ENTRY="" HARNESS_TREE="" HARNESS_SOURCE=""
   want="$(printf '%s' "${HARNESS_BUNDLE_SHA256:-}" | tr 'A-Z' 'a-z')"
   if [ -n "$want" ]; then
@@ -295,15 +342,14 @@ harness_resolve() {
 
   if identity="$(harness_request_identity)"; then
     key="$(harness_key "$identity" "$(harness_bundle_platform_for "$platform")")"
-    if HARNESS_ENTRY="$(harness_get key "$key")"; then
-      if [ "$keep" != 1 ] || [ -s "$HARNESS_ENTRY/bundle.tar.gz" ]; then
-        echo "harness store: $(harness_display) ${identity} is already prepared on this worker (bundle $(harness_entry_sha "$HARNESS_ENTRY" | cut -c1-16)); nothing built" >&2
-        HARNESS_SOURCE=store
-        HARNESS_TREE="$HARNESS_ENTRY/tree"
-        return 0
-      fi
-      echo "harness store: the stored tree for ${identity} has no tarball to hand on; preparing again" >&2
-      HARNESS_ENTRY=""
+    harness_stored "$key" "$identity" "$keep" && return 0
+    # One build per input on this worker: a build that waited here finds the
+    # tree the other one stored.
+    node_lock "harness-${HARNESS}-${key:0:16}" "${MAC_K3D_HARNESS_LOCK_WAIT:-5400}"
+    locked=1
+    if harness_stored "$key" "$identity" "$keep" quiet; then
+      node_unlock
+      return 0
     fi
   fi
 
@@ -316,6 +362,7 @@ harness_resolve() {
     identity=""
   fi
   if [ -z "$key" ] && [ "$keep" != 1 ] || [ "$HARNESS:$(harness_mode):$keep" = icode:release:0 ]; then
+    [ "$locked" = 0 ] || node_unlock
     HARNESS_TREE="$tree"
     HARNESS_SOURCE=workspace
     return 0
@@ -326,6 +373,7 @@ harness_resolve() {
   echo "harness: packing $tree" >&2
   sha="$(harness_pack "$tree" "$meta" "$bundle")" || die "could not pack $tree"
   HARNESS_ENTRY="$(harness_put "$bundle" "$sha" "$key" "$keep")"
+  [ "$locked" = 0 ] || node_unlock
   rm -f "$bundle" "$meta"
   echo "harness store: stored $(harness_display) bundle ${sha:0:16} ($(du -sh "$HARNESS_ENTRY/tree" 2>/dev/null | cut -f1))" >&2
   case "$tree" in
@@ -347,8 +395,12 @@ harness_use() {
 
 # The stored entry for SHA or KEY, its tree checked; empty and rc 1 on a miss.
 harness_get() {
-  local how="$1" value="$2" rc=0 entry
-  entry="$(harness_store get --store "$(harness_store_root)" --harness "$HARNESS" "--$how" "$value")" || rc=$?
+  local how="$1" value="$2" quiet="${3:-}" rc=0 entry
+  if [ -n "$quiet" ]; then
+    entry="$(harness_store get --store "$(harness_store_root)" --harness "$HARNESS" "--$how" "$value" 2>/dev/null)" || rc=$?
+  else
+    entry="$(harness_store get --store "$(harness_store_root)" --harness "$HARNESS" "--$how" "$value")" || rc=$?
+  fi
   case "$rc" in
     0) printf '%s\n' "$entry" ;;
     1) return 1 ;;

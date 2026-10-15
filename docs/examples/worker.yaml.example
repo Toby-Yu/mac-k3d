@@ -1,4 +1,6 @@
-# Example worker config for LoLBench eval hosts (Mac or Linux).
+# Example worker config for eval hosts (Linux or Mac): DeepSWE with iCode or
+# JiuwenSwarm, LoLBench and SWE-bench Pro. The pipeline clones each benchmark
+# itself, so a worker needs no benchmark checkout and no cluster tools.
 # Copy and adjust, then: mac-k3d prepare --non-interactive -c worker.yaml
 # Or generate interactively: mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 # Or from a live worker: mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o worker.yaml
@@ -14,13 +16,16 @@ storage:
 dependencies:
   docker:
     source: existing
-    binary: /usr/bin/docker
+    binary: /usr/bin/docker    # macOS: /usr/local/bin/docker (Docker Desktop)
   harbor:
     source: existing
     binary: /home/YOU/.local/bin/harbor
   java:
     source: existing
     binary: /usr/bin/java
+  git:
+    source: existing
+    binary: /usr/bin/git
   k3d:
     source: skip
   kubectl:
@@ -28,16 +33,14 @@ dependencies:
   helm:
     source: skip
 
-lolbench:
-  path: /var/lib/mac-k3d/lolbench
-  source: existing
-
 jenkins_agent:
   controller_url: http://CONTROLLER_HOST:17070
-  name: linux-eval-1
-  labels: [linux, docker, lolbench]
+  name: linux-eval-1             # macOS default: macos-<hostname>
+  labels: [linux, docker, lolbench]   # macOS default: [macos, docker, lolbench]
+  # The harness builds mount this at its own path. On a Mac keep it under a
+  # folder Docker Desktop shares (/Users or /Volumes by default).
   remote_fs: /home/YOU/jenkins-agent
-  cpu_cores: 4              # local upper limit; a cloud worker uses 16
+  cpu_cores: 4              # local upper limit; a cloud worker uses 16. A Mac: at most Docker Desktop's CPUs
   cpus_per_executor: 2    # executors = cpu_cores / this (local 2, cloud 8)
   api_user: admin
   # api_token: set via prepare or MAC_K3D_JENKINS_TOKEN

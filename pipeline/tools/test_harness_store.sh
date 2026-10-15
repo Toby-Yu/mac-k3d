@@ -12,6 +12,12 @@
 #   - a shard of another platform prepares its own from the same input
 #   - JiuwenSwarm: git PR 2, a wheel, a wheelhouse, a bundle upload, an unknown
 #     file, and a benchmark other than DeepSWE
+#   - a dispatcher for the other platform checks Docker runs it first (Rosetta
+#     on a Mac, QEMU on Linux), and stops when it does not
+#   - a JiuwenSwarm shard of another platform than its dispatcher builds its
+#     own, from the pinned commit or the same wheel
+#   - two builds of one new input on a worker build it once
+#   - which releases keep a host of the other CPU type off native containers
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -74,13 +80,16 @@ with open(os.environ["FAKE_DOCKER_LOG"], "a", encoding="utf-8") as log:
     log.write(" ".join(args) + "\n")
 if not args or args[0] != "run":
     sys.exit(1)
-mounts, env, workdir, plat, i = {}, {}, None, "", 1
+mounts, tmpfs, env, workdir, plat, i = {}, [], {}, None, "", 1
 while i < len(args):
     a = args[i]
     if a == "--rm":
         i += 1
     elif a in ("--platform", "--user"):
         plat = args[i + 1] if a == "--platform" else plat
+        i += 2
+    elif a == "--tmpfs":
+        tmpfs.append(args[i + 1].split(":")[0])
         i += 2
     elif a == "-v":
         src, dst = args[i + 1].split(":")[:2]
@@ -97,17 +106,29 @@ while i < len(args):
         break
 cmd = args[i + 1:]
 if cmd[:2] == ["uname", "-m"]:
-    print("aarch64" if plat.endswith("arm64") else "x86_64")
+    if os.environ.get("FAKE_DOCKER_NO_EMULATION") == "1":
+        import platform
+        print(platform.machine())
+    else:
+        print("aarch64" if plat.endswith("arm64") else "x86_64")
     sys.exit(0)
 script = next((c for c in cmd if c.endswith("jiuwenswarm_build.sh")), "")
 if script:
+    import shutil, tempfile
     mode = cmd[cmd.index(script) + 1]
-    root = mounts["/opt/jiuwenswarm-host"]
+    # The build writes in the container's tmpfs, never in a host mount, then
+    # copies the tree to JIUWENSWARM_OUT, mounted at its own path.
+    assert "/opt/jiuwenswarm-host" in tmpfs and "/opt/jiuwenswarm-host" not in mounts, (tmpfs, mounts)
+    out = env["JIUWENSWARM_OUT"]
+    assert mounts.get(out) == out, (out, mounts)
+    root = tempfile.mkdtemp(prefix="fake-tmpfs-")
     if mode == "git":
         assert os.path.isfile(os.path.join(mounts["/mac-k3d-src"], "uv.lock"))
     else:
         wheel = cmd[-1].replace("/mac-k3d-in", mounts["/mac-k3d-in"], 1)
         assert os.path.isfile(wheel), wheel
+    import time
+    time.sleep(float(os.environ.get("FAKE_BUILD_SLEEP") or 0))
     with open(os.environ["FAKE_BUILD_LOG"], "a", encoding="utf-8") as log:
         log.write(f"{mode} {plat} {env.get('JIUWENSWARM_PYTHON_PLATFORM', '')}\n")
     for d in ("venv/bin", "bin", "python/cpython-3.11/bin"):
@@ -129,6 +150,8 @@ if script:
         json.dump({"package": "workswarm", "version": "0.2.5b1", "python": "3.11.14",
                    "python_platform": env.get("JIUWENSWARM_PYTHON_PLATFORM", ""), "machine": "x86_64"}, fh)
     print("OK JiuwenSwarm runtime 0.2.5b1 starts in /opt/jiuwenswarm-host (fake)")
+    shutil.copytree(root, out, symlinks=True, dirs_exist_ok=True)
+    shutil.rmtree(root)
     sys.exit(0)
 full = dict(os.environ)
 full.update({k: v for k, v in env.items() if k not in ("HOME",)})
@@ -220,6 +243,7 @@ case "$ROOT1" in "$S1"/harness-store/icode/*/tree) ;; *) fail "host root not in 
 grep -q "iCode under test: git pr 2 -> $ICODE_PR" <<<"$out" || fail "no identity line: $out"
 grep -q '"runtime_sha256": "[0-9a-f]\{64\}"' "$(dirname "$ROOT1")/bundle.json" || fail "bundle.json has no runtime_sha256"
 [ ! -e "$TMP/w1/icode-src" ] || fail "the workspace copy was kept after storing"
+[ "$(grep -c 'no icode bundle for input' <<<"$out")" = 1 ] || fail "the store miss is not reported once: $out"
 ok "a direct build prepares, stores read-only and records PR 2's commit"
 
 # 2. The same input on the same worker: no build.
@@ -408,5 +432,112 @@ if out="$(run "$TMP/j8" "$S3" HARNESS=jiuwenswarm BENCHMARK=lolbench bash "$STAG
 fi
 grep -q "runs on BENCHMARK=deepswe only" <<<"$out" || fail "no deepswe-only message: $out"
 ok "JiuwenSwarm is refused outside DeepSWE"
+
+# 13. A dispatcher for the other platform checks Docker runs it before building.
+: >"$DOCKER_LOG"
+out="$(run "$TMP/jo" "$TMP/share-jw-other-dispatcher" HARNESS=jiuwenswarm HARNESS_BUNDLE_PLATFORM="$OTHER" \
+  bash "$ROOT/pipeline/tools/prepare_harness.sh" 2>&1)" || fail "dispatcher for $OTHER: $out"
+grep -q -- "--platform $OTHER alpine:3.20 uname -m" "$DOCKER_LOG" || fail "no $OTHER check before the build: $(cat "$DOCKER_LOG")"
+grep -q "OK Docker runs $OTHER containers" <<<"$out" || fail "no emulation OK line: $out"
+[ "$(field "$TMP/jo/harness/bundle.json" platform)" = "$OTHER" ] || fail "dispatcher bundle platform"
+n="$(builds)"
+if out="$(run "$TMP/jo2" "$TMP/share-jw-noemu" HARNESS=jiuwenswarm HARNESS_BUNDLE_PLATFORM="$OTHER" FAKE_DOCKER_NO_EMULATION=1 \
+  bash "$ROOT/pipeline/tools/prepare_harness.sh" 2>&1)"; then
+  fail "a dispatcher built for $OTHER that Docker cannot run"
+fi
+grep -q "Docker cannot run $OTHER containers" <<<"$out" || fail "no emulation message: $out"
+case "$(uname -s)" in
+  Darwin) grep -q "Use Rosetta for x86_64/amd64 emulation" <<<"$out" || fail "no Rosetta hint: $out" ;;
+  *) grep -q "tonistiigi/binfmt --install ${OTHER#linux/}" <<<"$out" || fail "no binfmt hint: $out" ;;
+esac
+[ "$(builds)" = "$n" ] || fail "a build ran before the emulation check failed"
+ok "a dispatcher for the other platform checks Docker runs it, and stops when it does not"
+
+# 14. A JiuwenSwarm shard of another platform than its dispatcher's bundle
+#     builds its own, from the pinned commit or the same wheel.
+n="$(builds)"
+out="$(run "$TMP/j9" "$TMP/share-jw-shard-other" HARNESS=jiuwenswarm DEEPSWE_DOCKER_PLATFORM="$OTHER" \
+  HARNESS_BUNDLE_SHA256="$(cat "$TMP/jd/harness/bundle.sha256")" HARNESS_BUNDLE_FILE="$JBUNDLE" JIUWENSWARM_GIT_SHA="$JW_PR" \
+  bash "$STAGES/tasks/harness.sh" 2>&1)" || fail "JiuwenSwarm git shard for $OTHER: $out"
+[ "$(builds)" = $((n + 1)) ] || fail "the $OTHER git shard did not build"
+tail -n 1 "$BUILD_LOG" | grep -q "^git $OTHER " || fail "git shard build: $(tail -n 1 "$BUILD_LOG")"
+[ "$(field "$TMP/j9/harness.json" platform)" = "$OTHER" ] || fail "git shard platform"
+[ "$(field "$TMP/j9/harness.json" source)" = worker ] || fail "git shard source"
+[ "$(field "$TMP/j9/icode_git.json" sha)" = "$JW_PR" ] || fail "git shard commit"
+grep -q "preparing this worker's own" <<<"$out" || fail "no platform message: $out"
+out="$(run "$TMP/j10" "$TMP/share-jw-shard-other" HARNESS=jiuwenswarm DEEPSWE_DOCKER_PLATFORM="$OTHER" \
+  JIUWENSWARM_MODE=release JIUWENSWARM_RELEASE="$REL/JIUWENSWARM_RELEASE_FILE" \
+  HARNESS_BUNDLE_SHA256="$(cat "$TMP/jd3/harness/bundle.sha256")" HARNESS_BUNDLE_FILE="$TMP/jd3/harness/bundle.tar.gz" \
+  bash "$STAGES/tasks/harness.sh" 2>&1)" || fail "JiuwenSwarm wheel shard for $OTHER: $out"
+[ "$(builds)" = $((n + 2)) ] || fail "the $OTHER wheel shard did not build"
+tail -n 1 "$BUILD_LOG" | grep -q "^wheel $OTHER " || fail "wheel shard build: $(tail -n 1 "$BUILD_LOG")"
+[ "$(field "$TMP/j10/harness.json" platform)" = "$OTHER" ] || fail "wheel shard platform"
+ok "a JiuwenSwarm shard of another platform builds its own from the pinned commit or the same wheel"
+
+# 15. Two builds of one new input on a worker: one builds, the other waits and reuses it.
+n="$(builds)"
+pids=()
+for i in 1 2; do
+  run "$TMP/lock$i" "$TMP/share-jw-lock" HARNESS=jiuwenswarm FAKE_BUILD_SLEEP=3 \
+    bash "$STAGES/tasks/harness.sh" >"$TMP/lock$i.out" 2>&1 &
+  pids+=("$!")
+done
+wait "${pids[0]}" || fail "first concurrent build: $(cat "$TMP/lock1.out")"
+wait "${pids[1]}" || fail "second concurrent build: $(cat "$TMP/lock2.out")"
+[ "$(builds)" = $((n + 1)) ] || fail "two builds of one input built $(($(builds) - n)) times"
+sources="$(field "$TMP/lock1/harness.json" source) $(field "$TMP/lock2/harness.json" source)"
+case "$sources" in
+  "worker store" | "store worker") ;;
+  *) fail "concurrent build sources: $sources" ;;
+esac
+[ "$(cat "$TMP/lock1/harness_host_root.txt")" = "$(cat "$TMP/lock2/harness_host_root.txt")" ] || fail "concurrent builds mount different trees"
+ok "two builds of one new input on a worker build it once"
+
+# 16. Which inputs keep a host of the other CPU type off native task containers
+#     (harness_native_blocker; tasks/images then runs every question emulated).
+blocker() {
+  local plat="$1"
+  shift
+  run "$TMP/blocker" "$TMP/share-blocker" "$@" bash -c \
+    'source "$1/_common.sh" >/dev/null && source "$2/harness_lib.sh" && harness_native_blocker "$3"' _ "$STAGES" "$LIB" "$plat"
+}
+python3 - "$REL" <<'PY'
+import io, sys, tarfile
+from pathlib import Path
+
+rel = Path(sys.argv[1])
+
+def elf(machine):
+    return b"\x7fELF\x02\x01\x01" + b"\0" * 11 + machine.to_bytes(2, "little") + b"\0" * 44
+
+def drop(dest, *arches):
+    with tarfile.open(dest, "w:gz") as tar:
+        for arch, machine in arches:
+            body = elf(machine)
+            info = tarfile.TarInfo(f"icode-linux-{arch}-full-v1.0.0/icode")
+            info.size, info.mode = len(body), 0o755
+            tar.addfile(info, io.BytesIO(body))
+
+drop(rel / "icode-linux-x86_64-full-v1.0.0.tar.gz", ("x86_64", 62))
+drop(rel / "icode-both-full-v1.0.0.tar.gz", ("x86_64", 62), ("aarch64", 183))
+PY
+X86_DROP="$REL/icode-linux-x86_64-full-v1.0.0.tar.gz"
+[ "$(blocker linux/arm64 ICODE_MODE=release ICODE_RELEASE="$X86_DROP")" \
+  = "the iCode release under test has no linux/arm64 build (it runs on linux/amd64)" ] \
+  || fail "x86-64 iCode release on arm64: '$(blocker linux/arm64 ICODE_MODE=release ICODE_RELEASE="$X86_DROP")'"
+[ -z "$(blocker linux/amd64 ICODE_MODE=release ICODE_RELEASE="$X86_DROP")" ] || fail "x86-64 iCode release blocked on amd64"
+[ -z "$(blocker linux/arm64 ICODE_MODE=release ICODE_RELEASE="$REL/icode-both-full-v1.0.0.tar.gz")" ] \
+  || fail "a two-CPU iCode release blocked on arm64"
+[ -z "$(blocker linux/arm64)" ] || fail "an iCode git input was blocked"
+JBUNDLE_PLAT="$(field "$TMP/jd/harness/bundle.json" platform)"
+[ "$(blocker "$OTHER" HARNESS=jiuwenswarm JIUWENSWARM_MODE=release JIUWENSWARM_RELEASE="$JBUNDLE")" \
+  = "the JiuwenSwarm release under test has no $OTHER build (it runs on $JBUNDLE_PLAT)" ] \
+  || fail "JiuwenSwarm $JBUNDLE_PLAT bundle on $OTHER: '$(blocker "$OTHER" HARNESS=jiuwenswarm JIUWENSWARM_MODE=release JIUWENSWARM_RELEASE="$JBUNDLE")'"
+[ -z "$(blocker "$NATIVE" HARNESS=jiuwenswarm JIUWENSWARM_MODE=release JIUWENSWARM_RELEASE="$JBUNDLE")" ] \
+  || fail "a JiuwenSwarm bundle blocked on its own platform"
+[ -z "$(blocker "$OTHER" HARNESS=jiuwenswarm JIUWENSWARM_MODE=release JIUWENSWARM_RELEASE="$REL/JIUWENSWARM_RELEASE_FILE")" ] \
+  || fail "a pure JiuwenSwarm wheel was blocked"
+[ -z "$(blocker "$OTHER" HARNESS=jiuwenswarm)" ] || fail "a JiuwenSwarm git input was blocked"
+ok "a release or bundle without a build for the host's CPU blocks native containers; git, pure wheels and two-CPU drops do not"
 
 echo "OK test_harness_store.sh"

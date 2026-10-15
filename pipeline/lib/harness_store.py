@@ -15,7 +15,9 @@ the dispatcher's prepare); a shard keeps the tree alone.
 
 entry.json adds the bundle's sha256 and a digest of the unpacked tree; `get`
 recomputes that digest, so a tree that changed on disk is never mounted. The
-tree is made read-only once unpacked.
+tree is made read-only once unpacked. Paths that differ only in case would
+merge on a macOS worker's disk: `pack` refuses them, and so does `put` on a
+case-insensitive file system.
 
     harness_store.py pack --tree DIR --meta FILE --out FILE        prints the sha256
     harness_store.py put [--store DIR] --harness NAME --bundle FILE [--expect-sha S] [--key K] [--keep-bundle]
@@ -108,13 +110,45 @@ def tree_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
+def case_collisions(names) -> list[list[str]]:
+    """Groups of paths that differ only in case: one path on a macOS (APFS) worker."""
+    groups: dict[str, list[str]] = {}
+    for name in names:
+        groups.setdefault(name.lower(), []).append(name)
+    return [sorted(set(group)) for group in groups.values() if len(set(group)) > 1]
+
+
+def _collision_error(where: str, groups: list[list[str]]) -> StoreError:
+    shown = "; ".join(" vs ".join(group) for group in groups[:5])
+    more = f" (and {len(groups) - 5} more)" if len(groups) > 5 else ""
+    return StoreError(
+        f"{where} holds {len(groups)} sets of paths that differ only in case, which a macOS "
+        f"worker's case-insensitive disk would merge: {shown}{more}"
+    )
+
+
+def case_insensitive(directory: Path) -> bool:
+    """True when directory is on a case-insensitive file system (APFS's default)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    probe = Path(tempfile.mkdtemp(prefix=".Case-", dir=directory))
+    try:
+        return (directory / probe.name.swapcase()).exists()
+    finally:
+        probe.rmdir()
+
+
 def pack(tree: Path, meta: dict, out: Path) -> str:
     """bundle.json and tree/ in a gzipped tar: sorted, owner 0, no gzip timestamp.
 
     File times are kept so the bytecode a build compiled still matches its source.
+    A tree with paths that differ only in case is refused on every OS, so any
+    worker can unpack the bundle.
     """
     if not tree.is_dir():
         raise StoreError(f"{tree} is not a directory")
+    collisions = case_collisions(path.relative_to(tree).as_posix() for path in _walk(tree))
+    if collisions:
+        raise _collision_error(str(tree), collisions)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".part")
 
@@ -158,6 +192,10 @@ def _extract(bundle: Path, dest: Path) -> None:
             name = member.name
             if name != META and name != TREE and not name.startswith(TREE + "/"):
                 raise StoreError(f"{bundle}: unexpected member {name}")
+        if case_insensitive(dest):
+            collisions = case_collisions(m.name for m in tar.getmembers())
+            if collisions:
+                raise _collision_error(f"bundle {bundle}", collisions)
         if hasattr(tarfile, "tar_filter"):
             tar.extractall(dest, filter="tar")
         else:  # pragma: no cover - Python without extraction filters

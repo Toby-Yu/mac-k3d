@@ -9,8 +9,10 @@
 #     `mac-k3d eval prepare --benchmark deepswe` made and proved with Harbor's
 #     oracle and nop agents (pipeline/lib/env_check.py). Every other question,
 #     and every question of a run that has one, runs the published image under
-#     emulation, with the reason in env_check.json. An eval never builds, pulls
-#     or checks; MAC_K3D_DEEPSWE_PREPARE=1 (the prepare engine) does.
+#     emulation, with the reason in env_check.json. So does every question when
+#     the harness release under test has no linux/arm64 build
+#     (harness_native_blocker). An eval never builds, pulls or checks;
+#     MAC_K3D_DEEPSWE_PREPARE=1 (the prepare engine) does.
 #     DEEPSWE_DOCKER_PLATFORM forces one platform.
 #   SWE-bench Pro: Harbor pulls the published images.
 set -euo pipefail
@@ -18,6 +20,8 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 # shellcheck source=../evaluate/harbor_cmd.sh
 source "$PIPELINE_STAGES/evaluate/harbor_cmd.sh"
+# shellcheck source=../../lib/harness_lib.sh
+source "$PIPELINE_LIB/harness_lib.sh"
 
 TASKS_DIR="$(benchmark_tasks_dir)"
 ensure_selected_tasks
@@ -289,18 +293,28 @@ official_image() {
 }
 
 # Eval: every selected question native on its prepared build, or every one
-# emulated (one iCode build serves the run).
+# emulated (one harness build serves the run). A harness release with no build
+# for this host's platform runs every question emulated.
 choose_images() {
-  local tid official forced="${DEEPSWE_DOCKER_PLATFORM:-}"
+  local tid official forced="${DEEPSWE_DOCKER_PLATFORM:-}" harness_why=""
   local -a ready=() emulated=()
   if [ -n "$forced" ] && [ "$forced" != "$HOST_PLATFORM" ] && [ "$forced" != linux/amd64 ]; then
     die "DEEPSWE_DOCKER_PLATFORM must be linux/amd64 or this host's $HOST_PLATFORM (got $forced)"
+  fi
+  if [ "$forced" != linux/amd64 ]; then
+    harness_why="$(harness_native_blocker "$HOST_PLATFORM")"
+  fi
+  if [ -n "$harness_why" ] && [ "$forced" = "$HOST_PLATFORM" ]; then
+    die "DEEPSWE_DOCKER_PLATFORM=$forced, but $harness_why"
   fi
   for tid in "${TASK_IDS[@]}"; do
     official="$(official_image "$tid")"
     if [ "$forced" = linux/amd64 ]; then
       run_emulated "$tid" "$official" --reason "DEEPSWE_DOCKER_PLATFORM=linux/amd64"
       emulated+=("$tid")
+    elif [ -n "$harness_why" ]; then
+      run_emulated "$tid" "$official" --reason "$harness_why"
+      emulated+=("$tid: $harness_why")
     elif native_ready "$tid"; then
       ready+=("$tid")
     elif [ -n "$VERDICT" ]; then
@@ -320,7 +334,7 @@ choose_images() {
   for tid in ${ready[@]+"${ready[@]}"}; do
     official="$(official_image "$tid")"
     if [ "${#emulated[@]}" -gt 0 ]; then
-      run_emulated "$tid" "$official" --reason "another selected question runs emulated (one iCode build per run)"
+      run_emulated "$tid" "$official" --reason "another selected question runs emulated (one $(harness_display) build per run)"
     else
       claim_official "$tid" "$official"
       record_native "$tid" --image "$official" --reused

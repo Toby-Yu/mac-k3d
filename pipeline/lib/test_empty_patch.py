@@ -165,6 +165,19 @@ class CauseTests(unittest.TestCase):
         self.assertNotIn("empty_patch_cause", row)
         self.assertEqual(row["p2p"], 1.0)
 
+    def test_jiuwenswarm_has_no_assumed_cap(self):
+        # iCode's built-in 8192 is not JiuwenSwarm's: only a recorded cap marks a cut-off.
+        with tempfile.TemporaryDirectory() as tmp:
+            trial = write_trial(Path(tmp) / "ytt-jsonpath-query-api__jw1", last_out=8192)
+            reward = trial / "verifier" / "reward.json"
+            free = _attempt_from_trial(trial, reward, None, "jiuwenswarm")
+            capped = _attempt_from_trial(trial, reward, 8192, "jiuwenswarm")
+        self.assertNotIn("cut_off_reply", free)
+        self.assertEqual(free["empty_patch_cause"], "no_edit")
+        self.assertNotIn("max_tokens", free["notes"])
+        self.assertTrue(capped["cut_off_reply"])
+        self.assertEqual(capped["empty_patch_cause"], "cut_off")
+
     def test_no_exit_file_records_none(self):
         with tempfile.TemporaryDirectory() as tmp:
             row = attempt(tmp, exit_code=None)
