@@ -26,22 +26,53 @@
   nav ul { margin: 4px 0; padding-left: 20px; }
   nav li.h3 { margin-left: 20px; font-size: 14px; }
   .note { color: #59636e; font-size: 13px; }
+  .flow { display: flex; flex-direction: column; align-items: center; margin: 12px 0 24px; }
+  .flow .node { box-sizing: border-box; width: 100%; max-width: 820px; border: 2px solid #d1d9e0; border-radius: 8px;
+                padding: 8px 12px; background: #fff; font-size: 14px; line-height: 1.45; }
+  .flow .node b.t { display: block; margin-bottom: 2px; }
+  .flow .node .ev { display: block; margin-top: 4px; color: #59636e; font-size: 12.5px; }
+  .flow .node code { font-size: 12px; word-break: break-word; }
+  .flow .row { display: flex; gap: 12px; width: 100%; max-width: 820px; }
+  .flow .row > * { flex: 1; }
+  .flow .row.gap { margin-top: 12px; }
+  .flow .arrow { color: #59636e; font-size: 12.5px; text-align: center; padding: 2px 0 4px; }
+  .flow .arrow::before { content: "\2193"; display: block; font-size: 20px; line-height: 1.1; }
+  .flow .node.trigger, .legend .trigger { border-color: #bf8700; background: #fff8c5; }
+  .flow .node.fault, .legend .fault { border-color: #cf222e; background: #ffebe9; }
+  .flow .node.store, .legend .store { border-color: #0969da; background: #ddf4ff; }
+  .flow .node.disk, .legend .disk { border-color: #57606a; background: #f6f8fa; }
+  .flow .node.fixed, .legend .fixed { border-color: #1a7f37; background: #dafbe1; }
+  .flow .node.people, .legend .people { border-color: #1b7c83; background: #e0f4f5; }
+  .flow .node.unknown, .legend .unknown { border-color: #8250df; border-style: dashed; background: #fbefff; }
+  .legend span { display: inline-block; border-width: 2px; border-style: solid; border-radius: 6px; padding: 0 8px;
+                 margin: 2px 6px 2px 0; font-size: 12.5px; }
+  .tag { display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .tag.confirmed { background: #dafbe1; color: #116329; }
+  .tag.likely { background: #fff8c5; color: #7d4e00; }
+  .tag.unknown { background: #fbefff; color: #6639ba; }
+  @media print {
+    .copy, nav, .note { display: none; }
+    main { max-width: none; padding: 0; }
+    .flow, .flow .node, tr { break-inside: avoid; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
 </style>
 </head>
 <body>
 <main>
 <p class="note">Generated from <code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code>. Edit the .md, then run <code>python3 cloud_worker_docs_html.py</code>.</p>
 <h1>Cloud worker investigation: step by step</h1>
-<nav><ul><li class="h2"><a href="#before-you-start">Before you start</a></li><li class="h3"><a href="#how-each-step-is-written">How each step is written</a></li><li class="h3"><a href="#ground-rules">Ground rules</a></li><li class="h3"><a href="#know-where-you-are">Know where you are</a></li><li class="h3"><a href="#what-you-are-looking-at-the-store-in-five-points">What you are looking at: the store in five points</a></li><li class="h2"><a href="#step-0-make-root-pem-safe-and-test-it-your-pc-5-minutes">Step 0: make root.pem safe, and test it (your PC, 5 minutes)</a></li><li class="h3"><a href="#0-1-move-the-key-to-ssh-and-make-it-private">0.1 Move the key to ~/.ssh and make it private</a></li><li class="h3"><a href="#0-2-show-the-key-s-fingerprint">0.2 Show the key&#x27;s fingerprint</a></li><li class="h3"><a href="#0-3-test-the-key-without-opening-a-shell">0.3 Test the key without opening a shell</a></li><li class="h2"><a href="#step-1-install-the-investigation-only-sudo-rule-root-on-the-worker-10-minutes">Step 1: install the investigation-only sudo rule (root on the worker, 10 minutes)</a></li><li class="h3"><a href="#1-1-open-a-root-shell">1.1 Open a root shell</a></li><li class="h3"><a href="#1-2-give-toby-a-password">1.2 Give toby a password</a></li><li class="h3"><a href="#1-3-write-the-rule-to-a-temporary-file">1.3 Write the rule to a temporary file</a></li><li class="h3"><a href="#1-4-check-the-rule-and-install-it-only-if-the-check-passes">1.4 Check the rule, and install it only if the check passes</a></li><li class="h3"><a href="#1-5-remove-the-temporary-file">1.5 Remove the temporary file</a></li><li class="h3"><a href="#1-6-show-what-toby-may-now-run">1.6 Show what toby may now run</a></li><li class="h3"><a href="#1-7-remove-the-rule-automatically-after-3-days">1.7 Remove the rule automatically after 3 days</a></li><li class="h3"><a href="#1-8-leave-the-root-shell">1.8 Leave the root shell</a></li><li class="h2"><a href="#step-2-start-work-as-toby-5-minutes">Step 2: start work as toby (5 minutes)</a></li><li class="h3"><a href="#2-1-log-in-as-toby">2.1 Log in as toby</a></li><li class="h3"><a href="#2-2-check-your-groups-and-your-sudo-rule">2.2 Check your groups and your sudo rule</a></li><li class="h3"><a href="#2-3-create-your-folders-and-start-recording-the-session">2.3 Create your folders, and start recording the session</a></li><li class="h3"><a href="#2-4-save-the-two-scripts">2.4 Save the two scripts</a></li><li class="h2"><a href="#step-3-start-the-long-jobs-first-15-minutes">Step 3: start the long jobs first (15 minutes)</a></li><li class="h3"><a href="#3-1-copy-the-logs-before-the-weekly-rotation-deletes-the-oldest-week">3.1 Copy the logs before the weekly rotation deletes the oldest week</a></li><li class="h3"><a href="#3-2-start-the-two-slow-log-scans-in-the-background">3.2 Start the two slow log scans in the background</a></li><li class="h3"><a href="#3-3-list-the-images-and-start-the-start-test">3.3 List the images, and start the start test</a></li><li class="h2"><a href="#step-4-the-logs-30-minutes-no-sudo">Step 4: the logs (30 minutes, no sudo)</a></li><li class="h3"><a href="#4-1-the-boots-and-the-order-of-data-and-containerd-q1-q5">4.1 The boots, and the order of /data and containerd (Q1, Q5)</a></li><li class="h3"><a href="#4-2-out-of-memory-stuck-processes-and-disk-messages-q9">4.2 Out of memory, stuck processes and disk messages (Q9)</a></li><li class="h3"><a href="#4-3-logins-and-sudo-commands-since-13-sep-q2-q8-q11">4.3 Logins and sudo commands since 13 Sep (Q2, Q8, Q11)</a></li><li class="h3"><a href="#4-4-12-oct-in-detail-q4">4.4 12 Oct in detail (Q4)</a></li><li class="h3"><a href="#4-5-containerd-s-restarts-on-14-oct-q11">4.5 containerd&#x27;s restarts on 14 Oct (Q11)</a></li><li class="h3"><a href="#4-6-your-own-scheduled-jobs-q8">4.6 Your own scheduled jobs (Q8)</a></li><li class="h2"><a href="#step-5-containerd-s-records-against-the-disk-20-minutes-sudo">Step 5: containerd&#x27;s records against the disk (20 minutes, sudo)</a></li><li class="h3"><a href="#5-1-save-containerd-s-lists-and-the-files-on-disk">5.1 Save containerd&#x27;s lists, and the files on disk</a></li><li class="h3"><a href="#5-2-records-against-disk-and-the-ages-of-the-missing-files-q7">5.2 Records against disk, and the ages of the missing files (Q7)</a></li><li class="h3"><a href="#5-3-folders-from-a-second-numbering-q5">5.3 Folders from a second numbering (Q5)</a></li><li class="h3"><a href="#5-3b-check-the-columns-of-snapshot-dirs-txt-q5">5.3b Check the columns of snapshot_dirs.txt (Q5)</a></li><li class="h2"><a href="#step-6-what-only-root-can-read-20-minutes-sudo">Step 6: what only root can read (20 minutes, sudo)</a></li><li class="h3"><a href="#6-1-whose-keys-may-log-in-as-root-q2">6.1 Whose keys may log in as root (Q2)</a></li><li class="h3"><a href="#6-2-root-s-shell-history-q2-q8">6.2 Root&#x27;s shell history (Q2, Q8)</a></li><li class="h3"><a href="#6-3-every-crontab-and-the-other-users-timers-q8">6.3 Every crontab, and the other users&#x27; timers (Q8)</a></li><li class="h3"><a href="#6-4-the-empty-store-hidden-under-data-q3">6.4 The empty store hidden under /data (Q3)</a></li><li class="h3"><a href="#6-5-the-two-containers-from-the-split-brain-q12">6.5 The two containers from the split brain (Q12)</a></li><li class="h2"><a href="#step-7-results-of-the-long-jobs">Step 7: results of the long jobs</a></li><li class="h3"><a href="#7-1-the-slow-log-scans-q6-q10">7.1 The slow log scans (Q6, Q10)</a></li><li class="h3"><a href="#7-2-the-start-test-impact">7.2 The start test (impact)</a></li><li class="h2"><a href="#step-8-finish">Step 8: finish</a></li><li class="h3"><a href="#8-1-stop-recording">8.1 Stop recording</a></li><li class="h3"><a href="#8-2-copy-the-evidence-to-your-pc-optional">8.2 Copy the evidence to your PC (optional)</a></li><li class="h3"><a href="#8-3-when-the-investigation-is-over-root-removes-the-access">8.3 When the investigation is over: root removes the access</a></li><li class="h2"><a href="#if-something-goes-wrong">If something goes wrong</a></li></ul></nav>
+<nav><ul><li class="h2"><a href="#before-you-start">Before you start</a></li><li class="h3"><a href="#how-each-step-is-written">How each step is written</a></li><li class="h3"><a href="#ground-rules">Ground rules</a></li><li class="h3"><a href="#know-where-you-are">Know where you are</a></li><li class="h3"><a href="#what-you-are-looking-at-the-store-in-five-points">What you are looking at: the store in five points</a></li><li class="h2"><a href="#step-0-make-root-pem-safe-and-test-it-your-pc-5-minutes">Step 0: make root.pem safe, and test it (your PC, 5 minutes)</a></li><li class="h3"><a href="#0-1-move-the-key-to-ssh-and-make-it-private">0.1 Move the key to ~/.ssh and make it private</a></li><li class="h3"><a href="#0-2-show-the-key-s-fingerprint">0.2 Show the key&#x27;s fingerprint</a></li><li class="h3"><a href="#0-3-test-the-key-without-opening-a-shell">0.3 Test the key without opening a shell</a></li><li class="h2"><a href="#step-1-install-the-investigation-only-sudo-rule-root-on-the-worker-10-minutes">Step 1: install the investigation-only sudo rule (root on the worker, 10 minutes)</a></li><li class="h3"><a href="#1-1-open-a-root-shell">1.1 Open a root shell</a></li><li class="h3"><a href="#1-2-give-toby-a-password">1.2 Give toby a password</a></li><li class="h3"><a href="#1-3-write-the-rule-to-a-temporary-file">1.3 Write the rule to a temporary file</a></li><li class="h3"><a href="#1-4-check-the-rule-and-install-it-only-if-the-check-passes">1.4 Check the rule, and install it only if the check passes</a></li><li class="h3"><a href="#1-5-remove-the-temporary-file">1.5 Remove the temporary file</a></li><li class="h3"><a href="#1-6-show-what-toby-may-now-run">1.6 Show what toby may now run</a></li><li class="h3"><a href="#1-7-remove-the-rule-automatically-after-3-days">1.7 Remove the rule automatically after 3 days</a></li><li class="h3"><a href="#1-8-leave-the-root-shell">1.8 Leave the root shell</a></li><li class="h2"><a href="#step-2-start-work-as-toby-5-minutes">Step 2: start work as toby (5 minutes)</a></li><li class="h3"><a href="#2-1-log-in-as-toby">2.1 Log in as toby</a></li><li class="h3"><a href="#2-2-check-your-groups-and-your-sudo-rule">2.2 Check your groups and your sudo rule</a></li><li class="h3"><a href="#2-3-create-your-folders-and-start-recording-the-session">2.3 Create your folders, and start recording the session</a></li><li class="h3"><a href="#2-4-save-the-two-scripts">2.4 Save the two scripts</a></li><li class="h2"><a href="#step-3-start-the-long-jobs-first-15-minutes">Step 3: start the long jobs first (15 minutes)</a></li><li class="h3"><a href="#3-1-copy-the-logs-before-the-weekly-rotation-deletes-the-oldest-week">3.1 Copy the logs before the weekly rotation deletes the oldest week</a></li><li class="h3"><a href="#3-2-start-the-two-slow-log-scans-in-the-background">3.2 Start the two slow log scans in the background</a></li><li class="h3"><a href="#3-3-list-the-images-and-start-the-start-test">3.3 List the images, and start the start test</a></li><li class="h2"><a href="#step-4-the-logs-30-minutes-no-sudo">Step 4: the logs (30 minutes, no sudo)</a></li><li class="h3"><a href="#4-1-the-boots-and-the-order-of-data-and-containerd-q1-q5">4.1 The boots, and the order of /data and containerd (Q1, Q5)</a></li><li class="h3"><a href="#4-2-out-of-memory-stuck-processes-and-disk-messages-q9">4.2 Out of memory, stuck processes and disk messages (Q9)</a></li><li class="h3"><a href="#4-3-logins-and-sudo-commands-since-13-sep-q2-q8-q11">4.3 Logins and sudo commands since 13 Sep (Q2, Q8, Q11)</a></li><li class="h3"><a href="#4-4-12-oct-in-detail-q4">4.4 12 Oct in detail (Q4)</a></li><li class="h3"><a href="#4-5-containerd-s-restarts-on-14-oct-q11">4.5 containerd&#x27;s restarts on 14 Oct (Q11)</a></li><li class="h3"><a href="#4-6-your-own-scheduled-jobs-q8">4.6 Your own scheduled jobs (Q8)</a></li><li class="h2"><a href="#step-5-containerd-s-records-against-the-disk-20-minutes-sudo">Step 5: containerd&#x27;s records against the disk (20 minutes, sudo)</a></li><li class="h3"><a href="#5-1-save-containerd-s-lists-and-the-files-on-disk">5.1 Save containerd&#x27;s lists, and the files on disk</a></li><li class="h3"><a href="#5-2-records-against-disk-and-the-ages-of-the-missing-files-q7">5.2 Records against disk, and the ages of the missing files (Q7)</a></li><li class="h3"><a href="#5-3-folders-from-a-second-numbering-q5">5.3 Folders from a second numbering (Q5)</a></li><li class="h3"><a href="#5-3b-check-the-columns-of-snapshot-dirs-txt-q5">5.3b Check the columns of snapshot_dirs.txt (Q5)</a></li><li class="h2"><a href="#step-6-what-only-root-can-read-20-minutes-sudo">Step 6: what only root can read (20 minutes, sudo)</a></li><li class="h3"><a href="#6-1-whose-keys-may-log-in-as-root-q2">6.1 Whose keys may log in as root (Q2)</a></li><li class="h3"><a href="#6-2-root-s-shell-history-q2-q8">6.2 Root&#x27;s shell history (Q2, Q8)</a></li><li class="h3"><a href="#6-3-every-crontab-and-the-other-users-timers-q8">6.3 Every crontab, and the other users&#x27; timers (Q8)</a></li><li class="h3"><a href="#6-4-the-empty-store-hidden-under-data-q3">6.4 The empty store hidden under /data (Q3)</a></li><li class="h3"><a href="#6-5-the-two-containers-from-the-split-brain-q12">6.5 The two containers from the split brain (Q12)</a></li><li class="h2"><a href="#step-7-results-of-the-long-jobs">Step 7: results of the long jobs</a></li><li class="h3"><a href="#7-1-the-slow-log-scans-q6-q10">7.1 The slow log scans (Q6, Q10)</a></li><li class="h3"><a href="#7-2-the-start-test-impact">7.2 The start test (impact)</a></li><li class="h2"><a href="#step-8-finish">Step 8: finish</a></li><li class="h3"><a href="#8-1-stop-recording">8.1 Stop recording</a></li><li class="h3"><a href="#8-2-copy-the-evidence-to-your-pc-optional">8.2 Copy the evidence to your PC (optional)</a></li><li class="h3"><a href="#8-3-when-the-investigation-is-over-root-removes-the-access">8.3 When the investigation is over: root removes the access</a></li><li class="h2"><a href="#step-9-follow-up-checks-read-only">Step 9: follow-up checks (read-only)</a></li><li class="h3"><a href="#9-1-sort-the-pc-copy-by-age-and-by-source-q13-q14">9.1 Sort the PC copy by age and by source (Q13, Q14)</a></li><li class="h3"><a href="#9-1b-did-the-cleanup-stop-partway-through-q13">9.1b Did the cleanup stop partway through? (Q13)</a></li><li class="h3"><a href="#9-1c-the-split-brain-hour-in-the-logs-q13-q15-q16">9.1c The split-brain hour in the logs (Q13, Q15, Q16)</a></li><li class="h3"><a href="#9-1d-which-kind-of-layer-damage-each-loss-left-q14-q17">9.1d Which kind of layer damage each loss left (Q14, Q17)</a></li><li class="h3"><a href="#before-9-2-and-9-5-log-in-and-record-the-session-again">Before 9.2 and 9.5: log in, and record the session again</a></li><li class="h3"><a href="#9-2-every-boot-and-shutdown-in-the-login-records-q5-q15">9.2 Every boot and shutdown in the login records (Q5, Q15)</a></li><li class="h3"><a href="#9-2b-the-same-records-read-without-last-q5-q15">9.2b The same records, read without last (Q5, Q15)</a></li><li class="h3"><a href="#9-2c-login-prompts-and-console-logins-the-boots-q5-q15">9.2c Login prompts and console logins: the boots (Q5, Q15)</a></li><li class="h3"><a href="#9-3-the-history-and-contents-of-both-databases-by-root-q15-q16">9.3 The history and contents of both databases, by root (Q15, Q16)</a></li><li class="h3"><a href="#9-4-compare-the-hidden-database-with-the-files-q16">9.4 Compare the hidden database with the files (Q16)</a></li><li class="h3"><a href="#9-5-what-filled-the-logs-from-6-oct-q10">9.5 What filled the logs from 6 Oct? (Q10)</a></li><li class="h3"><a href="#resume-after-9-5-the-connection-dropped">Resume after 9.5: the connection dropped</a></li><li class="h3"><a href="#9-6-ask-root-xu-and-the-users-in-writing-q2-q4-q8-q11-q12-q14-q15">9.6 Ask root, xu and the users, in writing (Q2, Q4, Q8, Q11, Q12, Q14, Q15)</a></li><li class="h3"><a href="#9-7-copy-the-rest-of-the-evidence-to-your-pc">9.7 Copy the rest of the evidence to your PC</a></li><li class="h3"><a href="#9-8-does-the-fstab-line-parse-without-a-reboot-q1">9.8 Does the fstab line parse, without a reboot (Q1)</a></li><li class="h2"><a href="#if-something-goes-wrong">If something goes wrong</a></li></ul></nav>
 <ul>
 <li><strong>For:</strong> Toby, on the cloud worker <code>iZt4ndd2dff7gqjta7mppaZ</code> (<code>47.84.16.18</code>).</li>
-<li><strong>Goal for today:</strong> collect the evidence that answers Q1 to Q12 in <code>CLOUD_WORKER_DOCKER_REPORT.md</code>, without changing anything in the Docker store.</li>
-<li><strong>Record:</strong> after each step, fill in its row in the report's investigation log (<code>CLOUD_WORKER_DOCKER_REPORT.md</code>, section 6), and paste the step's &quot;Send me&quot; output into the chat. The next steps are adjusted from what comes back.</li>
+<li><strong>Goal:</strong> collect the evidence that answers Q1 to Q17 in <code>CLOUD_WORKER_DOCKER_REPORT.md</code>, without changing anything in the Docker store. Steps 0 to 9.5, 9.7 and 9.8 are done (15 and 16 Oct). Step 9.6 is a written question; no answer is recorded. Step 8.3, removing the investigation access, is a decision for root in the mentor report, section 10.</li>
+<li><strong>Record:</strong> each step's result is in the investigation log (<code>CLOUD_WORKER_DOCKER_REPORT.md</code>, section 6). No further worker command is part of this investigation.</li>
+<li><strong>Summary for the mentor:</strong> <a href="CLOUD_WORKER_MENTOR_REPORT.html"><code>CLOUD_WORKER_MENTOR_REPORT.md</code></a>.</li>
 </ul>
 <p>Nothing in this guide repairs, removes or restarts anything. The only changes to the server are:</p>
 <ul>
 <li>step 1: a password for <code>toby</code> and one sudo rule;</li>
-<li>step 6.4: an empty folder and a temporary read-only view.</li>
+<li>steps 6.4 and 9.3: an empty folder and a temporary read-only view.</li>
 </ul>
 <p>All of them are small and can be undone.</p>
 <h2 id="before-you-start">Before you start</h2>
@@ -123,7 +154,7 @@
 <li>a record has no usable data behind it (<code>already exists</code>, <code>missing parent</code>).</li>
 </ul>
 </li>
-<li><strong>containerd's cleanup deletes data that no record points to.</strong> That is safe while the records are right. On 12 Oct, containerd ran for a while with an empty database, and its cleanup deleted the real folders.</li>
+<li><strong>containerd's cleanup deletes data that no record points to.</strong> That is safe while the records are right. On 12 Oct, containerd ran for about an hour with the database of an old store on the system disk, while the real disk was mounted on top of it. Its cleanup deleted real folders that this database did not list (step 6.4).</li>
 </ol>
 <p>The investigation asks when, and by what, data disappeared while its records stayed. The evidence comes from three places:</p>
 <ul>
@@ -472,6 +503,7 @@ cat boots.txt
 </ul>
 </li>
 <li><strong>Send me:</strong> the output of <code>cat boots.txt</code>.</li>
+<li><strong>Corrected by step 9.2c (15 Oct, about 17:52):</strong> 11 Sep 09:14 was not a boot. It was the oldest journal line still kept when this step was first looked at. The login prompts give five boots: 24 Jul 15:15, 4 Aug 20:44, 27 Aug 20:25, 27 Aug 21:35 and 12 Oct 10:38.</li>
 </ul>
 <h3 id="4-2-out-of-memory-stuck-processes-and-disk-messages-q9">4.2 Out of memory, stuck processes and disk messages (Q9)</h3>
 <ul>
@@ -654,7 +686,7 @@ cat blob_ages.txt
 </ul>
 <h3 id="5-3-folders-from-a-second-numbering-q5">5.3 Folders from a second numbering (Q5)</h3>
 <ul>
-<li><strong>Why:</strong> the empty database of 12 Oct numbered its folders from 1, while the real one is past 350,000. A low-numbered folder with another date would mean another split brain, for example at the 11 Sep boot.</li>
+<li><strong>Why:</strong> the empty database of 12 Oct numbered its folders from 1, while the real one is past 350,000. A low-numbered folder with another date would mean another split brain. Step 9.2c later showed there was no boot on 11 Sep.</li>
 <li><strong>Risk:</strong> none. No sudo; it reads <code>snapshot_dirs.txt</code>.</li>
 </ul>
 <div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/inventory
@@ -697,6 +729,7 @@ cat root_keys.txt
 <ul>
 <li><strong>Expected:</strong> one line per key, for example <code>2048 SHA256:… comment (RSA)</code>. Your fingerprint from 0.2 should be among them, and so should each fingerprint in <code>root_logins_by_day.txt</code>.</li>
 <li><strong>Send me:</strong> the output. You may replace e-mail addresses in the comments with names.</li>
+<li><strong>Result on 15 Oct, 13:54:</strong> two keys. <code>SHA256:Sw9bNRuC…</code> comment <code>zihanwu@MacBook-Pro ali-server-root</code> (ED25519). <code>SHA256:QHhVAmPV…</code> comment <code>skp-t4n2qiu4tscnr8ui08sf</code> (RSA), the same fingerprint as <code>root.pem</code>.</li>
 </ul>
 <h3 id="6-2-root-s-shell-history-q2-q8">6.2 Root's shell history (Q2, Q8)</h3>
 <ul>
@@ -711,6 +744,7 @@ cat root_history.txt
 <ul>
 <li><strong>Expected:</strong> the commands that wrote and fixed fstab and mounted <code>/data</code>, and any deletion under <code>/data</code>. To turn a timestamp line such as <code>#1791979238</code> into a date, run <code>date -d @1791979238</code>. Ubuntu's default keeps only the last 2,000 commands, so a missing line isn't proof.</li>
 <li><strong>Send me:</strong> the output. Read it first, and replace any password or token with <code>&lt;removed&gt;</code>.</li>
+<li><strong>Result on 15 Oct, 14:01:</strong> 247 lines. Toby checked the paste: no password or token. No <code>#</code> timestamp lines. History lines 303 and 469 are <code>mkdir -p /data &amp;&amp; cp /etc/fstab /etc/fstab.bak &amp;&amp; mount /dev/nvme1n1p1 /data &amp;&amp; echo \&quot;/dev/nvme1n1p1 /data ext4 defaults 0 0\&quot; &gt;&gt; /etc/fstab &amp;&amp; df -hT /data</code>. The <code>\&quot;</code> writes the quotes into the file, which is the invalid fstab line. The 12:09 UUID rewrite is not in the file. No <code>rm</code>, <code>prune</code> or <code>find -delete</code> of the store. The only <code>rm -rf</code> is <code>/home/zihan/lhs</code>. Root also ran xu's scripts from <code>/home/xu/check_docker/scripts/</code>, several with <code>--apply</code>.</li>
 </ul>
 <h3 id="6-3-every-crontab-and-the-other-users-timers-q8">6.3 Every crontab, and the other users' timers (Q8)</h3>
 <ul>
@@ -732,6 +766,7 @@ echo &quot;--- user units&quot;; grep -E &#x27;\.(timer|service)&#x27; user_time
 </ul>
 </li>
 <li><strong>Send me:</strong> the output.</li>
+<li><strong>Result on 15 Oct, 14:12:</strong> two matching crontab lines. zihan runs <code>capbench_linux_sync.py</code> from <code>/data</code> every 6 hours. Toby's hourly canary is the other line. No timer is named clean, prune or gc. Timers found: <code>cg-verified-review.timer</code>, <code>jiuwen-tb4-experience-20261006.timer</code>, <code>jiuwen-tb4-experiment-experience-pilot6-r3.timer</code>. yun has no unit file in the filtered list.</li>
 </ul>
 <h3 id="6-4-the-empty-store-hidden-under-data-q3">6.4 The empty store hidden under <code>/data</code> (Q3)</h3>
 <ul>
@@ -768,6 +803,9 @@ cat hidden_store.txt
 <li>
 <p><strong>Send me:</strong> the whole output.</p>
 </li>
+<li>
+<p><strong>Result on 15 Oct, 14:15:</strong> <code>/mnt/rootfs ro,relatime</code>, then <code>view removed</code>. Hidden <code>/data</code> is 1.7 GB. <code>containerd</code> is dated 4 Aug 2026, not 12 Oct. <code>meta.db</code> is 906,985,472 bytes, last written 12 Oct 11:48:43. <code>docker</code> was created 12 Oct 10:39:46 and <code>hanxu</code> at 10:38:15. This is the split brain: containerd's open database was the August one on the system disk.</p>
+</li>
 </ul>
 <h3 id="6-5-the-two-containers-from-the-split-brain-q12">6.5 The two containers from the split brain (Q12)</h3>
 <ul>
@@ -795,6 +833,9 @@ cat split_brain_containers.txt
 <li>
 <p><strong>Send me:</strong> the output.</p>
 </li>
+<li>
+<p><strong>Result on 15 Oct, 14:19:</strong> both containers are <code>exited</code> and have 0 records in <code>snapshots_db.txt</code>. <code>f870b22117e6</code> is <code>/clarify-selection4-runtime-v3-20261012</code> on <code>docker:29-dind</code>. <code>6afbbec81e30</code> is the Harbor egress sidecar for <code>bandit-incremental-cache-control</code>. Folders 37 and 54 do not exist, which matches step 5.3b.</p>
+</li>
 </ul>
 <h2 id="step-7-results-of-the-long-jobs">Step 7: results of the long jobs</h2>
 <h3 id="7-1-the-slow-log-scans-q6-q10">7.1 The slow log scans (Q6, Q10)</h3>
@@ -821,10 +862,12 @@ grep &#x27;^prog&#x27; syslog_volume.txt | sort -k2,2nr | head -n 15            
 </ul>
 </li>
 <li><strong>Send me:</strong> the whole output.</li>
+<li><strong>Result on 15 Oct, 14:23:</strong> scans finished at 12:44:43 and 12:45:28. awk warned about one non-text line in <code>syslog.1</code> and continued. First lines: <code>blob not found</code> 13 Sep 01:37, <code>missing parent</code> 14 Sep 12:05, <code>no space left</code> 18 Sep 17:27, <code>failed to stat parent</code> 14 Oct 17:01, <code>already exists</code> never. Days: 4 Oct 34 MB, 5 Oct 41 MB, 6 Oct 506 MB, 7 Oct 2514 MB, 8 Oct 3580 MB, 9 Oct 4568 MB, 10 Oct 2945 MB, 11 Oct 55 MB. <code>dockerd</code> wrote 22,284,226 lines.</li>
 </ul>
 <h3 id="7-2-the-start-test-impact">7.2 The start test (impact)</h3>
 <ul>
 <li><strong>When:</strong> <code>pgrep -f layer_test.sh</code> prints nothing.</li>
+<li><strong>Result on 15 Oct, 14:27:</strong> <code>pgrep</code> printed nothing, and the shell printed <code>start test finished</code>.</li>
 <li><strong>Why:</strong> count the broken images per type of damage, see whose they are (grouped by repository), and list the containers that use a broken image.</li>
 <li><strong>Risk:</strong> none. <code>docker ps</code> only lists.</li>
 </ul>
@@ -840,6 +883,7 @@ wc -l &lt; containers_on_broken.tsv
 <ul>
 <li><strong>Expected:</strong> counts of <code>ok</code>, <code>layers_missing</code>, <code>blob_missing</code>, <code>stale_record</code> and <code>other</code>. The DeepSWE repository should be near the top of the list, with 113.</li>
 <li><strong>Send me:</strong> the whole output.</li>
+<li><strong>Result on 15 Oct, 14:30:</strong> 254 ok, 6,313 blob_missing, 253 layers_missing, 27 stale_record, no <code>other</code>. Sum 6,847. All 113 <code>public.ecr.aws/d3j8x8q7/swe-bench-202605</code> images are layers_missing. 158 containers were created from a broken image.</li>
 </ul>
 <table>
 <thead>
@@ -880,6 +924,7 @@ wc -l &lt; containers_on_broken.tsv
 </code></pre></div>
 <ul>
 <li><strong>Expected:</strong> the normal prompt again. The recording is in <code>~/snapshot-audit/sessions/</code>.</li>
+<li><strong>Result on 15 Oct, 14:34:</strong> <code>eixt</code> printed <code>command not found</code>. The next <code>exit</code> left the recording. The prompt came back as <code>toby@iZt4ndd2dff7gqjta7mppaZ:~/snapshot-audit/logs$</code>.</li>
 </ul>
 <h3 id="8-2-copy-the-evidence-to-your-pc-optional">8.2 Copy the evidence to your PC (optional)</h3>
 <ul>
@@ -894,6 +939,7 @@ du -sh ~/cloud-worker-evidence/*
 </code></pre></div>
 <ul>
 <li><strong>Expected:</strong> two folders, <code>logs</code> and <code>inventory</code>, a few hundred MB together.</li>
+<li><strong>Result on 15 Oct, 14:40:</strong> both folders arrived. <code>logs</code> is 1.4 GB, almost all of it <code>damage_errors.txt</code> at 1,286 MB. <code>inventory</code> is 50 MB. <code>logcopy/</code> and <code>sessions/</code> were not part of this command. They were copied on 16 Oct in step 9.7.</li>
 </ul>
 <h3 id="8-3-when-the-investigation-is-over-root-removes-the-access">8.3 When the investigation is over: root removes the access</h3>
 <p>Root runs this, or tells you to run it with <code>root.pem</code> in the same way as step 1:</p>
@@ -905,6 +951,827 @@ sudo -l -U toby                                            # shows that toby may
 <ul>
 <li><strong>Risk:</strong> low. Each line only takes back what step 1 gave.</li>
 <li><strong>Expected:</strong> the last line says that <code>toby</code> may not run sudo.</li>
+</ul>
+<h2 id="step-9-follow-up-checks-read-only">Step 9: follow-up checks (read-only)</h2>
+<p>Steps 0 to 8 answered Q1 to Q12. Step 9 answered Q13 to Q17. The worker commands are finished.</p>
+<ul>
+<li><strong>9.1 to 9.1d, 9.2 to 9.2c, 9.5, 9.7 and 9.8</strong> are done.</li>
+<li><strong>9.3 and 9.4</strong> were run on 16 Oct with <code>root.pem</code>, read-only. The view was removed. Tell the mentor the same day that <code>root.pem</code> was used.</li>
+<li><strong>9.6</strong> is the message to root and xu. No answer is recorded. The repair does not wait for one.</li>
+<li>Nothing in step 9 changes the store.</li>
+</ul>
+<h3 id="9-1-sort-the-pc-copy-by-age-and-by-source-q13-q14">9.1 Sort the PC copy by age and by source (Q13, Q14)</h3>
+<ul>
+<li><strong>Where:</strong> terminal 2, your PC. No worker, no sudo.</li>
+<li><strong>Why:</strong>
+<ul>
+<li><strong>Files by age and source:</strong> the copy from 8.2 holds every file record with its age and labels. A file pulled from a registry carries a <code>containerd.io/distribution.source…</code> label; a file made on this host (built or loaded) has none. Counting missing and present files by age dates the loss from the files themselves.</li>
+<li><strong>First errors:</strong> the error log names some missing files. The first time each one is named shows whether it was gone before 12 Oct.</li>
+<li><strong>Folders by date:</strong> the dates of the layer folders, and of the folders that the start test reports missing.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none. It reads the copy, and writes five small files to <code>~/cloud-worker-evidence/analysis/</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>mkdir -p ~/cloud-worker-evidence/analysis &amp;&amp; cd ~/cloud-worker-evidence &amp;&amp; python3 - &lt;&lt;&#x27;EOF&#x27; | tee analysis/summary.txt
+import bisect, collections, re
+
+LOGS, INV, OUT = &#x27;logs/&#x27;, &#x27;inventory/&#x27;, &#x27;analysis/&#x27;
+MOUNT = &#x27;2026-10-12T10:54&#x27;                     # /data mounted under the running containerd
+
+def hours(age):                                # &quot;4 weeks&quot; -&gt; 672; ctr prints ages like docker ps
+    n, unit = (age.split() + [&#x27;&#x27;, &#x27;&#x27;])[:2]
+    if age.startswith(&#x27;About&#x27;):
+        return 1
+    for k, v in ((&#x27;second&#x27;, 0), (&#x27;minute&#x27;, 0), (&#x27;hour&#x27;, 1), (&#x27;day&#x27;, 24), (&#x27;week&#x27;, 168), (&#x27;month&#x27;, 720)):
+        if unit.startswith(k):
+            return int(n) * v
+    return 10**9
+
+present = {l.strip() for l in open(INV + &#x27;blob_files.txt&#x27;) if l.strip()}
+missing = {l.strip() for l in open(INV + &#x27;blobs_missing.txt&#x27;) if l.strip()}
+pulled = re.compile(r&#x27;containerd\.io/distribution\.source\.&#x27;)   # set on files pulled from a registry
+rec = {}
+with open(INV + &#x27;content_records.txt&#x27;) as f:
+    next(f)
+    for line in f:
+        p = line.split()
+        if not p:
+            continue
+        age = []
+        for w in p[2:]:
+            if &#x27;=&#x27; in w or w == &#x27;-&#x27;:
+                break
+            age.append(w)
+        rec[p[0].split(&#x27;:&#x27;)[-1]] = (&#x27; &#x27;.join(age), &#x27;pulled&#x27; if pulled.search(line) else &#x27;made here&#x27;)
+
+# 1. Every file record by age: missing or present, pulled from a registry or made on this host
+t = collections.Counter((a, &#x27;present&#x27; if d in present else &#x27;missing&#x27;, h) for d, (a, h) in rec.items())
+with open(OUT + &#x27;files_by_age.txt&#x27;, &#x27;w&#x27;) as o:
+    o.write(&#x27;age\tmissing pulled\tmissing made here\tpresent pulled\tpresent made here\n&#x27;)
+    for a in sorted({a for a, _, _ in t}, key=hours):
+        o.write(&#x27;\t&#x27;.join([a] + [str(t[(a, s, h)]) for s in (&#x27;missing&#x27;, &#x27;present&#x27;) for h in (&#x27;pulled&#x27;, &#x27;made here&#x27;)]) + &#x27;\n&#x27;)
+def count(cond, state, how=None):
+    return sum(v for (a, s, h), v in t.items() if cond(hours(a)) and s == state and how in (None, h))
+for label, cond in ((&#x27;recorded after the 12 Oct restart (under 72 hours old)&#x27;, lambda x: x &lt; 72),
+                    (&#x27;recorded 2 Oct to 12 Oct, before the restart (3 to 13 days old)&#x27;, lambda x: 72 &lt;= x &lt; 336),
+                    (&#x27;recorded before 2 Oct (2 weeks or older)&#x27;, lambda x: x &gt;= 336)):
+    print(f&#x27;{label}: {count(cond, &quot;missing&quot;)} missing, {count(cond, &quot;present&quot;)} present&#x27;)
+for how in (&#x27;made here&#x27;, &#x27;pulled&#x27;):
+    print(f&#x27;recorded before the restart, {how}: {count(lambda x: x &gt;= 72, &quot;missing&quot;, how)} missing, {count(lambda x: x &gt;= 72, &quot;present&quot;, how)} present&#x27;)
+
+# 2. Error lines per day, and the first time the logs name each missing file
+kinds = (&#x27;blob not found&#x27;, &#x27;failed to stat parent&#x27;, &#x27;missing parent&#x27;, &#x27;already exists&#x27;, &#x27;no space left&#x27;)
+digest = re.compile(r&#x27;blobs/sha256/([0-9a-f]{64})&#x27;)
+per_day = collections.defaultdict(collections.Counter)
+first = {}
+with open(LOGS + &#x27;damage_errors.txt&#x27;, &#x27;rb&#x27;) as f:
+    for raw in f:
+        line = raw.decode(&#x27;utf-8&#x27;, &#x27;replace&#x27;)
+        per_day[line[:10]][next((k for k in kinds if k in line), &#x27;other&#x27;)] += 1
+        for d in digest.findall(line):
+            if d not in first or line[:16] &lt; first[d]:
+                first[d] = line[:16]
+with open(OUT + &#x27;errors_per_day.txt&#x27;, &#x27;w&#x27;) as o:
+    o.write(&#x27;day\t&#x27; + &#x27;\t&#x27;.join(kinds) + &#x27;\tother\n&#x27;)
+    for day in sorted(per_day):
+        o.write(day + &#x27;\t&#x27; + &#x27;\t&#x27;.join(str(per_day[day][k]) for k in kinds + (&#x27;other&#x27;,)) + &#x27;\n&#x27;)
+named = {d: ts for d, ts in first.items() if d in missing}
+print(f&#x27;missing files named in the error log: {len(named)} of {len(missing)}&#x27;)
+with open(OUT + &#x27;missing_first_reported.txt&#x27;, &#x27;w&#x27;) as o:
+    o.write(&#x27;day first reported\tmissing files\n&#x27;)
+    for day, n in sorted(collections.Counter(ts[:10] for ts in named.values()).items()):
+        o.write(f&#x27;{day}\t{n}\n&#x27;)
+    for label, group in ((&#x27;before&#x27;, [d for d, ts in named.items() if ts &lt; MOUNT]),
+                         (&#x27;on or after&#x27;, [d for d, ts in named.items() if ts &gt;= MOUNT])):
+        c = collections.Counter(rec.get(d, (&#x27;no record&#x27;, &#x27;&#x27;)) for d in group)
+        line = f&#x27;first reported {label} 12 Oct 10:54: {len(group)} files. By age and source: &#x27; + &#x27;, &#x27;.join(f&#x27;{a} {h} {n}&#x27; for (a, h), n in c.most_common())
+        o.write(line + &#x27;\n&#x27;)
+        print(line)
+
+# 3. Layer folders on disk by date, and the missing folders that the start test names
+dirs = []
+with open(INV + &#x27;snapshot_dirs.txt&#x27;) as f:
+    next(f)
+    for line in f:
+        p = line.split()
+        if len(p) &gt;= 9 and p[8].isdigit():
+            dirs.append((int(p[8]), p[5], p[6][:5]))
+dirs.sort()
+nums = [n for n, _, _ in dirs]
+before = sum(1 for _, d, tm in dirs if (d, tm) &lt; (&#x27;2026-10-12&#x27;, &#x27;10:38&#x27;))
+errors = &#x27;&#x27;.join(l for l in open(INV + &#x27;layer_test.tsv&#x27;) if l.startswith(&#x27;layers_missing&#x27;))
+named_dirs = sorted({int(n) for n in re.findall(r&#x27;snapshots/(\d+)/fs&#x27;, errors)})
+gone = [n for n in named_dirs if n not in set(nums)]
+with open(OUT + &#x27;folders_by_date.txt&#x27;, &#x27;w&#x27;) as o:
+    o.write(&#x27;day\tlayer folders on disk with that date\n&#x27;)
+    for day, n in sorted(collections.Counter(d for _, d, _ in dirs).items()):
+        o.write(f&#x27;{day}\t{n}\n&#x27;)
+    o.write(f&#x27;lowest folder on disk: {dirs[0][0]} ({dirs[0][1]} {dirs[0][2]})\n&#x27;)
+    for n in gone:
+        i = bisect.bisect_left(nums, n)
+        o.write(f&#x27;missing folder {n}: next folder on disk is {dirs[i][0]} ({dirs[i][1]} {dirs[i][2]})\n&#x27;)
+print(f&#x27;layer folders on disk: {len(dirs)}; dated before the 12 Oct boot: {before}; lowest: {dirs[0][0]} ({dirs[0][1]} {dirs[0][2]})&#x27;)
+print(f&#x27;folders named in layers_missing errors: {len(named_dirs)}; not on disk: {len(gone)}, numbered {gone[0]} to {gone[-1]}&#x27;)
+EOF
+ls -la analysis/
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> ten lines of summary, and five files in <code>analysis/</code>: <code>summary.txt</code>, <code>files_by_age.txt</code>, <code>errors_per_day.txt</code>, <code>missing_first_reported.txt</code>, <code>folders_by_date.txt</code>.</li>
+<li><strong>Result on 15 Oct, 15:28:</strong>
+<ul>
+<li><strong>Files by age:</strong>
+<ul>
+<li>recorded after the 12 Oct restart: 0 missing, 634 present;</li>
+<li>recorded 2 to 12 Oct, before the restart: 5,791 missing, 4 present;</li>
+<li>recorded before 2 Oct: 37,124 missing, 2,626 present.</li>
+</ul>
+</li>
+<li><strong>Files by source, recorded before the restart:</strong> made here 41,170 missing, 80 present; pulled 1,745 missing, 2,550 present.</li>
+<li><strong>No file record is 6, 7 or 8 weeks old</strong> (<code>files_by_age.txt</code>): none was created, or none is kept, from about 16 Aug to 3 Sep.</li>
+<li><strong>First errors:</strong> the error log names 930 of the 42,915 missing files.
+<ul>
+<li>586 were first named before 12 Oct 10:54, and all 586 are 2 months old (463 made here, 123 pulled).</li>
+<li>The 344 named later are from September and October.</li>
+</ul>
+</li>
+<li><strong>Folders:</strong> 10,164 on disk, 7,826 dated before the 12 Oct boot. The lowest is 152997, dated 10 Sep 09:22. The start test names 57 missing folders, numbered 153149 to 159017.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-1b-did-the-cleanup-stop-partway-through-q13">9.1b Did the cleanup stop partway through? (Q13)</h3>
+<ul>
+<li><strong>Where:</strong> your PC.</li>
+<li><strong>Why:</strong> containerd's cleanup of downloaded files goes through them in alphabetical order of digest. If it was stopped partway, the files that survived would all sit beyond some point in that order. If it finished, the survivors are spread evenly, and they are the files that its open database listed.</li>
+<li><strong>Risk:</strong> none. It writes <code>analysis/hex_spread.txt</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/cloud-worker-evidence &amp;&amp; python3 - &lt;&lt;&#x27;EOF&#x27; | tee analysis/hex_spread.txt
+import collections, re
+
+def hours(age):                                # the same reading of ctr&#x27;s ages as in step 9.1
+    n, unit = (age.split() + [&#x27;&#x27;, &#x27;&#x27;])[:2]
+    if age.startswith(&#x27;About&#x27;):
+        return 1
+    for k, v in ((&#x27;second&#x27;, 0), (&#x27;minute&#x27;, 0), (&#x27;hour&#x27;, 1), (&#x27;day&#x27;, 24), (&#x27;week&#x27;, 168), (&#x27;month&#x27;, 720)):
+        if unit.startswith(k):
+            return int(n) * v
+    return 10**9
+
+present = {l.strip() for l in open(&#x27;inventory/blob_files.txt&#x27;) if l.strip()}
+pulled = re.compile(r&#x27;containerd\.io/distribution\.source\.&#x27;)
+t = collections.Counter()                      # (first hex digit, pulled or made here, present or missing), records made before the restart
+with open(&#x27;inventory/content_records.txt&#x27;) as f:
+    next(f)
+    for line in f:
+        p = line.split()
+        if not p:
+            continue
+        age = []
+        for w in p[2:]:
+            if &#x27;=&#x27; in w or w == &#x27;-&#x27;:
+                break
+            age.append(w)
+        if hours(&#x27; &#x27;.join(age)) &gt;= 72:
+            d = p[0].split(&#x27;:&#x27;)[-1]
+            t[(d[0], &#x27;pulled&#x27; if pulled.search(line) else &#x27;made here&#x27;, d in present)] += 1
+print(&#x27;Files recorded before the 12 Oct restart, by the first hex digit of the digest (the order of containerd\&#x27;s cleanup)&#x27;)
+print(&#x27;digit\tpulled: missing\tpresent\tmade here: missing\tpresent\tall: present %&#x27;)
+for k in &#x27;0123456789abcdef&#x27;:
+    pm, pp, hm, hp = (t[(k, h, s)] for h in (&#x27;pulled&#x27;, &#x27;made here&#x27;) for s in (False, True))
+    print(f&#x27;{k}\t{pm}\t{pp}\t{hm}\t{hp}\t{100 * (pp + hp) / max(1, pm + pp + hm + hp):.1f}&#x27;)
+EOF
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> 16 rows, one per first digit. Either a clear point in the order where present files stop, or the same share present in every row.</li>
+<li><strong>Result on 15 Oct, 15:43:</strong> no cut-off. In every row, 5.3 to 6.5 % of the files are present, and pulled and made-here files are both spread evenly. So if the cleanup deleted the files, it finished its pass, and kept the files that its open database listed.</li>
+</ul>
+<h3 id="9-1c-the-split-brain-hour-in-the-logs-q13-q15-q16">9.1c The split-brain hour in the logs (Q13, Q15, Q16)</h3>
+<ul>
+<li><strong>Where:</strong> your PC.</li>
+<li><strong>Why:</strong>
+<ul>
+<li><strong>What happened in the split brain:</strong> <code>logs/day_1012.txt</code> holds every containerd and Docker line of 12 Oct. From 10:40:15 to 11:48:51 containerd had the hidden database open, so everything Docker did then went through it.</li>
+<li><strong>A first look into the hidden database:</strong> Docker logs a warning for each image it fails to check, with the image's digest. Those images were listed in the hidden database, which gives a sample of its contents to compare with the real database before root's check (9.3).</li>
+<li><strong>Other split brains:</strong> <code>logs/kernel.txt</code> holds every mount of the 14 TB disk since 13 Sep.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none. It writes <code>analysis/split_brain_window.txt</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/cloud-worker-evidence &amp;&amp; python3 - &lt;&lt;&#x27;EOF&#x27; | tee analysis/split_brain_window.txt
+import collections, re
+
+present = {l.strip() for l in open(&#x27;inventory/blob_files.txt&#x27;) if l.strip()}
+missing = {l.strip() for l in open(&#x27;inventory/blobs_missing.txt&#x27;) if l.strip()}
+rec = {}
+with open(&#x27;inventory/content_records.txt&#x27;) as f:
+    next(f)
+    for line in f:
+        p = line.split()
+        if p:
+            age = []
+            for w in p[2:]:
+                if &#x27;=&#x27; in w or w == &#x27;-&#x27;:
+                    break
+                age.append(w)
+            src = &#x27; + &#x27;.join(f&#x27;{r}/{n}&#x27; for r, n in re.findall(r&#x27;containerd\.io/distribution\.source\.([^=]+)=([^,\s]+)&#x27;, line))
+            rec[p[0].split(&#x27;:&#x27;)[-1]] = (&#x27; &#x27;.join(age), re.sub(r&#x27;deepswe-py-20/[^ ]+&#x27;, &#x27;deepswe-py-20/&lt;task&gt;&#x27;, src) or &#x27;made here&#x27;)
+
+# 1. What containerd and Docker reported while containerd had the hidden database open (12 Oct, 10:40:15 to 11:48:51)
+keys = (&#x27;snapshot garbage collection failed&#x27;, &#x27;deleting build record&#x27;, &#x27;image pulled&#x27;, &#x27;extraction snapshot removal failed&#x27;)
+warn = re.compile(r&#x27;checking availability of platform specific manifest failed&quot; digest=&quot;sha256:([0-9a-f]{64})&#x27;)
+seen, per10 = {}, collections.Counter()
+print(&#x27;== containerd and Docker, 12 Oct 10:40:15 to 11:48:51&#x27;)
+with open(&#x27;logs/day_1012.txt&#x27;, errors=&#x27;replace&#x27;) as f:
+    for line in f:
+        t = line[11:19]
+        if not &#x27;10:40:15&#x27; &lt;= t &lt;= &#x27;11:48:51&#x27;:
+            continue
+        m = warn.search(line)
+        if m:
+            seen.setdefault(m.group(1), t)
+            per10[t[:4] + &#x27;0&#x27;] += 1
+        elif any(k in line for k in keys):
+            print(t, re.sub(r&#x27;^.*? level=&#x27;, &#x27;level=&#x27;, line.strip())[:220])
+print(&#x27;failed image checks per 10 minutes: &#x27; + &#x27;, &#x27;.join(f&#x27;{k} {v}&#x27; for k, v in sorted(per10.items())))
+
+# 2. The images Docker listed from the hidden database, against the real database today
+state = collections.Counter(&#x27;file present&#x27; if d in present else &#x27;recorded, file missing&#x27; if d in missing else &#x27;not in the real database&#x27; for d in seen)
+print(f&#x27;\n== images listed from the hidden database: {len(seen)}. Their digests today: &#x27; + &#x27;, &#x27;.join(f&#x27;{k} {v}&#x27; for k, v in state.most_common()))
+for ((age, src), st), n in collections.Counter((rec[d], &#x27;present&#x27; if d in present else &#x27;missing&#x27;) for d in seen if d in rec).most_common():
+    print(f&#x27;{n}\t{st}\t{age}\t{src}&#x27;)
+
+# 3. The 14 TB disk in the kernel log (13 Sep to 15 Oct): mounts, resizes, recovery
+print(&#x27;\n== nvme1n1p1 (/data) in the kernel log&#x27;)
+for line in open(&#x27;logs/kernel.txt&#x27;, errors=&#x27;replace&#x27;):
+    if &#x27;nvme1n1p1&#x27; in line and re.search(r&#x27;mounted|resized filesystem|recovery|orphan&#x27;, line):
+        print(line[:19], line.split(&#x27;kernel: &#x27;, 1)[-1].strip()[:150])
+EOF
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the containerd and Docker events of the hour, the images listed from the hidden database compared with the real one, and the mounts of the 14 TB disk.</li>
+<li><strong>Result on 15 Oct, 15:52:</strong>
+<ul>
+<li><strong>Cleanup in the split brain:</strong> containerd's layer cleanup ran at 10:41:44, 10:43:01 and 10:43:28. Each run failed with <code>bucket does not exist</code>, which means that the hidden layer database held no layer records at all. At 10:43:54 BuildKit deleted a build record &quot;due to missing blobs&quot;. Successful runs leave no line at this log level, so the log can't show whether the cleanup ran after the 10:54 mount.</li>
+<li><strong>Work done in the split brain:</strong> after the mount, <code>busybox:1.37.0</code> was pulled at 11:20:47, <code>docker:29-dind</code> at 11:23:41, and a build exported an image at 11:44:14.</li>
+<li><strong>Image checks:</strong> 19,848 failed checks: 47 in the 10:40s, then from 677 in the 11:00s up to 10,200 in the 11:40s. Almost all failed with <code>context canceled</code>: the client gave up waiting.</li>
+<li><strong>The hidden database held at least 786 images.</strong> Docker logs only the checks that fail, so it may hold more.
+<ul>
+<li>The real database has no record for 721 of their digests.</li>
+<li>It records the other 65, and all 65 files are present; none is missing.</li>
+<li>The 65 are 44 images from DeepSWE's registry (<code>public.ecr.aws/d3j8x8q7/swe-bench-202605</code>, recorded 4 to 5 weeks ago), 18 <code>jefzda/sweap-images</code>, and 3 others.</li>
+</ul>
+</li>
+<li><strong>The 14 TB disk</strong> was mounted only once in the kernel log, at 12 Oct 10:54:05, so it stayed mounted from before 13 Sep until 12 Oct. It was grown online on 21 Sep at 12:52 (to 11.5 TB) and on 5 Oct at 10:43 (to 15.0 TB).</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-1d-which-kind-of-layer-damage-each-loss-left-q14-q17">9.1d Which kind of layer damage each loss left (Q14, Q17)</h3>
+<ul>
+<li><strong>Where:</strong> your PC.</li>
+<li><strong>Why:</strong>
+<ul>
+<li>containerd keeps each layer in two places: a record in the layer database, and a folder on disk. The error tells which of the two is gone:
+<ul>
+<li><code>missing parent … bucket: not found</code>: the layer database has no record of a layer that the main database still lists. The record went together with its folder.</li>
+<li><code>failed to stat parent … no such file or directory</code>: the record is still there, and only the folder is gone.</li>
+</ul>
+</li>
+<li>Counting each kind per day shows which loss left which kind. The first date of one broken layer shows when it was already broken.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none. It reads <code>logs/damage_errors.txt</code> and writes <code>analysis/layer_errors.txt</code>.</li>
+</ul>
+<p>Both kinds, per day:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/cloud-worker-evidence/logs
+{
+  for kind in &#x27;missing parent&#x27; &#x27;failed to stat parent&#x27;; do
+    echo &quot;== $kind: $(LC_ALL=C grep -a -c &quot;$kind&quot; damage_errors.txt) lines. Lines per day:&quot;
+    LC_ALL=C grep -a &quot;$kind&quot; damage_errors.txt | cut -c1-10 | sort | uniq -c
+    echo &quot;the first:&quot;
+    LC_ALL=C grep -m1 -a &quot;$kind&quot; damage_errors.txt | cut -c1-600
+  done
+} &gt; ../analysis/layer_errors.txt
+cat ../analysis/layer_errors.txt
+</code></pre></div>
+<p>Then the first dates of three missing parents: those of <code>alpine:3.20</code> and <code>alpine:latest</code> (the start test's two <code>missing parent</code> images), and the one in the first line above:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/cloud-worker-evidence/logs
+for k in &#x27;moby/8431/sha256:08bc4e&#x27; &#x27;moby/10103/sha256:34884a&#x27; &#x27;moby/2776/sha256:8d853c&#x27;; do
+  echo &quot;== $k: $(LC_ALL=C grep -a -c &quot;$k&quot; damage_errors.txt) lines. Lines per day:&quot;
+  LC_ALL=C grep -a &quot;$k&quot; damage_errors.txt | cut -c1-10 | sort | uniq -c
+done &gt;&gt; ../analysis/layer_errors.txt
+tail -n 14 ../analysis/layer_errors.txt; ls -la --time-style=+%H:%M ../analysis/layer_errors.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the lines per day of each kind, and the days on which each of the three parents failed.</li>
+<li><strong>Result on 15 Oct, about 16:15:</strong>
+<ul>
+<li><strong><code>missing parent</code>: 221 lines, from 14 Sep to 14 Oct,</strong> before and after the 12 Oct restart: 202 up to 11 Oct, including 99 on 18 Sep and 74 on 6 to 10 Oct. The first, on 14 Sep at 12:05, names parent <code>moby/2776/sha256:8d853c…</code>.</li>
+<li><strong><code>failed to stat parent</code>: 59 lines, all on 14 Oct.</strong> The first names folder 154281, one of the 10 Sep folders that are gone.</li>
+<li>So before 12 Oct, layers failed because their record was gone as well as their folder. After the 12 Oct split brain, they fail because only the folder is gone.</li>
+<li><strong><code>alpine:3.20</code>'s missing parent (<code>moby/8431/…</code>) already failed on 30 Sep,</strong> and again every day from 6 Oct. <code>alpine:latest</code>'s (<code>moby/10103/…</code>) failed on 29 Sep. So these stale records existed before 6 Oct. <code>alpine:3.20</code> was pulled on 24 Jul.</li>
+<li>Docker logged no error at all on 2 to 4 Oct, and one on 5 Oct (<code>analysis/errors_per_day.txt</code>). 6 and 7 Oct are when the Jenkins builds met these records, not necessarily when they broke.</li>
+<li><code>already exists</code> never appears in the log, so this check can't date that kind (<code>alpine:3.23.4</code>, first seen in build #53 on 6 Oct).</li>
+<li>Before this file was written, the same greps were run once with their output printed to the screen only.</li>
+</ul>
+</li>
+</ul>
+<h3 id="before-9-2-and-9-5-log-in-and-record-the-session-again">Before 9.2 and 9.5: log in, and record the session again</h3>
+<ul>
+<li><strong>Where:</strong> terminal 1.</li>
+<li><strong>Why:</strong> the recording of 15 Oct ended at step 8.1. A new <code>script</code> writes a new file in <code>sessions/</code>, named by the date and time, so the follow-up is recorded as well. The folders from step 2.3 already exist.</li>
+<li><strong>Risk:</strong> none.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>ssh toby@47.84.16.18
+cd ~/snapshot-audit/logs
+script -q -a ~/snapshot-audit/sessions/&quot;$(date +%F_%H%M)&quot;.log
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the prompt <code>toby@iZt4ndd2dff7gqjta7mppaZ:~/snapshot-audit/logs$</code>, then no output from <code>script</code>. Everything is recorded until you type <code>exit</code> after step 9.5.</li>
+<li><strong>Result (15 Oct, about 17:48):</strong> the prompt came back and <code>script</code> printed nothing. The recording is running.</li>
+</ul>
+<h3 id="9-2-every-boot-and-shutdown-in-the-login-records-q5-q15">9.2 Every boot and shutdown in the login records (Q5, Q15)</h3>
+<ul>
+<li><strong>Where:</strong> terminal 1, the worker as <code>toby</code>. No sudo.</li>
+<li><strong>Why:</strong>
+<ul>
+<li>The journal lists only the boots whose log it still keeps (3.9 GB cap): 24 Jul, 11 Sep and 12 Oct.</li>
+<li>The login records (<code>wtmp</code>) list every boot and shutdown for as long as they are kept.</li>
+<li>The hidden store's dates (4 Aug 20:44 and 27 Aug 20:26) may be boots that skipped <code>/data</code>.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none. Everyone may read these files.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+ls -la --full-time /var/log/wtmp* /var/lib/wtmpdb &gt; reboots.txt 2&gt;&amp;1        # which login records exist, and their dates
+last -x -F &gt;&gt; reboots.txt 2&gt;&amp;1                                               # every login, boot and shutdown, newest first
+last -x -F -f /var/log/wtmp.1 &gt;&gt; reboots.txt 2&gt;&amp;1                            # the previous file, if there is one
+grep -E &#x27;^(reboot|shutdown)|begins|last:|wtmpdb&#x27; reboots.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li>One <code>reboot</code> line per boot, with its full date: at least 12 Oct 10:38 and 11 Sep 09:14.</li>
+<li>A line <code>wtmp begins …</code>, or <code>wtmpdb begins …</code>, with the oldest date the records keep.</li>
+<li>A boot on 4 Aug or 27 Aug is the main lead. Records that start after August are a result too.</li>
+<li>Newer Ubuntu releases may keep these records in <code>/var/lib/wtmpdb</code> instead. Then one of the commands prints an error into the file; that is fine.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the output of the <code>grep</code>.</li>
+<li><strong>Result (15 Oct, about 17:49):</strong> no boot or shutdown lines.
+<ul>
+<li>The <code>ls</code> line says <code>/var/lib/wtmpdb</code> does not exist.</li>
+<li>Both <code>apt install wtmpdb</code> lines are the shell saying <code>last</code> is not installed. Ubuntu 26.04 no longer ships <code>last</code>, and its replacement <code>wtmpdb</code> is not installed either. Nothing was installed. Do not install it: that needs root and changes the shared machine.</li>
+<li>Step 9.2b reads <code>/var/log/wtmp</code> without <code>last</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-2b-the-same-records-read-without-last-q5-q15">9.2b The same records, read without <code>last</code> (Q5, Q15)</h3>
+<ul>
+<li><strong>Where:</strong> terminal 1, the worker as <code>toby</code>, inside the recording. No sudo.</li>
+<li><strong>Why:</strong>
+<ul>
+<li><code>/var/log/wtmp</code> is a plain list of fixed-size records: type, process, terminal, user, host and time. Python reads it directly.</li>
+<li>Boot records have the user <code>reboot</code>, and shutdown records have the user <code>shutdown</code>. This Ubuntu may no longer write them; then the step prints none, and that is a result too.</li>
+<li>The file may reach further back than the journal, so the step also lists the logins on the days of the hidden store (4 Aug, 27 Aug), of the 11 Sep boot, and of the restarts on 12 and 14 Oct.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none. Python only reads the file, which everyone may read. It is a few hundred KB. It installs nothing.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+grep &#x27;/var/log/wtmp&#x27; reboots.txt                                             # must show the file before the next command
+python3 - /var/log/wtmp &gt; reboots_wtmp.txt &lt;&lt;&#x27;EOF&#x27;
+import collections, struct, sys, time
+FMT = &#x27;&lt;hxxi32s4s32s256shhiii16s20s&#x27;               # the glibc login record on x86-64, 384 bytes
+size = struct.calcsize(FMT)
+data = open(sys.argv[1], &#x27;rb&#x27;).read()
+recs = [struct.unpack_from(FMT, data, o) for o in range(0, len(data) - size + 1, size)]
+text = lambda b: b.split(b&#x27;\0&#x27;, 1)[0].decode(errors=&#x27;replace&#x27;)
+when = lambda r: time.strftime(&#x27;%Y-%m-%d %H:%M:%S&#x27;, time.localtime(r[9]))
+print(f&#x27;{len(recs)} records, {len(data) % size} bytes left over&#x27;)
+if recs:
+    print(&#x27;wtmp begins&#x27;, when(recs[0]), &#x27;| ends&#x27;, when(recs[-1]))
+print(&#x27;records per type:&#x27;, dict(collections.Counter(r[0] for r in recs)))
+print(&#x27;== boot and shutdown records (type 1 or 2, or user reboot/shutdown)&#x27;)
+for r in recs:
+    if r[0] in (1, 2) or text(r[4]) in (&#x27;reboot&#x27;, &#x27;shutdown&#x27;):
+        print(when(r), &#x27;type&#x27;, r[0], text(r[4]), text(r[2]), text(r[5]))
+days = (&#x27;2026-08-04&#x27;, &#x27;2026-08-27&#x27;, &#x27;2026-09-10&#x27;, &#x27;2026-09-11&#x27;, &#x27;2026-10-11&#x27;, &#x27;2026-10-12&#x27;, &#x27;2026-10-14&#x27;)
+print(&#x27;== logins and logouts (type 7 and 8) on&#x27;, &#x27;, &#x27;.join(days))
+for r in recs:
+    if r[0] in (7, 8) and when(r)[:10] in days:
+        print(when(r), &#x27;in &#x27; if r[0] == 7 else &#x27;out&#x27;, text(r[4]), text(r[2]), text(r[5]))
+EOF
+head -n 5 reboots_wtmp.txt; grep -c . reboots_wtmp.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li>The <code>grep</code> prints one line for <code>/var/log/wtmp</code>, with a size. If it prints nothing, stop and send me <code>cat reboots.txt</code>.</li>
+<li>The first line of <code>head</code> ends with <code>0 bytes left over</code>. Anything else means the record layout differs; then stop and send me the output.</li>
+<li><code>wtmp begins …</code> is the oldest date the file keeps. A date after August is a result too: then <code>wtmp</code> cannot date the hidden store.</li>
+<li>Types: 7 is a login and 8 a logout. 2 is a boot and 1 a shutdown or runlevel change.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the <code>grep</code> line, then the output of <code>head</code> and <code>grep -c</code>. If the line count is under about 200, send <code>cat reboots_wtmp.txt</code> as well.</li>
+<li><strong>Result (15 Oct, about 17:50):</strong>
+<ul>
+<li><code>/var/log/wtmp</code> is there: 395,136 bytes, <code>root utmp</code>, last change 15 Oct 17:48:09.</li>
+<li><code>1029 records, 0 bytes left over</code>, so the layout is right.</li>
+<li><code>wtmp begins 2026-07-24 15:15:32 | ends 2026-10-15 17:48:09</code>. That is the same day as the oldest boot in the journal, so the file covers 4 Aug and 27 Aug.</li>
+<li><code>records per type: {6: 10, 7: 1019}</code>: 1,019 logins and 10 login prompts. No boot, shutdown or logout record. On this machine nothing writes them, so <code>wtmp</code> cannot date the boots. Step 9.2c uses the 10 prompts.</li>
+<li><code>cat reboots_wtmp.txt</code> (15 Oct, about 17:52): 99 terminal logins on the chosen days, and none on 11 Oct. The full list stays in that file. What it shows:
+<ul>
+<li><code>wtmp</code> keeps terminal logins only. A login on <code>pts/0</code> means every earlier holder of <code>pts/0</code> had left.</li>
+<li><strong>4 Aug:</strong> the boot prompts are at 20:44:37. <code>xu</code> logged in at 20:44:45 on <code>pts/0</code>, and root at 20:44:51 on <code>pts/1</code>. Root had a terminal at 20:35:53, before the boot.</li>
+<li><strong>27 Aug:</strong> the morning logins were on <code>pts/50</code> and <code>pts/51</code>. After the 20:25 boot, <code>xu</code> logged in at 20:26:40 on <code>pts/0</code>. After the 21:35 boot, root logged in at 21:38:23 on <code>pts/0</code>.</li>
+<li><strong>11 Sep:</strong> no boot. <code>xin</code> was on <code>pts/5</code> at 09:12:20, and the next new terminal, at 09:58:46, was <code>pts/13</code>. Sessions from before 09:14 were still open.</li>
+<li><strong>12 Oct:</strong> <code>xu</code> logged in at 10:38:30 on <code>pts/0</code>. Until 11:28 the terminal logins alternate between <code>xu</code> and root, and each new one takes <code>pts/0</code>, so the previous one had ended. At the 10:54:05 mount the open terminals were root (since 10:50:30), <code>xin</code> (since 10:50:46) and <code>toby</code> (since 10:53:29). The next root terminal opened at 11:28:57.</li>
+<li><strong>14 Oct:</strong> no root terminal. The containerd restarts that day were not host boots.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-2c-login-prompts-and-console-logins-the-boots-q5-q15">9.2c Login prompts and console logins: the boots (Q5, Q15)</h3>
+<ul>
+<li><strong>Where:</strong> terminal 1, the worker as <code>toby</code>, inside the recording. No sudo.</li>
+<li><strong>Why:</strong>
+<ul>
+<li>The 10 records of type 6 are login prompts. The system starts one on each console (<code>tty1</code>, <code>ttyS0</code>) at every boot, so their dates are boot dates. A small process number (under about 5,000) also means early in a boot.</li>
+<li>A login whose terminal isn't <code>pts/…</code> was typed at the console, for example in the cloud provider's web console. That is how a stuck host is restarted and fixed.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none. It reads the same file again.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+python3 - /var/log/wtmp &gt; reboots_console.txt &lt;&lt;&#x27;EOF&#x27;
+import struct, sys, time
+FMT = &#x27;&lt;hxxi32s4s32s256shhiii16s20s&#x27;               # the glibc login record on x86-64, 384 bytes
+size = struct.calcsize(FMT)
+data = open(sys.argv[1], &#x27;rb&#x27;).read()
+text = lambda b: b.split(b&#x27;\0&#x27;, 1)[0].decode(errors=&#x27;replace&#x27;)
+print(&#x27;== login prompts (type 6), and logins (type 7) not on pts/...&#x27;)
+for o in range(0, len(data) - size + 1, size):
+    r = struct.unpack_from(FMT, data, o)
+    if r[0] == 6 or (r[0] == 7 and not text(r[2]).startswith(&#x27;pts/&#x27;)):
+        print(time.strftime(&#x27;%Y-%m-%d %H:%M:%S&#x27;, time.localtime(r[9])), &#x27;type&#x27;, r[0], &#x27;pid&#x27;, r[1], text(r[2]), text(r[4]), text(r[5]))
+EOF
+cat reboots_console.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the header, then the 10 prompt lines and any console logins.
+<ul>
+<li>A type 6 line on 4 Aug about 20:44, 27 Aug about 20:26, or 12 Oct about 10:38 confirms a boot there.</li>
+<li>No type 6 line on 11 Sep means no boot that day.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the output of <code>cat</code>.</li>
+<li><strong>Result (15 Oct, about 17:52):</strong> ten login prompts, and no console login. Each boot starts one prompt on <code>tty1</code> and one on <code>ttyS0</code>, a few seconds apart, with a process number near 5,600. The five boots are:</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>2026-07-24 15:15:32  tty1 and ttyS0
+2026-08-04 20:44:37  tty1 and ttyS0
+2026-08-27 20:25:23  tty1 and ttyS0
+2026-08-27 21:35:55  tty1 and ttyS0
+2026-10-12 10:38:21  tty1 and ttyS0
+</code></pre></div>
+<ul>
+<li><strong>4 Aug 20:44:37</strong> is two seconds after the hidden store was created (20:44:35). The store was created during that boot.</li>
+<li><strong>27 Aug 20:25:23</strong> is 69 seconds before the hidden layer folder changed (20:26:32).</li>
+<li><strong>27 Aug 21:35:55</strong> is a second boot that evening. The journal did not keep it.</li>
+<li><strong>12 Oct 10:38:21</strong> matches the known boot at 10:38:06, so a prompt pair does mean a boot.</li>
+<li><strong>No prompt on 11 Sep, or on any day between 27 Aug 21:35 and 12 Oct 10:38.</strong> The host stayed up for that whole stretch. 11 Sep 09:14 was not a boot.</li>
+<li><strong>No prompt on 14 Oct.</strong> The containerd restarts that day were not host boots.</li>
+<li>Nobody logged in on <code>tty1</code> or <code>ttyS0</code>. The prompts are the system waiting, not a person at the console.</li>
+</ul>
+<h3 id="9-3-the-history-and-contents-of-both-databases-by-root-q15-q16">9.3 The history and contents of both databases, by root (Q15, Q16)</h3>
+<ul>
+<li><strong>Where:</strong> a root shell on the worker. Prefer root to run it. If root cannot run it the same day, Toby may open that shell with <code>root.pem</code>, as tested in step 0.3, and run only the block below.</li>
+<li><strong>Record it either way.</strong> Tell the mentor the same day: who ran it, that it was read-only, and that <code>root.pem</code> was used if it was. Do not add any new sudo right for <code>toby</code>. Do not repair, delete, prune or restart anything in this step.</li>
+<li><strong>First:</strong> show the mentor this report. Then either send root this message, or run the block yourself:</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>For the Docker store investigation (CLOUD_WORKER_INVESTIGATION_STEPS.md, step 9.3): could you run
+the read-only block of step 9.3 as root? It mounts a read-only view of the system disk, as in step 6.4,
+and lists the dates and sizes of the two containerd stores. It reads the 14 TB filesystem&#x27;s
+superblock with tune2fs -l. From the two meta.db files it extracts only sha256 digests and record
+dates, not names or settings. It changes nothing in the store, and removes the view at the end.
+The output goes to /home/toby/snapshot-audit/. About 5 minutes.
+</code></pre></div>
+<ul>
+<li><strong>Why:</strong>
+<ul>
+<li><strong>When each store was created:</strong> the birth time of each database. <code>tune2fs -l</code> gives the 14 TB filesystem's creation date and its mount count.</li>
+<li><strong>When the hidden store was used:</strong> the dates of the hidden layer database and its folders.</li>
+<li><strong>Which files the hidden database lists (Q16):</strong> containerd's cleanup keeps exactly the files that its open database lists. Step 9.4 compares the list with the files present and missing.</li>
+<li><strong>On which days each database was in use:</strong> containerd stores a creation time with every record. Counted per day:
+<ul>
+<li>for the hidden database, they date the earlier split brains;</li>
+<li>for the real database, they show whether it really recorded nothing from about 16 Aug to 3 Sep.</li>
+</ul>
+</li>
+<li><strong>Only digests and dates leave the databases.</strong> <code>meta.db</code> also holds container settings, which can include other users' keys, so it is not copied.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none for the store.
+<ul>
+<li>The view is read-only, as in step 6.4, and the last commands remove it. <code>findmnt</code> must show <code>ro</code>. <strong>If it shows <code>rw</code>, stop:</strong> run only <code>umount /mnt/rootfs</code>.</li>
+<li><code>stat</code>, <code>ls</code>, <code>tune2fs -l</code> and <code>grep</code> only read.</li>
+<li>Python opens both databases read-only and maps them into memory instead of loading them, so it uses little memory. containerd keeps working.</li>
+<li>The output goes to <code>/home/toby/snapshot-audit/</code>.</li>
+</ul>
+</li>
+</ul>
+<p>Run these one at a time, in this root shell. Stay in the shell until 9.3e prints <code>view removed</code>. Each block only reads. Send the output of each block before the next.</p>
+<p><strong>9.3a. Open the read-only view.</strong></p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>mkdir -p /mnt/rootfs &amp;&amp; mount -o bind,ro / /mnt/rootfs
+findmnt -no TARGET,OPTIONS /mnt/rootfs
+</code></pre></div>
+<ul>
+<li><strong>Result (16 Oct):</strong> <code>/mnt/rootfs ro,relatime</code>. The view is read-only. It is still mounted. Continue with 9.3b in this same shell.</li>
+</ul>
+<p><strong>9.3b. Dates and sizes of both stores, and the 14 TB filesystem.</strong></p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd /home/toby/snapshot-audit
+h=/mnt/rootfs/data/containerd
+r=/data/containerd
+{
+  echo &quot;== birth | last change | size | name&quot;
+  stat -c &#x27;%w | %y | %s | %n&#x27; $h $h/io.containerd.metadata.v1.bolt/meta.db $h/io.containerd.snapshotter.v1.overlayfs \
+    $h/io.containerd.snapshotter.v1.overlayfs/* $r $r/io.containerd.metadata.v1.bolt/meta.db \
+    $r/io.containerd.snapshotter.v1.overlayfs/metadata.db $r/io.containerd.content.v1.content /data/docker
+  echo &quot;== the 14 TB filesystem&quot;
+  tune2fs -l /dev/nvme1n1p1 | grep -E &#x27;^(Filesystem created|Last mount time|Last write time|Mount count|Last mounted on)&#x27;
+  echo &quot;== hidden layer folders: $(ls $h/io.containerd.snapshotter.v1.overlayfs/snapshots | wc -l)&quot;
+  ls -la --full-time $h/io.containerd.snapshotter.v1.overlayfs/snapshots $h/io.containerd.snapshotter.v1.native /mnt/rootfs/data/docker
+} &gt; logs/store_history.txt 2&gt;&amp;1
+cat logs/store_history.txt
+</code></pre></div>
+<ul>
+<li><strong>Result (16 Oct):</strong> <code>logs/store_history.txt</code> was written. The view stayed mounted.
+<ul>
+<li><strong>Old store, on the system disk.</strong> <code>meta.db</code> born 4 Aug 20:44:35, last written 12 Oct 11:48:43, 906,985,472 bytes. The layer database <code>overlayfs/metadata.db</code> was born 27 Aug 20:26:32, last written 12 Oct 11:48:43, 262,144 bytes. Its <code>snapshots</code> folder has 0 layer folders and has not changed since 4 Aug 20:44:35. There is no downloaded-files folder. The hidden <code>/data/docker</code> directory was last changed at 12 Oct 10:39:46, before the 10:54 mount.</li>
+<li><strong>Store in use, on the 14 TB disk.</strong> The <code>containerd</code> directory, the layer database and the downloaded-files directory were born 24 Jul 17:14. The layer database is still the file from that day (last written 16 Oct 10:43). The main <code>meta.db</code> file now on disk was born 14 Oct 20:08:59, 654,802,944 bytes, and was still being written at 10:43. That birth is the file, not the date of every record inside it. Record dates are step 9.3d.</li>
+<li><strong>The 14 TB filesystem</strong> was created 24 Jul 15:54:51, last mounted 12 Oct 10:54:05 on <code>/data</code>, mount count 4, last write 16 Oct 09:54:29. It has not been mounted again since 12 Oct.</li>
+</ul>
+</li>
+</ul>
+<p><strong>9.3c. Digests named in the old database.</strong> This can take a few minutes. It writes one digest per line and does not print them.</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>LC_ALL=C grep -aoE &#x27;sha256:[0-9a-f]{64}&#x27; $h/io.containerd.metadata.v1.bolt/meta.db | sort -u &gt; inventory/hidden_db_digests.txt
+wc -l inventory/hidden_db_digests.txt
+</code></pre></div>
+<ul>
+<li><strong>Result (16 Oct):</strong> <code>180168 inventory/hidden_db_digests.txt</code>. These are unique <code>sha256:</code> strings found in the old database file, including copies a database keeps after a record is deleted. The count is not a count of files, and not a count of images. Step 9.4 compares the list with the files present and missing. The view is still mounted.</li>
+</ul>
+<p><strong>9.3d. How many records each database created on each day.</strong></p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>python3 - $h/io.containerd.metadata.v1.bolt/meta.db $r/io.containerd.metadata.v1.bolt/meta.db &gt; logs/db_record_days.txt &lt;&lt;&#x27;EOF&#x27;
+import collections, datetime, mmap, re, struct, sys
+for path in sys.argv[1:]:                                    # each database is only read
+    days = collections.Counter()
+    with open(path, &#x27;rb&#x27;) as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as db:
+        for m in re.finditer(rb&#x27;createdat&#x27;, db):
+            v = db[m.end():m.end() + 15]
+            if len(v) == 15 and v[0] == 1:                   # a creation time as containerd stores it (Go&#x27;s MarshalBinary)
+                s = struct.unpack(&#x27;&gt;q&#x27;, v[1:9])[0] - 62135596800
+                if 1.7e9 &lt; s &lt; 1.9e9:
+                    days[datetime.datetime.fromtimestamp(s, datetime.timezone(datetime.timedelta(hours=8))).date()] += 1
+    print(f&#x27;== {path}: records created per day (CST)&#x27;)
+    for d, n in sorted(days.items()):
+        print(d, n)
+EOF
+cat logs/db_record_days.txt
+</code></pre></div>
+<ul>
+<li><strong>Result (16 Oct):</strong> <code>logs/db_record_days.txt</code> was written. The counts are activity per day, including old copies a database keeps, not a live inventory. The view is still mounted.
+<ul>
+<li><strong>24 Jul to 4 Aug:</strong> the 14 TB database has the records (8,572 on 24 Jul, 8,333 on 25 Jul, then small counts, and 250 on 4 Aug). The old database does not exist yet. The 14 TB filesystem was created 24 Jul 15:54.</li>
+<li><strong>4 Aug to 10 Sep:</strong> the old database has records on almost every day, from 3,259 on 4 Aug (the store was created at 20:44 that evening) through 251 on 10 Sep. The 14 TB database has none from 5 Aug through 9 Sep. So for those five weeks containerd was writing the system-disk database, not the 14 TB one.</li>
+<li><strong>10 Sep:</strong> the 14 TB database resumes, with 5,691 records, and the old database drops to 251 and then stops. This is the same day as the oldest layer folder still on the 14 TB disk (10 Sep 09:22).</li>
+<li><strong>11 Sep to 11 Oct:</strong> only the 14 TB database. Quiet days with no new records: 13 Sep, and 2, 3 and 4 Oct.</li>
+<li><strong>12 Oct:</strong> both. The old database has 229 records, and the 14 TB database has 489. That is the known split-brain day.</li>
+<li><strong>13 to 16 Oct:</strong> only the 14 TB database (2,333, 3,336, 2,093, and 89 on the morning of 16 Oct). The old database has no record dated after 12 Oct.</li>
+</ul>
+</li>
+</ul>
+<p><strong>9.3e. Remove the view, and make the three files readable by <code>toby</code>.</strong></p>
+<p>This is still investigation. It does not fix the store. <code>umount</code> removes only <code>/mnt/rootfs</code>, the read-only view opened in 9.3a. It does not unmount <code>/data</code>, and it does not stop Docker or containerd. The old store stays where it is, hidden under the mount. <code>chown</code> changes the owner of the three result files in <code>/home/toby/snapshot-audit/</code> so <code>toby</code> can copy them in step 9.4. It does not change <code>meta.db</code>, a blob, or a layer folder.</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>umount /mnt/rootfs
+findmnt /mnt/rootfs || echo &quot;view removed&quot;
+chown toby: logs/store_history.txt logs/db_record_days.txt inventory/hidden_db_digests.txt
+</code></pre></div>
+<ul>
+<li><strong>Result (16 Oct):</strong> <code>view removed</code>. The root shell was then closed. <code>/data</code> stayed mounted. Nothing in the store was changed. The three result files are owned by <code>toby</code>.</li>
+<li><strong>Expected:</strong>
+<ul>
+<li>9.3a shows <code>/mnt/rootfs ro,…</code>, and 9.3e prints <code>view removed</code>.</li>
+<li><strong><code>store_history.txt</code>:</strong>
+<ul>
+<li>the hidden <code>meta.db</code> born on 4 Aug at about 20:44:35;</li>
+<li>the hidden layer database (<code>…overlayfs/metadata.db</code>) born on 27 Aug at 20:26:32, if that is when it was first opened;</li>
+<li>the birth time of the real database;</li>
+<li>the 14 TB filesystem's creation date, a <code>Last mount time</code> of 12 Oct 10:54:05, and its mount count.</li>
+</ul>
+</li>
+<li><strong><code>db_record_days.txt</code>:</strong> a line for each day with records, for each database.
+<ul>
+<li>The days listed for the hidden database are the days containerd used it. Days in August, or on 11 and 12 Sep, are earlier split brains.</li>
+<li>A gap from about 16 Aug to 3 Sep in the real database means containerd used the other database then.</li>
+<li>The counts include old copies of records that a database keeps in its free space. Read them as activity per day, not as exact numbers.</li>
+</ul>
+</li>
+<li><strong><code>hidden_db_digests.txt</code>:</strong> thousands of lines.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the whole output, including the line count.</li>
+</ul>
+<h3 id="9-4-compare-the-hidden-database-with-the-files-q16">9.4 Compare the hidden database with the files (Q16)</h3>
+<ul>
+<li><strong>Where:</strong> your PC, after step 9.3.</li>
+<li><strong>Why:</strong> if the split brains deleted the files, the files that survived are the ones that the hidden database names, and the missing files are not.</li>
+<li><strong>Risk:</strong> none. It copies three small files from the worker and writes <code>analysis/hidden_db_match.txt</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/cloud-worker-evidence
+scp toby@47.84.16.18:snapshot-audit/inventory/hidden_db_digests.txt inventory/
+scp toby@47.84.16.18:snapshot-audit/logs/store_history.txt toby@47.84.16.18:snapshot-audit/logs/db_record_days.txt logs/
+python3 - &lt;&lt;&#x27;EOF&#x27; | tee analysis/hidden_db_match.txt
+import collections
+
+def hours(age):                                # the same reading of ctr&#x27;s ages as in step 9.1
+    n, unit = (age.split() + [&#x27;&#x27;, &#x27;&#x27;])[:2]
+    if age.startswith(&#x27;About&#x27;):
+        return 1
+    for k, v in ((&#x27;second&#x27;, 0), (&#x27;minute&#x27;, 0), (&#x27;hour&#x27;, 1), (&#x27;day&#x27;, 24), (&#x27;week&#x27;, 168), (&#x27;month&#x27;, 720)):
+        if unit.startswith(k):
+            return int(n) * v
+    return 10**9
+
+hidden = {l.strip().split(&#x27;:&#x27;)[-1] for l in open(&#x27;inventory/hidden_db_digests.txt&#x27;) if l.strip()}
+present = {l.strip() for l in open(&#x27;inventory/blob_files.txt&#x27;) if l.strip()}
+unrecorded = {l.strip() for l in open(&#x27;inventory/blobs_unrecorded.txt&#x27;) if l.strip()}
+t = collections.Counter()
+with open(&#x27;inventory/content_records.txt&#x27;) as f:
+    next(f)
+    for line in f:
+        p = line.split()
+        if not p:
+            continue
+        age = []
+        for w in p[2:]:
+            if &#x27;=&#x27; in w or w == &#x27;-&#x27;:
+                break
+            age.append(w)
+        h = hours(&#x27; &#x27;.join(age))
+        period = &#x27;after the restart&#x27; if h &lt; 72 else &#x27;2 to 12 Oct&#x27; if h &lt; 336 else &#x27;before 2 Oct&#x27;
+        how = &#x27;pulled&#x27; if &#x27;containerd.io/distribution.source.&#x27; in line else &#x27;made here&#x27;
+        d = p[0].split(&#x27;:&#x27;)[-1]
+        t[(period, how, &#x27;present&#x27; if d in present else &#x27;missing&#x27;, d in hidden)] += 1
+print(f&#x27;digests named in the hidden database: {len(hidden)}&#x27;)
+print(&#x27;recorded\tsource\tfile\tnamed in the hidden database\tnot named&#x27;)
+for period in (&#x27;after the restart&#x27;, &#x27;2 to 12 Oct&#x27;, &#x27;before 2 Oct&#x27;):
+    for how in (&#x27;pulled&#x27;, &#x27;made here&#x27;):
+        for state in (&#x27;present&#x27;, &#x27;missing&#x27;):
+            print(f&#x27;{period}\t{how}\t{state}\t{t[(period, how, state, True)]}\t{t[(period, how, state, False)]}&#x27;)
+print(f&#x27;files on disk with no record in the real database: {len(unrecorded)}; named in the hidden database: {len(unrecorded &amp; hidden)}&#x27;)
+EOF
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li><strong>The split brains deleted the files</strong> if, among the files recorded before the restart, nearly all the present ones are named and nearly none of the missing ones.</li>
+<li><strong>A few missing files may be named</strong>, because a database keeps old copies of deleted records in its free space. Many would mean the files were deleted some other way; the database would then need an exact reading.</li>
+<li>Files recorded after the restart are not part of the test.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the output.</li>
+<li><strong>Result (16 Oct):</strong> the test passes. <code>analysis/hidden_db_match.txt</code>. The old database file names 180,168 digests.
+<ul>
+<li><strong>Before 2 Oct, still on disk:</strong> 2,626 files. 2,624 are named in the old database (2,547 pulled, 77 made here). 2 pulled files are present and not named.</li>
+<li><strong>Before 2 Oct, file gone:</strong> 37,124 records. 36,969 are not named in the old database. 155 are named (151 pulled, 4 made here). That is 0.4%, the few free-space copies the check allowed.</li>
+<li><strong>2 to 12 Oct:</strong> 5,791 missing, and none of them are named in the old database. 4 files are still present, and 1 of those is named.</li>
+<li><strong>After the 12 Oct restart:</strong> 634 present, 0 missing. This period is not part of the test.</li>
+<li><strong>97 files on disk with no record in the current database.</strong> None of them are named in the old database.</li>
+<li>The cleanup kept the files the old database named and deleted the ones it did not.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-5-what-filled-the-logs-from-6-oct-q10">9.5 What filled the logs from 6 Oct? (Q10)</h3>
+<ul>
+<li><strong>Where:</strong> terminal 1, the worker as <code>toby</code>. No sudo: <code>toby</code> is in the <code>adm</code> group, which may read the logs.</li>
+<li><strong>Why:</strong> Docker wrote 22 million lines in <code>syslog.1</code> (4 to 11 Oct), but the damage errors are only 1.3 million of them. On 12 Oct the flood was image checks that the client gave up on (step 9.1c). Counting Docker's messages by kind shows what filled 6 to 11 Oct.</li>
+<li><strong>Risk:</strong> none. It reads about 15 GB at low priority (<code>nice</code>), in 5 to 10 minutes, and writes one small file.</li>
+<li><strong>Run it before Sunday 18 Oct.</strong> The weekly rotation then compresses <code>syslog.1</code>, and this command no longer finds it. If it is later than that, send me a note instead.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+nice grep -a &#x27; dockerd\[&#x27; /var/log/syslog.1 | grep -aoE &#x27;level=[a-z]+ msg=&quot;[^&quot;]{0,60}&#x27; | sed -E &#x27;s/[0-9a-f]{12,}/&lt;id&gt;/g; s/[0-9]+/&lt;n&gt;/g&#x27; \
+  | awk &#x27;{c[$0]++} END {for (k in c) print c[k] &quot;\t&quot; k}&#x27; | sort -rn | head -n 30 &gt; dockerd_messages.txt
+cat dockerd_messages.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> up to 30 lines, each a count and a message, largest first. Together they make up most of the 22 million.</li>
+<li><strong>Send me:</strong> the output.</li>
+<li><strong>Then stop recording:</strong> type <code>exit</code> once, as in step 8.1. Run step 9.7 after this, so that the copy of <code>sessions/</code> includes the new recording.</li>
+<li><strong>Result (15 Oct, the command finished; the connection then dropped):</strong> <code>dockerd_messages.txt</code> was written and printed. Of Docker's lines in <code>syslog.1</code>, 20,275,470 are <code>checking availability of platform specific manifest failed</code> and 1,346,163 are <code>failed to check image labels</code>. Together that is almost all of the 22 million. <code>image pulled</code> is 9 lines and <code>image created</code> is 1,041. The flood is Docker re-checking images whose files are already missing. It is not a third kind of deletion.</li>
+<li>The SSH session then died (<code>Connection reset by peer</code>) before <code>exit</code>. The next section resumes from there. Do not run the <code>grep</code> again.</li>
+</ul>
+<h3 id="resume-after-9-5-the-connection-dropped">Resume after 9.5: the connection dropped</h3>
+<ul>
+<li><strong>Where:</strong> terminal 1, then terminal 2.</li>
+<li><strong>Why:</strong> the 9.5 file is already on the worker. This checks it is there, starts a short recording of that check, and leaves. Step 9.7 then copies it to the PC.</li>
+<li><strong>Risk:</strong> none. <code>ls</code> only reads. <code>exit</code> only ends the login.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>ssh toby@47.84.16.18
+cd ~/snapshot-audit/logs
+script -q -a ~/snapshot-audit/sessions/&quot;$(date +%F_%H%M)&quot;.log
+ls -la --full-time dockerd_messages.txt
+wc -l dockerd_messages.txt
+exit
+exit
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> <code>dockerd_messages.txt</code> exists, dated 15 Oct, and <code>wc</code> prints 30. <code>script</code> prints nothing. The second <code>exit</code> returns you to the PC. Then run 9.7.</li>
+<li><strong>Result (16 Oct 09:14):</strong> the file is 1,831 bytes, dated 15 Oct 18:07:32, and <code>wc</code> printed 30. After <code>exit</code> the prompt was still <code>toby@iZt4ndd2dff7gqjta7mppaZ</code>. Step 9.8 was run from that prompt. One more <code>exit</code> is still needed before 9.7.</li>
+</ul>
+<h3 id="9-6-ask-root-xu-and-the-users-in-writing-q2-q4-q8-q11-q12-q14-q15">9.6 Ask root, xu and the users, in writing (Q2, Q4, Q8, Q11, Q12, Q14, Q15)</h3>
+<ul>
+<li><strong>Where:</strong> the team chat, or a message to each person. This does not use the worker, so it can go out while step 9.5 is still running.</li>
+<li><strong>Why:</strong> some answers are only in people's memory, or in the Alibaba Cloud console. Written answers go into the record as they are.</li>
+<li><strong>Do not wait for answers.</strong> Assume none come back before the rest of the investigation. Steps 9.5, 9.7, 9.3 and 9.4 go ahead. An answer, if one arrives later, is added to the record then.</li>
+<li><strong>Risk:</strong> none.</li>
+</ul>
+<p><strong>What to tell root now.</strong> He asked whether many images have been removed, and whether the data is gone or only stored somewhere other than where the records point. This is already answered by the disk check of 15 Oct (steps 5.1, 5.2 and 9.1). Send this, and send the questions below as well:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>The image names are still in Docker&#x27;s list: 7,750 on 15 Oct. What is gone is the data behind most of them, and it is not sitting in another folder.
+
+On the 14 TB disk, containerd&#x27;s own lists were compared with the files:
+- 46,179 downloaded-file records, and 3,361 files on disk. 42,915 records point at a file that is not there. Those missing records add up to 481 GB. The recorded files still on disk add up to 405 GB. 97 files are on disk with no record. So the mismatch is &quot;the record remains, the file was removed&quot;, not &quot;the file moved&quot;.
+- The 14 TB disk was not wiped. It was 88% used, with 1.7 TB free. The 481 GB is how much recorded file data is gone. The disk is still mostly full because the surviving data is still there. A full disk is not what deleted the files. containerd&#x27;s cleanup did, while it held the old database.
+- 19,581 layer records, and 10,164 layer folders. The missing folders are not elsewhere on that disk. The oldest folder still there is from 10 Sep.
+- Of 6,847 images tested, 254 start. 6,313 fail because the downloaded file is gone, 253 because the unpacked layer folder is gone (all 113 DeepSWE images: their downloaded files are still on disk, the unpacked folders are not), and 27 because of a stale record.
+- The only other store is the old one hidden on the system disk, under the /data mount. It holds a database and no downloaded files. Its folder has not changed since 4 Aug 20:44. The missing files are not in it.
+- Everything recorded after the 12 Oct 13:07 restart is still on disk (634 files, none missing). The disk itself was not wiped.
+
+Nothing has been repaired or deleted by this investigation. A full comparison of the hidden database&#x27;s list still needs you to run step 9.3, which is read-only.
+</code></pre></div>
+<p>To root:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>Questions for the Docker store investigation (CLOUD_WORKER_DOCKER_REPORT.md, section 5.2).
+Nothing will be changed on the worker until the mentor and you have reviewed the result.
+1. 12 Oct: who restarted the host at about 10:38, and how (Alibaba Cloud console, or a command)?
+2. 12 Oct: who mounted /data at 10:54 (the mkdir/cp/mount/echo one-liner)? Were Docker and containerd stopped first?
+3. 12 Oct: who rewrote /etc/fstab to the UUID line at 12:09, and added the systemd drop-ins?
+4. 14 Oct: who restarted containerd at 11:11 and 17:36, and why?
+5. When was the 14 TB disk attached, and first mounted on /data?
+6. The host did not boot on 11 Sep. After the 27 Aug 21:35 boot it stayed up until 12 Oct 10:38. Who mounted /data during that stretch, and when? Were Docker and containerd stopped first?
+7. Who restarted the host on 4 Aug at 20:44, and twice on 27 Aug (20:25 and 21:35)? After each, was /data mounted before containerd started?
+8. Was the store ever moved or copied, or were old files or folders deleted to free space?
+9. Could you export the console&#x27;s history of restarts and disk changes (the resizes on 21 Sep and 5 Oct)?
+</code></pre></div>
+<p>To xu:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>For the Docker store investigation: root ran your scripts in /home/xu/check_docker/scripts/, several with --apply.
+1. What do they change with --apply? Do they remove or re-create images, layers or downloaded files?
+2. On which dates were they run with --apply, and what did evidence/20261007/missing-targets.txt list?
+</code></pre></div>
+<p>To the team:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>For the Docker store investigation on the cloud worker (nothing is removed now):
+1. Did any job use a lot of memory on 11 Oct from about 15:00?
+2. Does anyone run a clean-up script or service that deletes files under /data?
+3. Whose are these two containers, created on 12 Oct during the incident? Both will fail at their next start.
+   - clarify-selection4-runtime-v3-20261012 (on docker:29-dind)
+   - the Harbor egress sidecar of bandit-incremental-cache-control
+4. Did anyone restart Docker or containerd, or mount /data, on 4 Aug, 27 Aug, or 10 to 13 Sep? The host itself did not boot between 27 Aug 21:35 and 12 Oct 10:38.
+</code></pre></div>
+<ul>
+<li><strong>Record:</strong> each answer in the record, section 5.2, with its date.</li>
+</ul>
+<h3 id="9-7-copy-the-rest-of-the-evidence-to-your-pc">9.7 Copy the rest of the evidence to your PC</h3>
+<ul>
+<li><strong>Where:</strong> terminal 2, your PC, after steps 9.2 to 9.2c and 9.5.</li>
+<li><strong>Why:</strong> before any repair, every piece of evidence needs a second copy. <code>logcopy/</code> (3.3 GB) and <code>sessions/</code> are still only on the worker.</li>
+<li><strong>Risk:</strong> none. It reads from the worker and writes on your PC.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>df -h ~                                                                      # needs more than 5 GB free
+scp -r toby@47.84.16.18:snapshot-audit/logcopy toby@47.84.16.18:snapshot-audit/sessions ~/cloud-worker-evidence/
+scp toby@47.84.16.18:snapshot-audit/logs/{reboots.txt,reboots_wtmp.txt,reboots_console.txt,dockerd_messages.txt} ~/cloud-worker-evidence/logs/
+du -sh ~/cloud-worker-evidence/*
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> <code>logcopy</code> of about 3.3 GB and <code>sessions</code> in <code>~/cloud-worker-evidence/</code>, and the four files in <code>logs/</code>.</li>
+<li><strong>Result (16 Oct):</strong> the PC has 530 GB free. The copy finished. <code>logcopy</code> is 3.3 GB, <code>sessions</code> is 164 KB (the 15 Oct 12:05 and 17:48 recordings and the 16 Oct 09:15 check), <code>logs</code> is 1.4 GB, and the four named files arrived (<code>reboots.txt</code>, <code>reboots_wtmp.txt</code>, <code>reboots_console.txt</code>, <code>dockerd_messages.txt</code>).</li>
+</ul>
+<h3 id="9-8-does-the-fstab-line-parse-without-a-reboot-q1">9.8 Does the fstab line parse, without a reboot (Q1)</h3>
+<ul>
+<li><strong>Where:</strong> terminal 1, the worker as <code>toby</code>. No sudo. Run it whenever you are logged in. It does not need the recording from 9.5.</li>
+<li><strong>Why:</strong> root rewrote <code>/etc/fstab</code> on 12 Oct and said on 16 Oct that the new line has not been tested, because the host has not been rebooted. The previous line was skipped at boot even though it looked like a mount instruction. This check only asks whether the line is valid today, and whether <code>/data</code> is the 14 TB disk right now.</li>
+<li><strong>Risk:</strong> none. Both commands only read. Do not reboot.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>findmnt --verify
+findmnt -no SOURCE,TARGET,FSTYPE,OPTIONS /data
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li><code>findmnt --verify</code> prints no <code>parse error</code> for the <code>/data</code> line.</li>
+<li>The second line shows <code>/dev/nvme1n1p1</code> on <code>/data</code>.</li>
+<li>A clean result means the line is valid while the machine is up. It does not mean the next boot will mount the disk. That stays a planned reboot, after the mentor and root agree, as in the mentor report, section 9.2.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> both outputs.</li>
+<li><strong>Tell root and the mentor:</strong> the UUID line and the &quot;do not start without <code>/data</code>&quot; settings are written, and they are not protection until a watched reboot shows <code>/data</code> mounted before containerd starts.</li>
+<li><strong>Result (16 Oct, run as <code>toby</code>):</strong> <code>0 parse errors, 0 errors, 3 warnings</code>. The warnings are <code>cannot detect on-disk filesystem type (Permission denied)</code> on <code>/</code>, <code>/boot/efi</code> and <code>/data</code>. That is <code>toby</code> being unable to read the disk itself, not a bad line. <code>/data</code> is <code>/dev/nvme1n1p1</code>, type <code>ext4</code>, mounted read-write. The line is valid while the machine is up. No reboot has tested it.</li>
 </ul>
 <h2 id="if-something-goes-wrong">If something goes wrong</h2>
 <table>
@@ -942,9 +1809,14 @@ sudo -l -U toby                                            # shows that toby may
 <td>Log in, run step 2.3 again, and carry on</td>
 </tr>
 <tr>
-<td><code>findmnt</code> shows <code>rw</code> in step 6.4</td>
+<td><code>findmnt</code> shows <code>rw</code> in step 6.4 or 9.3</td>
 <td>The view isn't read-only</td>
-<td>Run only <code>sudo umount /mnt/rootfs</code>, then send me the output</td>
+<td>Run only <code>umount /mnt/rootfs</code> (in 6.4 with <code>sudo</code>), then send me the output</td>
+</tr>
+<tr>
+<td><code>No such file</code> for <code>/var/log/syslog.1</code> in step 9.5</td>
+<td>The weekly rotation has compressed it</td>
+<td>Stop, and send me <code>ls -la /var/log/syslog*</code></td>
 </tr>
 <tr>
 <td><code>No space left on device</code></td>

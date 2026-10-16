@@ -1,0 +1,1826 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cloud worker Docker images: what broke, why, and what we propose</title>
+<style>
+  body { font: 15px/1.55 -apple-system, "Segoe UI", Ubuntu, sans-serif; color: #1f2328; margin: 0; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 32px 80px; }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.6em 0 0.6em; }
+  h1 { font-size: 2em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h3 { font-size: 1.2em; }
+  a { color: #0969da; }
+  code { font: 13px/1.45 ui-monospace, "DejaVu Sans Mono", monospace; background: #eff1f3; padding: .15em .35em; border-radius: 4px; }
+  .code { position: relative; margin: 12px 0 16px; }
+  .code pre { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 14px 16px; padding-right: 90px; overflow-x: auto; margin: 0; }
+  .code pre code { background: none; padding: 0; white-space: pre; }
+  .copy { position: absolute; top: 8px; right: 8px; font: 13px sans-serif; padding: 4px 12px; border: 1px solid #d1d9e0;
+           border-radius: 6px; background: #fff; cursor: pointer; }
+  .copy:hover { background: #f3f4f6; }
+  .copy.done { background: #dafbe1; border-color: #4ac26b; }
+  table { border-collapse: collapse; margin: 12px 0 16px; display: block; overflow-x: auto; }
+  th, td { border: 1px solid #d1d9e0; padding: 6px 12px; vertical-align: top; }
+  th { background: #f6f8fa; }
+  nav { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 8px 20px; margin: 16px 0; }
+  nav ul { margin: 4px 0; padding-left: 20px; }
+  nav li.h3 { margin-left: 20px; font-size: 14px; }
+  .note { color: #59636e; font-size: 13px; }
+  .flow { display: flex; flex-direction: column; align-items: center; margin: 12px 0 24px; }
+  .flow .node { box-sizing: border-box; width: 100%; max-width: 820px; border: 2px solid #d1d9e0; border-radius: 8px;
+                padding: 8px 12px; background: #fff; font-size: 14px; line-height: 1.45; }
+  .flow .node b.t { display: block; margin-bottom: 2px; }
+  .flow .node .ev { display: block; margin-top: 4px; color: #59636e; font-size: 12.5px; }
+  .flow .node code { font-size: 12px; word-break: break-word; }
+  .flow .row { display: flex; gap: 12px; width: 100%; max-width: 820px; }
+  .flow .row > * { flex: 1; }
+  .flow .row.gap { margin-top: 12px; }
+  .flow .arrow { color: #59636e; font-size: 12.5px; text-align: center; padding: 2px 0 4px; }
+  .flow .arrow::before { content: "\2193"; display: block; font-size: 20px; line-height: 1.1; }
+  .flow .node.trigger, .legend .trigger { border-color: #bf8700; background: #fff8c5; }
+  .flow .node.fault, .legend .fault { border-color: #cf222e; background: #ffebe9; }
+  .flow .node.store, .legend .store { border-color: #0969da; background: #ddf4ff; }
+  .flow .node.disk, .legend .disk { border-color: #57606a; background: #f6f8fa; }
+  .flow .node.fixed, .legend .fixed { border-color: #1a7f37; background: #dafbe1; }
+  .flow .node.people, .legend .people { border-color: #1b7c83; background: #e0f4f5; }
+  .flow .node.unknown, .legend .unknown { border-color: #8250df; border-style: dashed; background: #fbefff; }
+  .legend span { display: inline-block; border-width: 2px; border-style: solid; border-radius: 6px; padding: 0 8px;
+                 margin: 2px 6px 2px 0; font-size: 12.5px; }
+  .tag { display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .tag.confirmed { background: #dafbe1; color: #116329; }
+  .tag.likely { background: #fff8c5; color: #7d4e00; }
+  .tag.unknown { background: #fbefff; color: #6639ba; }
+  @media print {
+    .copy, nav, .note { display: none; }
+    main { max-width: none; padding: 0; }
+    .flow, .flow .node, tr { break-inside: avoid; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<main>
+<p class="note">Generated from <code>CLOUD_WORKER_MENTOR_REPORT.md</code>. Edit the .md, then run <code>python3 cloud_worker_docs_html.py</code>.</p>
+<h1>Cloud worker Docker images: what broke, why, and what we propose</h1>
+<nav><ul><li class="h2"><a href="#1-summary">1. Summary</a></li><li class="h2"><a href="#2-the-situation-one-shared-evaluation-worker">2. The situation: one shared evaluation worker</a></li><li class="h2"><a href="#3-how-the-image-store-fits-together">3. How the image store fits together</a></li><li class="h2"><a href="#4-cause-1-the-12-oct-split-brain">4. Cause 1: the 12 Oct split brain</a></li><li class="h2"><a href="#5-cause-2-an-earlier-split-brain-and-the-stale-records">5. Cause 2: an earlier split brain, and the stale records</a></li><li class="h2"><a href="#6-confirmed-likely-unknown">6. Confirmed, likely, unknown</a></li><li class="h2"><a href="#7-where-the-evidence-is">7. Where the evidence is</a></li><li class="h2"><a href="#8-what-the-checks-found-and-what-is-still-unknown">8. What the checks found, and what is still unknown</a></li><li class="h2"><a href="#9-proposed-solution-needs-the-mentor-s-and-root-s-approval">9. Proposed solution (needs the mentor&#x27;s and root&#x27;s approval)</a></li><li class="h3"><a href="#what-broke-and-why">What broke, and why</a></li><li class="h3"><a href="#9-0-what-has-to-work-and-in-which-order">9.0 What has to work, and in which order</a></li><li class="h3"><a href="#today-s-plan-and-how-long-the-server-is-empty">Today&#x27;s plan, and how long the server is empty</a></li><li class="h3"><a href="#9-1-how-one-image-goes-from-the-current-records-to-a-correct-image">9.1 How one image goes from the current records to a correct image</a></li><li class="h3"><a href="#9-2-prevent-a-repeat-on-this-server">9.2 Prevent a repeat on this server</a></li><li class="h3"><a href="#9-3-while-several-people-still-use-the-worker-directly">9.3 While several people still use the worker directly</a></li><li class="h3"><a href="#9-4-when-jenkins-and-mac-k3d-run-the-evaluations">9.4 When Jenkins and mac-k3d run the evaluations</a></li><li class="h2"><a href="#10-decisions-needed">10. Decisions needed</a></li></ul></nav>
+<ul>
+<li><strong>Host:</strong> cloud worker <code>iZt4ndd2dff7gqjta7mppaZ</code> (Jenkins node <code>linux-iZt4ndd2dff7gqjta7mppaZ</code>), a shared evaluation worker.</li>
+<li><strong>Prepared by:</strong> Toby, 15 and 16 Oct 2026, for the mentor and the root account holder.</li>
+<li><strong>Status:</strong> the read-only investigation is finished. Nothing in the store has been repaired, removed or restarted. The proposals in section 9 need the mentor's and root's approval first. The decisions are in section 10.</li>
+<li><strong>Based on:</strong>
+<ul>
+<li>the investigation record, <a href="CLOUD_WORKER_DOCKER_REPORT.html"><code>CLOUD_WORKER_DOCKER_REPORT.md</code></a>;</li>
+<li>the step-by-step guide, <a href="CLOUD_WORKER_INVESTIGATION_STEPS.html"><code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code></a>: steps 0 to 8.2 and 9.1 to 9.2c and 9.5 on 15 Oct, and steps 9.3, 9.4, 9.7 and 9.8 on 16 Oct. Step 9.3 was run with <code>root.pem</code>, read-only, and the view was removed. Step 9.6 is a written question with no answer recorded;</li>
+<li>the evidence copy on Toby's PC, in <code>~/cloud-worker-evidence/</code> (section 7).</li>
+</ul>
+</li>
+<li><strong>Labels:</strong> <span class="tag confirmed">confirmed</span> shown by the evidence; <span class="tag likely">likely</span> the best explanation, not yet proven; <span class="tag unknown">unknown</span> open.</li>
+<li><strong>Aim:</strong> find which step of the process failed, not who to blame. People are named only where we need to ask them something.</li>
+</ul>
+<h2 id="1-summary">1. Summary</h2>
+<ol>
+<li><strong>Most images on the worker are broken.</strong> On 15 Oct, 6,593 of the 6,847 images tested failed to start, and only 254 started. All 113 DeepSWE images fail, 7 of 11 common base images fail, and <code>docker image ls</code> itself fails. 158 containers were created from broken images. Images pulled since the 12 Oct restart work.</li>
+<li><strong>The damage always has the same shape: containerd's records point at data that is gone.</strong> 42,915 of 46,179 downloaded-file records have no file on disk. There are 19,581 layer records but only 10,164 layer folders.</li>
+<li><strong>The cause is a &quot;split brain&quot; (section 3).</strong>
+<ul>
+<li>containerd started on an old, second store on the system disk. Then the 14 TB <code>/data</code> disk was mounted on top of it.</li>
+<li>containerd kept that old store's database, but worked on the real disk. Its cleanup deleted real data that the old database did not list.</li>
+<li>It started with a broken <code>/data</code> line in <code>/etc/fstab</code>. No boot could mount the disk, so every boot needed a manual mount.</li>
+</ul>
+</li>
+<li><strong>It happened on 12 Oct, after a forced restart.</strong> <span class="tag confirmed">confirmed</span> for the layer folders and for the downloaded files (guide step 9.4).
+<ul>
+<li>The boot skipped <code>/data</code>, and containerd started on the old store. At 10:54 the disk was mounted on top of the running containerd. For the next hour containerd worked on the real disk with the wrong database.</li>
+<li>Every check possible on the PC copy fits:
+<ul>
+<li>nothing recorded after the restart is missing;</li>
+<li>the cleanup finished its pass;</li>
+<li>the 65 files that both databases are known to list all survived.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>An earlier loss, before 13 Sep, was most likely the same failure.</strong> <span class="tag likely">likely</span>
+<ul>
+<li><strong>The old database had been used before.</strong> It already held at least 786 images on 12 Oct, and the real database doesn't record 721 of them. No file was ever written into the old store itself. So the old database was in use while the real disk was mounted on top.</li>
+<li><strong>It also lists DeepSWE images pulled in September.</strong> The host did not boot then: the boots are 4 Aug 20:44, 27 Aug 20:25, 27 Aug 21:35 and 12 Oct 10:38, and it stayed up from 27 Aug 21:35 until 12 Oct. The disk was mounted by hand on that running host.</li>
+<li><strong>It fits the loss:</strong> files recorded before mid-August are gone, and no layer folder older than 10 Sep survives.</li>
+<li><strong>It left a different trace from 12 Oct.</strong> Since 14 Sep, layers fail because their record is gone together with their folder. Only after 12 Oct do layers also fail with just the folder gone.</li>
+<li><strong>The record days are dated</strong> (guide steps 9.3 and 9.4). The old database was written from 4 Aug through 10 Sep, and again on 12 Oct. The 14 TB database was written 24 Jul to 4 Aug, then not again until 10 Sep. Who mounted the disk on 10 Sep is still unknown. That question does not block the repair.</li>
+</ul>
+</li>
+<li><strong>27 images have stale records. Jenkins builds first met them on 6 and 7 Oct, but they are most likely older, from the earlier loss.</strong> <span class="tag likely">likely</span>
+<ul>
+<li>Two of them were already failing on 29 and 30 Sep, with the same error.</li>
+<li>Docker logged no error at all on 2 to 4 Oct, so 6 and 7 Oct are not necessarily when they broke.</li>
+<li>Still open: one kind of error that the log never records, and what xu's repair scripts changed.</li>
+</ul>
+</li>
+<li><strong>Some of it is fixed, and some is still exposed.</strong>
+<ul>
+<li>Written since 12 Oct 12:09, and not yet proven: the fstab line now uses the disk's UUID, and containerd and Docker are set to refuse to start without <code>/data</code>. Root confirmed on 16 Oct that this has not been tested, because the host has not been rebooted since. A line that parses today can still be skipped at the next boot. The check is in section 9.2. Do not reboot as part of this investigation.</li>
+<li>Still exposed:
+<ul>
+<li>nothing stops someone mounting <code>/data</code> under running services;</li>
+<li>the host can still run out of memory and hang;</li>
+<li>nothing checks the store, so the damage went unnoticed for a month;</li>
+<li>images built here are in no registry;</li>
+<li>root actions are hard to trace: the root key is shared, and the history has no timestamps.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>For root, who asked whether the images were removed or only disagree with the records.</strong> <span class="tag confirmed">confirmed</span> from the disk check of 15 Oct and the database comparison of 16 Oct (record, steps 5.1, 5.2, 9.1 and 9.4). The questions in guide step 9.6 have no answer recorded, and the repair does not wait for them.
+<ul>
+<li>Docker still lists the images: 7,750 names. They were not dropped from the list.</li>
+<li>The data behind most of them was removed. 42,915 of 46,179 downloaded-file records have no file on the 14 TB disk. Those records add up to 481 GB. The recorded files still on disk add up to 405 GB. 9,417 of 19,581 layer records have no folder. 97 files are on disk with no record, so a file sitting unlisted is rare. The disk was not wiped: it is 14 TB, 88% used, with 1.7 TB free. The 481 GB is the size of the missing recorded files. The cleanup deleted them. The disk being mostly full is the data that survived.</li>
+<li>The missing files are not in the old store on the system disk. That store holds a database and no downloaded files, and its folder is unchanged since 4 Aug 20:44.</li>
+<li>What still works: 254 of 6,847 tested images start, and every file recorded after the 12 Oct 13:07 restart is present. All 113 DeepSWE images fail because their unpacked folders are gone; their downloaded files are still on disk.</li>
+</ul>
+</li>
+<li><strong>Proposal, now that the read-only checks are finished:</strong>
+<ul>
+<li>a planned rebuild of the store in an announced window (section 9.0);</li>
+<li>guards that make each step of this failure impossible or visible: a registry, a daily store check, memory limits, team rules, and later a Jenkins health gate.</li>
+</ul>
+</li>
+</ol>
+<h2 id="2-the-situation-one-shared-evaluation-worker">2. The situation: one shared evaluation worker</h2>
+<ul>
+<li>
+<p><strong>The host:</strong> 96 CPUs, 182 GB of memory, a 504 GB system disk, and a separate 14 TB <code>/data</code> disk (88% used). The <code>/data</code> disk was grown online twice: on 21 Sep (from 8.0 to 11.5 TB) and on 5 Oct (to 15.0 TB, shown by <code>df</code> as 14T).</p>
+</li>
+<li>
+<p><strong>Shared by everyone:</strong> one Docker daemon, one containerd and one image store, in <code>/data/containerd</code>.</p>
+</li>
+<li>
+<p><strong>Many people run different benchmarks on it directly:</strong></p>
+<ul>
+<li>DeepSWE, SWE-bench (<code>sweb.*</code> images) and lolbench;</li>
+<li>capbench, chrys-bench and jiuwenswarm;</li>
+<li>Harbor tasks and TaskAnchor.</li>
+</ul>
+<p>12 accounts are in the <code>docker</code> group, which is root-equivalent.</p>
+</li>
+<li>
+<p><strong>Root is reached with two SSH keys.</strong> One of them is the same key as <code>root.pem</code>, Toby's copy for this investigation. It logs in from several addresses, so it is shared.</p>
+</li>
+<li>
+<p><strong>mac-k3d's Jenkins jobs also run here.</strong> Since 14 Oct they run on the local worker instead (<code>AGENT_LABEL=linux-Michael-Ubuntu</code>).</p>
+</li>
+<li>
+<p><strong>Why this matters:</strong> one failure in the host, the mount or one person's clean-up damages every user's images at once. Nobody owns the store, and host changes leave little trace, so it took a month to notice.</p>
+</li>
+</ul>
+<h2 id="3-how-the-image-store-fits-together">3. How the image store fits together</h2>
+<p>An image is a stack of layers. containerd keeps each layer twice, and keeps a record of each copy in a database. Docker trusts these records; it does not check the disk before using them.</p>
+<p><strong>The two stores, and how the mount hides one of them.</strong> <span class="tag confirmed">confirmed</span></p>
+<p>There is one path, <code>/data</code>, and two different directories have used that path.</p>
+<ul>
+<li><strong>The store in use now</strong> is on the 14 TB disk, <code>/dev/nvme1n1p1</code>, which is mounted on <code>/data</code>. Everything you see at <code>/data/containerd</code> is this store: the database containerd opened at 13:07 on 12 Oct, the 3,361 downloaded files still on disk, and the 10,164 layer folders. On 15 Oct this disk was 88% used, with 1.7 TB free. The login banner on 16 Oct at 09:14 said 92.7% of 13.49 TB, about 1.0 TB free. Usage went up, so the disk was not emptied overnight. It was not wiped.</li>
+<li><strong>The old store</strong> is on the system disk, in the <code>/data</code> directory that the 14 TB disk covers. While the disk is mounted, that directory is not visible at <code>/data</code>. Root sees it only by a read-only view of the system disk, at <code>/mnt/rootfs/data/containerd</code> (guide steps 6.4 and 9.3). It was created at the 4 Aug 20:44 boot. Its database, <code>io.containerd.metadata.v1.bolt/meta.db</code>, is 865 MB and was last written at 12 Oct 11:48:43. It has no folder of downloaded files.</li>
+<li><strong>What happened.</strong> On 12 Oct the boot did not mount the 14 TB disk, because the <code>/data</code> line in <code>/etc/fstab</code> was wrapped in quotes. containerd started and opened the old database on the system disk. At 10:54 the 14 TB disk was mounted on <code>/data</code> while containerd was still running. From then on, new files were written to the 14 TB disk, but the open database stayed the old one. containerd's cleanup deletes disk data that its open database does not list, so it deleted layer folders on the 14 TB disk. <span class="tag confirmed">confirmed</span> for those folders. <span class="tag likely">likely</span> for most of the 481 GB of missing downloaded files. An earlier loss, before 13 Sep, was most likely the same kind of mismatch, during the 4 Aug boot or one of the two 27 Aug boots.</li>
+</ul>
+<p><strong>12 Oct, one path and two disks.</strong> A mount does not merge two disks. It covers a folder. After 10:54, the name <code>/data</code> means the 14 TB disk. The system disk's <code>/data</code> folder is still there, underneath, and containerd already had its database file open from that folder.</p>
+<p class="legend"><span class="disk">system disk, 504 GB</span><span class="store">14 TB disk</span><span class="fault">the step that deleted data</span></p>
+<div class="flow">
+<div class="node disk"><b class="t">Before 10:54. The 14 TB disk is not mounted</b>The path <code>/data</code> is a folder on the 504 GB system disk. containerd opens the old database there, <code>/data/containerd/.../meta.db</code>, created 4 Aug. <span class="tag confirmed">confirmed</span><span class="ev">fstab line was quoted, so the boot skipped it; containerd started at 10:40</span></div>
+<div class="arrow">10:54: someone mounts /dev/nvme1n1p1 on /data, while containerd is still running</div>
+<div class="node store"><b class="t">After 10:54. The same path now means the other disk</b>New files written to <code>/data/containerd</code> land on the 14 TB disk. The database containerd already opened stays the old one, on the system disk, now hidden under the mount.<span class="ev">meta.db last written 12 Oct 11:48:43, eight seconds before containerd stopped</span></div>
+<div class="arrow">cleanup: delete whatever the open database does not list</div>
+<div class="node fault"><b class="t">The 14 TB disk loses layer folders the old database does not name</b>The downloaded files that remain are on the 14 TB disk, not in the old store. The old store has a database and no downloaded files.<span class="ev">3,361 files and 10,164 folders at /data/containerd; the hidden store has no blobs folder</span></div>
+<div class="arrow">13:07: containerd is started again, with the 14 TB disk already mounted</div>
+<div class="node store"><b class="t">The database in use now is the 14 TB one</b>It still lists files and folders the cleanup removed. Docker trusts that list, so the images fail and a pull does not replace a file the record still names.</div>
+</div>
+<p><strong>Base images and benchmarks, from the 15 Oct start test</strong> (<code>inventory/layer_test.tsv</code>). Each image is in one row. A missing downloaded file and a missing layer folder are both &quot;the record remains, the data was removed&quot;. The same tables are in section 9.0.</p>
+<table>
+<thead>
+<tr>
+<th>Base image</th>
+<th style="text-align:right">Images</th>
+<th style="text-align:right">Usable</th>
+<th style="text-align:right">Not usable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alpine:3.21</code>, <code>alpine:3.22</code>, <code>busybox:1.36</code>, <code>debian:bookworm</code></td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><code>ubuntu:22.04</code>, <code>ubuntu:24.04</code>, <code>debian:bookworm-slim</code>, <code>alpine:3.19</code></td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">4, downloaded file gone</td>
+</tr>
+<tr>
+<td><code>alpine:3.20</code>, <code>alpine:latest</code>, <code>alpine:3.23.4</code>, the <code>uv</code> image</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">4, stale record</td>
+</tr>
+<tr>
+<td><strong>12 base tags</strong></td>
+<td style="text-align:right"><strong>12</strong></td>
+<td style="text-align:right"><strong>4</strong></td>
+<td style="text-align:right"><strong>8</strong></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Benchmark</th>
+<th style="text-align:right">Images</th>
+<th style="text-align:right">Usable</th>
+<th style="text-align:right">Not usable</th>
+<th style="text-align:right">Downloaded file gone</th>
+<th style="text-align:right">Layer folder gone</th>
+<th style="text-align:right">Stale record</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DeepSWE published</td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Local <code>deepswe*</code></td>
+<td style="text-align:right">611</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">611</td>
+<td style="text-align:right">491</td>
+<td style="text-align:right">120</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>deepswe-ab-verifier</td>
+<td style="text-align:right">108</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">108</td>
+<td style="text-align:right">108</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>jiuwenswarm</td>
+<td style="text-align:right">418</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">418</td>
+<td style="text-align:right">416</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>chrys-bench</td>
+<td style="text-align:right">426</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">426</td>
+<td style="text-align:right">421</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>lolbench</td>
+<td style="text-align:right">335</td>
+<td style="text-align:right">235</td>
+<td style="text-align:right">100</td>
+<td style="text-align:right">92</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">8</td>
+</tr>
+<tr>
+<td>capbench</td>
+<td style="text-align:right">67</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">63</td>
+<td style="text-align:right">63</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>SWE-bench Pro</td>
+<td style="text-align:right">424</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">424</td>
+<td style="text-align:right">424</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>SWE-bench sweap</td>
+<td style="text-align:right">42</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">40</td>
+<td style="text-align:right">24</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">16</td>
+</tr>
+<tr>
+<td>SWE-bench <code>sweb.*</code></td>
+<td style="text-align:right">116</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">116</td>
+<td style="text-align:right">116</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Not one of the benchmarks above</td>
+<td style="text-align:right">4,187</td>
+<td style="text-align:right">13</td>
+<td style="text-align:right">4,174</td>
+<td style="text-align:right">4,158</td>
+<td style="text-align:right">13</td>
+<td style="text-align:right">3</td>
+</tr>
+<tr>
+<td><strong>Tested, total</strong></td>
+<td style="text-align:right"><strong>6,847</strong></td>
+<td style="text-align:right"><strong>254</strong></td>
+<td style="text-align:right"><strong>6,593</strong></td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+</tr>
+</tbody>
+</table>
+<p>The row &quot;not one of the benchmarks above&quot; is 4,187 names: 26 official base images, 4,154 task images built on this server, and 7 Harbor or buildkit images. Section 9.0 splits that row. The published DeepSWE images are the special case: their downloaded files are still on the 14 TB disk, and every unpacked layer folder is gone, so all 113 fail. The four capbench images that still start are <code>capbench-linux-sync/jdk-1</code>, <code>jdk-2</code>, <code>jdk-3</code> and <code>jdk-5</code>. The eight stale lolbench images are the <code>TypeScript_2</code>, <code>aspnetcore_1</code>, <code>cargo_1</code> and <code>rust_1</code> tags of <code>smartdub26/lolbench</code> and <code>smartdub26/lolbench-linux</code>.</p>
+<p class="legend"><span class="people">users and jobs</span><span class="store">containerd's records</span><span class="disk">data on disk</span><span class="fault">failure</span></p>
+<div class="flow">
+<div class="node people"><b class="t">12 docker-group accounts and Jenkins jobs</b>Every benchmark runs <code>docker pull</code>, <code>docker build</code> and <code>docker run</code> against the same daemon</div>
+<div class="arrow">one Docker daemon, one containerd, one store for everybody</div>
+<div class="node store"><b class="t">Image record</b>in containerd's main database <code>/data/containerd/io.containerd.metadata.v1.bolt/meta.db</code>: name, then manifest, then the list of layers</div>
+<div class="arrow">each layer is kept twice</div>
+<div class="row">
+<div class="node store"><b class="t">Downloaded-file record</b>also in <code>meta.db</code>: one per compressed layer, config or manifest, by digest</div>
+<div class="node store"><b class="t">Layer record</b>in the layer database <code>…/io.containerd.snapshotter.v1.overlayfs/metadata.db</code>: one per unpacked layer, with a folder number</div>
+</div>
+<div class="row">
+<div class="arrow">must match a file</div>
+<div class="arrow">must match a folder</div>
+</div>
+<div class="row">
+<div class="node disk"><b class="t">Downloaded file ("blob")</b><code>…/io.containerd.content.v1.content/blobs/sha256/&lt;digest&gt;</code><span class="ev">46,179 records, 3,361 files on disk</span></div>
+<div class="node disk"><b class="t">Layer folder ("snapshot")</b><code>…/io.containerd.snapshotter.v1.overlayfs/snapshots/&lt;N&gt;/fs</code><span class="ev">19,581 records, 10,164 folders on disk</span></div>
+</div>
+<div class="row">
+<div class="arrow">file gone, record kept</div>
+<div class="arrow">folder gone, record kept</div>
+</div>
+<div class="row">
+<div class="node fault"><b class="t"><code>blob not found</code>: 6,313 images</b>For example <code>debian:bookworm-slim</code>, <code>ubuntu:24.04</code>, chrys-bench and jiuwenswarm. It also breaks <code>docker image ls</code></div>
+<div class="node fault"><b class="t"><code>failed to stat parent … no such file or directory</code>: 253 images</b>All 113 DeepSWE images are in this group</div>
+</div>
+<div class="arrow">a record whose data is only partly there</div>
+<div class="node fault"><b class="t"><code>already exists</code> or <code>missing parent</code>: 27 images</b>For example <code>alpine:3.23.4</code> (first failed in a build on 6 Oct), <code>alpine:3.20</code> (failing since at least 30 Sep) and the <code>uv</code> image</div>
+</div>
+<p>Two rules of containerd explain the whole incident:</p>
+<ol>
+<li><strong>Its cleanup deletes data that its open database does not list.</strong> That is safe only while the database belongs to the disk it is cleaning.</li>
+<li><strong>It trusts its records.</strong> A downloaded file with a record counts as present, so pulling the image again does not bring the file back. The record has to be removed first. This follows from containerd's design; it will be tested on one image before any repair.</li>
+</ol>
+<p><strong>What a split brain is.</strong> containerd's store lives at a fixed path, <code>/data/containerd</code>.</p>
+<ul>
+<li>When the 14 TB disk is not mounted, that path is an ordinary folder on the system disk. containerd creates or opens a store there.</li>
+<li>When the disk is mounted later, the path shows the real store. But containerd keeps the database file it has already opened, which is now hidden under the mount.</li>
+<li>From then on, containerd reads and writes files and folders on the real disk, while its records go to the hidden database. Rule 1 then deletes real data.</li>
+<li>Restarting containerd after the mount ends it: containerd then opens the real database. Whatever the cleanup deleted stays gone, and the real records still point at it.</li>
+<li>The real database's own cleanup then deletes what only the old database recorded. For example, the layer folders of the two containers created during the 12 Oct split brain are gone.</li>
+</ul>
+<h2 id="4-cause-1-the-12-oct-split-brain">4. Cause 1: the 12 Oct split brain</h2>
+<p><span class="tag confirmed">confirmed</span> for the layer folders, <span class="tag likely">likely</span> for most downloaded files. All times are CST.</p>
+<p class="legend"><span class="trigger">trigger</span><span class="fault">step that failed</span><span class="store">what containerd used</span><span class="disk">what was on disk</span><span class="fixed">fix</span></p>
+<div class="flow">
+<div class="node trigger"><b class="t">Earlier, date unknown: a root one-liner writes the <code>/data</code> line into <code>/etc/fstab</code> with literal quotes</b><code>mkdir -p /data &amp;&amp; cp /etc/fstab /etc/fstab.bak &amp;&amp; mount /dev/nvme1n1p1 /data &amp;&amp; echo \"/dev/nvme1n1p1 /data ext4 defaults 0 0\" &gt;&gt; /etc/fstab</code>. The line is invalid, but fstab is read only at the next boot<span class="ev">root's history, line 303 (logs/root_history.txt); /etc/fstab.bak on the worker: findmnt reports a parse error at line 12</span></div>
+<div class="arrow">weeks later</div>
+<div class="node trigger"><b class="t">11 Oct 15:21 to 12 Oct 10:36: the host runs out of memory again and again</b>26 out-of-memory kills (java, python, opencode, rg, harbor; never containerd or Docker). The system journal stops answering and is killed at 15:23 and 15:31<span class="ev">logs/oom_per_day.txt, logs/oom_victims.txt, logs/journald_watchdog.txt, logs/kernel.txt</span></div>
+<div class="arrow"></div>
+<div class="node trigger"><b class="t">12 Oct 10:38: the host is restarted without a clean shutdown</b>Both disks replay their filesystem journals. Who restarted it is not in the host's logs<span class="ev">logs/kernel.txt (orphan cleanup at 10:38:15), logs/boots.txt</span></div>
+<div class="arrow">the boot reads fstab</div>
+<div class="node fault"><b class="t">The quoted line is skipped, so the 14 TB disk is not mounted on <code>/data</code></b>Local filesystems are reported mounted at 10:38:11 without <code>/data</code><span class="ev">logs/boots.txt; systemctl show (record, section 2.4)</span></div>
+<div class="arrow">no rule made containerd wait for /data</div>
+<div class="node fault"><b class="t">10:38 to 10:40: containerd starts on <code>/data/containerd</code> of the <i>system disk</i></b>The old store from 4 Aug is there. containerd opens its database (<code>meta.db</code>, 865 MB, holding at least 786 images) and keeps it open. Its cleanup runs at 10:41 to 10:43 and fails: the old layer database has no records at all. Docker starts at 10:42:54<span class="ev">logs/boots.txt, logs/hidden_store.txt, analysis/split_brain_window.txt</span></div>
+<div class="arrow">16 minutes later</div>
+<div class="node fault"><b class="t">10:54:05: the 14 TB disk is mounted on <code>/data</code> under the running containerd</b>Very likely the same one-liner (history line 469). <code>/etc/fstab.bak</code> is saved at 10:54:02 and the disk is mounted at 10:54:05: that is its <code>cp</code>, then its <code>mount</code><span class="ev">logs/root_history.txt, logs/kernel.txt (10:54:05), /etc/fstab.bak file time, logs/around_1012.txt (the 10:50 root login)</span></div>
+<div class="arrow">split brain from 10:54 to 11:48</div>
+<div class="row">
+<div class="node store"><b class="t">What containerd used: the hidden August database</b>It recorded the hour's work there: <code>busybox</code> and <code>docker:29-dind</code> pulled at 11:20 and 11:23, two containers at 11:33 and 11:41 (layer folders 37 and 54, from its own count), a build at 11:44. Last write at 11:48:43<span class="ev">analysis/split_brain_window.txt, logs/hidden_store.txt</span></div>
+<div class="node disk"><b class="t">What was on disk: the real store on the 14 TB disk</b>Folders 37 and 54 were created here. The real store's own folders, numbered from 152,997, were not in the open database's list</div>
+</div>
+<div class="arrow">containerd's cleanup: delete what the open database does not list</div>
+<div class="node fault"><b class="t">Real layer folders are deleted</b> <span class="tag confirmed">confirmed</span>: the 57 missing folders that the start test names (153149 to 159017) sit among folders created on 10 Sep, when DeepSWE was pulled. 7,826 folders from before the restart survive, so the removal did not reach every folder. One possible reason: it was cut off when containerd was stopped at 11:48:51<br><b class="t">Most real downloaded files are deleted too</b> <span class="tag likely">likely</span>: every file recorded after the restart is present (634 of 634), while 5,791 of the 5,795 recorded on 2 to 11 Oct are missing<span class="ev">inventory/layer_test.tsv, analysis/folders_by_date.txt, analysis/files_by_age.txt, analysis/hex_spread.txt</span></div>
+<div class="arrow"></div>
+<div class="node fixed"><b class="t">11:48:51 services stopped. 12:09:49 fstab rewritten with <code>UUID=…</code>, and containerd and Docker made to require <code>/data</code>. 13:07:52 containerd reopens the real database</b><span class="ev">logs/day_1012.txt; fstab and drop-in file times (record, section 2.4)</span></div>
+<div class="arrow"></div>
+<div class="node fault"><b class="t">Result: the real database points at folders and files that are gone</b>Images pulled before 12 Oct fail; images pulled after 13:07 work. The two containers created in the window (folders 37 and 54) are unknown to the real database and will not start again</div>
+</div>
+<p><strong>Why the downloaded files are probably part of the same event.</strong> The analysis of the PC copy (guide step 9.1, <code>analysis/</code>) sorts every file record by its age and by where it came from:</p>
+<table>
+<thead>
+<tr>
+<th>File records</th>
+<th>Missing</th>
+<th>Present</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Recorded after the 12 Oct restart (13:07)</td>
+<td>0</td>
+<td>634</td>
+</tr>
+<tr>
+<td>Recorded 2 Oct to 12 Oct, before the restart</td>
+<td>5,791</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Recorded before 2 Oct</td>
+<td>37,124</td>
+<td>2,626</td>
+</tr>
+<tr>
+<td>Before the restart, made on this host (built or loaded; no registry label)</td>
+<td>41,170</td>
+<td>80</td>
+</tr>
+<tr>
+<td>Before the restart, pulled from a registry</td>
+<td>1,745</td>
+<td>2,550</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Files written on 10 and 11 Oct are all gone, and nothing written after 13:07 on 12 Oct is.</strong> So most of the loss happened between 11 Oct midday and the 12 Oct restart.</li>
+<li><strong>In that window, the only process that deletes files in bulk is containerd's cleanup,</strong> running against the wrong database. A forced restart can lose only the last seconds of writes, not weeks-old files.</li>
+<li><strong>Files made on this host are almost all gone.</strong> Many files pulled from registries survived, including all of DeepSWE's.</li>
+<li><strong>The cleanup finished its pass</strong> (guide step 9.1b). It goes through the files in alphabetical order of their digest. The survivors are spread evenly in that order, 5 to 7 % in each of the 16 groups, so it was not cut off partway.</li>
+<li><strong>The files known to be in the old database survived</strong> (guide step 9.1c). Docker listed 786 images from the old database during the split brain. The real database records 65 of them, and all 65 files are present; none is missing.</li>
+<li><strong>What is not proven yet:</strong> whether the old database lists every surviving file, and none of the missing ones. Check 1 in section 8 compares the full list.</li>
+</ul>
+<h2 id="5-cause-2-an-earlier-split-brain-and-the-stale-records">5. Cause 2: an earlier split brain, and the stale records</h2>
+<p><span class="tag likely">likely</span> that an earlier split brain caused the earlier loss, and that the stale records come from it. When each database was in use is now known (guide step 9.3d, 16 Oct).</p>
+<p class="legend"><span class="trigger">trigger</span><span class="fault">step that failed</span><span class="store">what containerd used</span><span class="disk">what was on disk</span><span class="unknown">not explained yet</span></p>
+<div class="flow">
+<div class="node disk"><b class="t">24 Jul: the host is set up</b>Docker and containerd are installed, with the store at <code>/data/containerd</code>. Their configuration has not changed since<span class="ev">record, section 2.5 (apt history and config file dates)</span></div>
+<div class="arrow">fstab has no valid /data line, so every boot needs a manual mount</div>
+<div class="node fault"><b class="t">4 Aug 20:44:37: a boot. Two seconds earlier, containerd creates the old store</b>Login prompts start on <code>tty1</code> and <code>ttyS0</code> at 20:44:37. The old store's folders are all created at 20:44:35, so containerd started during that boot, while <code>/data</code> was not mounted<span class="ev">logs/reboots_console.txt, logs/hidden_store.txt</span></div>
+<div class="arrow"></div>
+<div class="row">
+<div class="node fault"><b class="t">27 Aug: two boots, 20:25:23 and 21:35:55</b>The layer-database folder changes at 20:26:32, 69 seconds after the first. The second boot is not in the journal. Both are possible only while <code>/data</code> is not mounted at start<span class="ev">logs/reboots_console.txt, logs/hidden_store.txt</span></div>
+<div class="node store"><b class="t">5 Aug to 9 Sep: only the old database is written</b> <span class="tag confirmed">confirmed</span>. The 14 TB database has no record created on those days. The old database has records on almost every day from 4 Aug 20:44 through 10 Sep<span class="ev">logs/db_record_days.txt</span></div>
+</div>
+<div class="arrow"></div>
+<div class="node disk"><b class="t">10 Sep: DeepSWE's images are pulled into the real store</b>Folder 152,997 (09:22) is now the oldest on disk<span class="ev">analysis/folders_by_date.txt; DeepSWE's file records are 4 to 5 weeks old</span></div>
+<div class="arrow"></div>
+<div class="node disk"><b class="t">27 Aug 21:35 to 12 Oct 10:38: the host stays up</b>No login prompt in between, so no boot. 11 Sep 09:14 was the oldest journal line still kept, not a boot. <code>/data</code> was mounted by hand on this running host<span class="ev">logs/reboots_console.txt; fstab had no valid line, from the 12 Oct boot</span></div>
+<div class="arrow">if containerd was already running when the disk was mounted: a split brain</div>
+<div class="row">
+<div class="node store"><b class="t">The old database records new work, while the files go to the real disk</b> <span class="tag likely">likely</span>: on 12 Oct it held at least 786 images, 721 of them unknown to the real database, and 44 from DeepSWE's registry. No file was ever written into the old store itself<span class="ev">analysis/split_brain_window.txt, logs/hidden_store.txt</span></div>
+<div class="node fault"><b class="t">The cleanup deletes real data that the old database doesn't list</b> <span class="tag likely">likely</span>: files recorded before mid-August, and every layer folder older than 10 Sep. Images used in the window, such as DeepSWE and <code>sweap-images</code>, survive<span class="ev">analysis/missing_first_reported.txt, analysis/folders_by_date.txt</span></div>
+</div>
+<div class="arrow">later, containerd is restarted with /data mounted and opens the real database (date unknown)</div>
+<div class="node fault"><b class="t">13 Sep 01:37: first <code>blob not found</code>, on the oldest day the logs keep. 14 Sep 12:05: first <code>missing parent</code></b>A layer's record is gone together with its folder, while the main database still lists the layer<span class="ev">logs/damage_first_seen.txt, analysis/errors_per_day.txt, analysis/layer_errors.txt</span></div>
+<div class="arrow"></div>
+<div class="node disk"><b class="t">13 Sep to 12 Oct: the 14 TB disk stays mounted, so no split brain</b>The kernel log shows no other mount of it. It is grown online on 21 Sep and 5 Oct<span class="ev">logs/kernel.txt, analysis/split_brain_window.txt</span></div>
+<div class="arrow"></div>
+<div class="row">
+<div class="node fault"><b class="t">29 Sep to 10 Oct: the old stale records are met again</b> <span class="tag likely">likely</span>: <code>alpine:3.20</code>'s missing parent already fails on 30 Sep, and <code>alpine:latest</code>'s on 29 Sep. No error is logged on 2 to 4 Oct. Jenkins builds meet them on 6 and 7 Oct<span class="ev">analysis/layer_errors.txt, analysis/errors_per_day.txt</span></div>
+<div class="node unknown"><b class="t">6 to 10 Oct: what filled the syslog?</b>It grows from 41 MB a day to 506 MB on 6 Oct and 4,568 MB on 9 Oct, nearly all of it Docker's lines<span class="ev">logs/syslog_volume.txt</span></div>
+</div>
+<div class="arrow"></div>
+<div class="node fault"><b class="t">12 Oct: the same failure again (section 4)</b></div>
+</div>
+<p><strong>Why an earlier split brain is likely:</strong></p>
+<ul>
+<li><strong>The old database had been used before 12 Oct.</strong> It held at least 786 images when containerd opened it, and the real database doesn't record 721 of them.</li>
+<li><strong>Their files were written to the real disk.</strong> The old store's <code>containerd</code> folder has not changed since 4 Aug 20:44:36, and it has no folder for downloaded files. So nothing was ever downloaded into the old store itself. Those images must have been pulled while the old database was open and the real disk was mounted on top.</li>
+<li><strong>It was in use after DeepSWE was pulled in September.</strong> The 65 images that both databases list include 44 from DeepSWE's registry, recorded in the real database 4 to 5 weeks ago. Only two pulls are logged on 12 Oct, too few to have added them then.</li>
+<li><strong>The boots are now dated, and 11 Sep is not one of them.</strong> Login prompts mark five boots: 24 Jul 15:15, 4 Aug 20:44, 27 Aug 20:25, 27 Aug 21:35 and 12 Oct 10:38. The host then stayed up until 12 Oct. fstab had no valid <code>/data</code> line, so the disk was mounted by hand on that running host, not after an 11 Sep boot.</li>
+<li><strong>It explains the loss:</strong> files recorded before mid-August are gone, no layer folder older than 10 Sep survives, and the first errors appear on 13 and 14 Sep. The images used in that window, such as DeepSWE and <code>jefzda/sweap-images</code>, are in the old database, and their files survived.</li>
+<li><strong>It left a different trace from 12 Oct</strong> (guide step 9.1d).
+<ul>
+<li>Before 12 Oct, the only layer error is <code>missing parent</code>: 202 lines from 14 Sep to 11 Oct. The layer database has no record of a layer that the main database lists, so the record went together with its folder.</li>
+<li><code>failed to stat parent</code> appears only after 12 Oct: 59 lines, all on 14 Oct. There the record is kept and only the folder is gone.</li>
+<li>containerd has two layer cleanups. The main database's cleanup removes a layer through the layer store, record and folder together. The layer store's own cleanup removes only the folders that its database doesn't list.</li>
+<li>So in the earlier loss, the old main database's cleanup most likely worked through the real layer database. On 12 Oct, the layer store's cleanup worked against the old layer database, which held only that hour's layers.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Still to confirm:</strong></p>
+<ul>
+<li><strong>Why the old layer database was empty when containerd started on 12 Oct:</strong> its cleanup failed with <code>bucket does not exist</code>.
+<ul>
+<li>A likely reason: containerd opens the layer database only when it first needs it, not at start. If, in the earlier split brain, <code>/data</code> was mounted before that first use, containerd used the real layer database together with the old main database. That would also give the different trace above.</li>
+<li>Check 8 reads containerd's source. Check 2 gives the layer database's birth time; its folder last changed on 27 Aug.</li>
+</ul>
+</li>
+<li><strong>The real database's empty period starts in mid-August,</strong> before any September date. The 4 Aug boot created the old store, and the two 27 Aug boots are the last host starts before 12 Oct. Check 2 dates every record in both databases.</li>
+</ul>
+<p><strong>The stale records, first met by Jenkins builds on 6 and 7 Oct:</strong></p>
+<ul>
+<li>They are most likely older (guide step 9.1d). <code>alpine:3.20</code>, pulled on 24 Jul, fails with a <code>missing parent</code> that was already in the log on 30 Sep. <code>alpine:latest</code>'s was in the log on 29 Sep.</li>
+<li>Docker logged no error at all on 2 to 4 Oct, and one on 5 Oct, so the dates of 6 and 7 Oct need not be when they broke.</li>
+<li>There was no out-of-memory kill and no disk stall on those days, and no boot or mount between 13 Sep and 12 Oct.</li>
+<li>Still open:
+<ul>
+<li><code>alpine:3.23.4</code> fails with <code>already exists</code>, a kind the log never records, so it can't be dated.</li>
+<li>xu's Docker audit and repair scripts were run as root, several with <code>--apply</code>. Their evidence folder is dated 7 Oct (<code>missing-targets.txt</code>). What they change is not known.</li>
+<li>What filled the syslog from 6 Oct: 41 MB a day before, then 506 MB on 6 Oct and 4,568 MB on 9 Oct, nearly all of it Docker's lines.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Candidates, and what would tell them apart:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Candidate</th>
+<th>Fits</th>
+<th>Doesn't fit, or not known</th>
+<th>Check (section 8)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Earlier loss:</strong> an earlier split brain, during the 4 Aug boot or one of the two 27 Aug boots, with <code>/data</code> mounted by hand afterwards on the host that stayed up until 12 Oct</td>
+<td>The old database held images whose files were written to the real disk, including September's DeepSWE images. fstab could not mount <code>/data</code> at boot. Files before mid-August and folders before 10 Sep are gone; the first errors are on 13 and 14 Sep. Its layer errors differ from 12 Oct's in the way that the old main database plus the real layer database would explain</td>
+<td>The old layer database was empty on 12 Oct; explained only if containerd opens it at first use (check 8). Which of the three boots, and when the disk was mounted, are not known</td>
+<td>1, 2, 3, 8</td>
+</tr>
+<tr>
+<td><strong>Earlier loss:</strong> a clean-up that removed old files and folders, by hand or by a script</td>
+<td>The loss hit only old files and folders</td>
+<td>No such command in root's retained history, and no cron job or timer does it. It doesn't explain the old database's images</td>
+<td>4</td>
+</tr>
+<tr>
+<td><strong>Earlier loss:</strong> a move or copy of the store around 10 Sep that left out old data</td>
+<td>No folder older than 10 Sep</td>
+<td>No copy command in the retained history. It doesn't explain the old database's images</td>
+<td>2, 4</td>
+</tr>
+<tr>
+<td><strong>Stale records:</strong> a late effect of the earlier loss, seen when an image was next used</td>
+<td><code>missing parent</code> errors from 14 Sep. <code>alpine:3.20</code>'s missing parent already failed on 30 Sep, and <code>alpine:latest</code>'s on 29 Sep. No error at all was logged on 2 to 4 Oct</td>
+<td><code>already exists</code> (<code>alpine:3.23.4</code>) is never logged, so it can't be dated</td>
+<td>5</td>
+</tr>
+<tr>
+<td><strong>Stale records:</strong> xu's repair scripts (<code>--apply</code>)</td>
+<td>Dates match (evidence folder of 7 Oct)</td>
+<td>At least two stale records were failing before 7 Oct. What the scripts change is not known</td>
+<td>4</td>
+</tr>
+</tbody>
+</table>
+<h2 id="6-confirmed-likely-unknown">6. Confirmed, likely, unknown</h2>
+<table>
+<thead>
+<tr>
+<th>Finding</th>
+<th>Status</th>
+<th>Main evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The quoted fstab line made the 12 Oct boot skip <code>/data</code></td>
+<td><span class="tag confirmed">confirmed</span></td>
+<td><code>/etc/fstab.bak</code> and <code>findmnt --verify</code> (record, section 2.4); <code>logs/boots.txt</code></td>
+</tr>
+<tr>
+<td>containerd opened the old store on the system disk, kept its database open through the 10:54 mount, and wrote to it until 11:48:43</td>
+<td><span class="tag confirmed">confirmed</span></td>
+<td><code>logs/hidden_store.txt</code>, <code>logs/boots.txt</code>, <code>analysis/split_brain_window.txt</code></td>
+</tr>
+<tr>
+<td>The 12 Oct split brain deleted real layer folders, including all DeepSWE images'</td>
+<td><span class="tag confirmed">confirmed</span></td>
+<td><code>inventory/layer_test.tsv</code>, <code>analysis/folders_by_date.txt</code></td>
+</tr>
+<tr>
+<td>The 10:54 mount was the root one-liner at history line 469</td>
+<td><span class="tag likely">likely</span>; the times match to the second</td>
+<td><code>logs/root_history.txt</code>, <code>logs/kernel.txt</code>, file time of <code>/etc/fstab.bak</code></td>
+</tr>
+<tr>
+<td>Most missing downloaded files were deleted in the same window</td>
+<td><span class="tag confirmed">confirmed</span></td>
+<td><code>analysis/hidden_db_match.txt</code> (guide step 9.4), <code>analysis/files_by_age.txt</code></td>
+</tr>
+<tr>
+<td>An earlier loss, before 13 Sep, took files recorded before mid-August and every layer folder older than 10 Sep</td>
+<td><span class="tag confirmed">confirmed</span> that it happened</td>
+<td><code>analysis/missing_first_reported.txt</code>, <code>analysis/folders_by_date.txt</code>, <code>logs/damage_first_seen.txt</code></td>
+</tr>
+<tr>
+<td>containerd had used the old database before 12 Oct with the real disk mounted on top, and this caused the earlier loss</td>
+<td><span class="tag likely">likely</span>; the boots that could start it are now known (4 Aug 20:44, 27 Aug 20:25, 27 Aug 21:35), and there was no boot on 11 Sep</td>
+<td><code>analysis/split_brain_window.txt</code>, <code>logs/hidden_store.txt</code>, <code>logs/reboots_console.txt</code></td>
+</tr>
+<tr>
+<td>The earlier loss removed layer records together with their folders; 12 Oct removed only folders</td>
+<td><span class="tag likely">likely</span>; the error kinds show it, and the mechanism is to be confirmed in containerd's source (check 8)</td>
+<td><code>analysis/layer_errors.txt</code></td>
+</tr>
+<tr>
+<td>No split brain between 13 Sep and 12 Oct: the 14 TB disk was not mounted again</td>
+<td><span class="tag confirmed">confirmed</span></td>
+<td><code>logs/kernel.txt</code></td>
+</tr>
+<tr>
+<td>The stale records first met on 6 and 7 Oct were already there before: at least two failed on 29 and 30 Sep</td>
+<td><span class="tag confirmed">confirmed</span></td>
+<td><code>analysis/layer_errors.txt</code></td>
+</tr>
+<tr>
+<td>The stale records come from the earlier loss</td>
+<td><span class="tag likely">likely</span>; the <code>already exists</code> kind and xu's scripts are <span class="tag unknown">unknown</span></td>
+<td><code>analysis/layer_errors.txt</code>, <code>analysis/errors_per_day.txt</code>, <code>logs/oom_per_day.txt</code></td>
+</tr>
+<tr>
+<td>Who restarted the host, who typed the mount, who rewrote fstab, who restarted containerd on 14 Oct</td>
+<td><span class="tag unknown">unknown</span>; root key <code>QHhV…</code> was the only root key used on 12 Oct</td>
+<td><code>logs/around_1012.txt</code>, <code>logs/restarts_1014.txt</code></td>
+</tr>
+<tr>
+<td>Filesystem damage, a failing disk, an upgrade, a config change, containerd killed for memory</td>
+<td>ruled out</td>
+<td>record, section 2.5</td>
+</tr>
+</tbody>
+</table>
+<h2 id="7-where-the-evidence-is">7. Where the evidence is</h2>
+<p><strong>On Toby's PC, in <code>~/cloud-worker-evidence/</code>.</strong> This is outside any git repository, because it holds user names, IP addresses and root's commands. About 4.8 GB, including <code>logcopy/</code> (3.3 GB), copied on 16 Oct (guide step 9.7).</p>
+<table>
+<thead>
+<tr>
+<th>Folder</th>
+<th>File</th>
+<th>What it shows</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>logs/</code></td>
+<td><code>boots.txt</code>, <code>day_1012.txt</code></td>
+<td>Boots; every containerd and Docker line of 12 Oct, including the cleanup runs, pulls and image checks of the split brain</td>
+<td>Section 4 timeline</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>kernel.txt</code>, <code>oom_per_day.txt</code>, <code>oom_victims.txt</code>, <code>journald_watchdog.txt</code>, <code>hung_tasks.txt</code></td>
+<td>Out-of-memory kills, the journal being killed, disk stalls; the 10:38 orphan cleanup, the 10:54:05 mount, the two disk resizes</td>
+<td>The trigger, the mount time, no other mount since 13 Sep</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>hidden_store.txt</code></td>
+<td>The old store under <code>/data</code>: dates, <code>meta.db</code> size and last write</td>
+<td>Both split brains</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>root_history.txt</code></td>
+<td>Root's shell history (filtered): the fstab one-liner at lines 303 and 469, xu's scripts</td>
+<td>Who did what (no timestamps)</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>around_1012.txt</code>, <code>logins.txt</code>, <code>root_logins_by_day.txt</code>, <code>root_keys.txt</code>, <code>sudo_commands.txt</code></td>
+<td>Root logins and keys, sudo commands</td>
+<td>Who was logged in</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>restarts_1014.txt</code></td>
+<td>containerd's three restarts on 14 Oct</td>
+<td>Unexplained restarts</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>split_brain_containers.txt</code></td>
+<td>The two containers made during the split brain</td>
+<td>Owners to inform</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>damage_errors.txt</code> (1.3 GB), <code>damage_first_seen.txt</code>, <code>syslog_volume.txt</code></td>
+<td>Every containerd and Docker error line since 13 Sep; first date of each kind; syslog size per day</td>
+<td>Earlier loss, stale records</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>crontabs.txt</code>, <code>user_timers.txt</code></td>
+<td>Scheduled jobs</td>
+<td>No clean-up job found</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>images_list.txt</code>, <code>images_check.txt</code></td>
+<td>All 7,750 images; containerd's own check of each</td>
+<td>Impact</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>content_records.txt</code>, <code>blob_files.txt</code>, <code>blobs_missing.txt</code>, <code>blobs_unrecorded.txt</code>, <code>blob_ages.txt</code></td>
+<td>Downloaded-file records against files on disk</td>
+<td>42,915 missing files</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>snapshots_db.txt</code>, <code>snapshot_dirs.txt</code></td>
+<td>Layer records against folders on disk</td>
+<td>Missing folders</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>layer_test.tsv</code>, <code>broken_by_repo.txt</code>, <code>containers_on_broken.tsv</code></td>
+<td>Start test of every image; broken images per repository; containers on broken images</td>
+<td>Impact, owners</td>
+</tr>
+<tr>
+<td><code>analysis/</code></td>
+<td><code>summary.txt</code>, <code>files_by_age.txt</code>, <code>missing_first_reported.txt</code>, <code>errors_per_day.txt</code>, <code>folders_by_date.txt</code></td>
+<td>Guide step 9.1: files by age and source, first errors, folders by date</td>
+<td>Sections 4 and 5</td>
+</tr>
+<tr>
+<td><code>analysis/</code></td>
+<td><code>hex_spread.txt</code></td>
+<td>Guide step 9.1b: surviving files in the cleanup's order</td>
+<td>The cleanup finished its pass</td>
+</tr>
+<tr>
+<td><code>analysis/</code></td>
+<td><code>split_brain_window.txt</code></td>
+<td>Guide step 9.1c: the split-brain hour, the images in the old database, the 14 TB disk's mounts</td>
+<td>Both split brains</td>
+</tr>
+<tr>
+<td><code>analysis/</code></td>
+<td><code>layer_errors.txt</code></td>
+<td>Guide step 9.1d: the two kinds of layer error per day, and when three missing parents first failed</td>
+<td>The two losses' traces; the stale records' age</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Only on the worker:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Where</th>
+<th>What</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/home/toby/snapshot-audit/logcopy/</code></td>
+<td>Copies of syslog, auth.log and kern.log from 13 Sep, and the containerd and Docker journal (3.3 GB)</td>
+<td>Copy to the PC before any repair (check 6)</td>
+</tr>
+<tr>
+<td><code>/home/toby/snapshot-audit/sessions/2026-10-15_1205.log</code></td>
+<td>Recording of the whole session of 15 Oct</td>
+<td>Shows exactly what was run</td>
+</tr>
+<tr>
+<td><code>/var/log/syslog.1</code></td>
+<td>The 15 GB syslog of 4 to 11 Oct</td>
+<td>Compressed at the next weekly rotation (Sunday 18 Oct), then kept 4 weeks</td>
+</tr>
+<tr>
+<td><code>/etc/fstab</code>, <code>/etc/fstab.bak</code>, <code>/etc/systemd/system/{containerd,docker}.service.d/</code></td>
+<td>The fixed line, the quoted line, and the guards</td>
+<td>File times are evidence: do not edit before the review</td>
+</tr>
+<tr>
+<td>Under the <code>/data</code> mount point, on the system disk</td>
+<td>The old store, 1.7 GB, used during the split brains</td>
+<td>The read-only view was removed on 16 Oct. Keep the store until the approved repair archives it</td>
+</tr>
+<tr>
+<td>Alibaba Cloud console</td>
+<td>Instance restart and disk history</td>
+<td>Root only</td>
+</tr>
+</tbody>
+</table>
+<p><strong>In the mac-k3d repository:</strong> the record (<a href="CLOUD_WORKER_DOCKER_REPORT.html"><code>CLOUD_WORKER_DOCKER_REPORT.md</code></a>), the guide with every command and its result (<a href="CLOUD_WORKER_INVESTIGATION_STEPS.html"><code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code></a>), and this report. None of them contains a key or a password.</p>
+<h2 id="8-what-the-checks-found-and-what-is-still-unknown">8. What the checks found, and what is still unknown</h2>
+<p>The worker commands are finished. Rows 1, 2, 3, 5 and 6 were run on 15 and 16 Oct. Rows 4, 7 and 8 are still unknown. None of them is a command left to run before the repair in section 9.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Question</th>
+<th>Check</th>
+<th>Who</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Did the split brains delete the downloaded files?</td>
+<td>Done on 16 Oct (guide 9.4). Of 2,626 files from before 2 Oct still on disk, 2,624 are named in the old database. Of 37,124 missing from that period, 36,969 are not named. Of 5,791 missing from 2 to 12 Oct, none are named. The cleanup kept what the old database listed and deleted the rest</td>
+<td>Toby (guide 9.4)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>When was the old database in use, and when was each store created?</td>
+<td>Done on 16 Oct (guide 9.3b, 9.3d). The 14 TB database was written 24 Jul to 4 Aug, then not again until 10 Sep, then every day after. The old database was written 4 Aug through 10 Sep, and again on 12 Oct (229 records). It has no record dated after 12 Oct. The 14 TB filesystem was created 24 Jul 15:54, mounted 4 times, last on 12 Oct 10:54. The old store has 0 layer folders</td>
+<td>Toby, as root, read-only</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Which boots were there?</td>
+<td>Done. Login prompts (guide 9.2c): 24 Jul 15:15, 4 Aug 20:44, 27 Aug 20:25, 27 Aug 21:35, 12 Oct 10:38. No boot on 11 Sep, and none between 27 Aug 21:35 and 12 Oct</td>
+<td>Toby</td>
+</tr>
+<tr>
+<td>4</td>
+<td>What happened on 4 Aug, 27 Aug and 10 to 13 Sep? Who mounted <code>/data</code> after the 27 Aug 21:35 boot, on the host that stayed up until 12 Oct? Who restarted the host on 12 Oct, mounted <code>/data</code> at 10:54, rewrote fstab at 12:09, and restarted containerd on 14 Oct? What do xu's <code>--apply</code> scripts change?</td>
+<td>Questions in writing to root and xu. The Alibaba console has the restart and disk history</td>
+<td>Toby asks (guide 9.6)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>What were the 22 million Docker log lines of 4 to 11 Oct?</td>
+<td>Done. 20,275,470 lines are a failed platform-manifest check, and 1,346,163 are a failed image-label check. Docker was re-checking images whose files were already missing</td>
+<td>Toby (guide 9.5)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Is all the evidence safe before a repair?</td>
+<td>Done on 16 Oct. <code>logcopy/</code> (3.3 GB), <code>sessions/</code> and the reboot and message files are on the PC</td>
+<td>Toby (guide 9.7)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Who owns the two split-brain containers and the broken images?</td>
+<td><code>broken_by_repo.txt</code> and <code>split_brain_containers.txt</code> to the team</td>
+<td>Toby</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Why was the old layer database empty when containerd started on 12 Oct? The layer errors fit a first-use opening (guide step 9.1d)</td>
+<td>Read containerd 2.2's source: does the overlayfs snapshotter open its database at start, or at first use? And which cleanup removes a layer's record with its folder?</td>
+<td>Toby</td>
+</tr>
+</tbody>
+</table>
+<h2 id="9-proposed-solution-needs-the-mentor-s-and-root-s-approval">9. Proposed solution (needs the mentor's and root's approval)</h2>
+<p>The goal is that every base image and every benchmark image on this worker starts, and that the records for those images match the files and the folders. Nothing in this section is done by the investigation. This is the account to give root before any fix. The questions in guide step 9.6 are unanswered, and the repair does not wait for them.</p>
+<h3 id="what-broke-and-why">What broke, and why</h3>
+<p>containerd is the program that stores the images and starts the containers. Docker passes <code>docker pull</code> and <code>docker run</code> to it. Its data on this host is the directory <code>/data/containerd</code>. That path is one name for two disks. <code>/data</code> is a folder on the system disk until the 14 TB disk is mounted on it. After the mount, the name <code>/data</code> means the 14 TB disk, and the system-disk folder is hidden underneath.</p>
+<p>Each store has two databases. The database holds the record. The downloaded bytes and the unpacked files sit beside it.</p>
+<table>
+<thead>
+<tr>
+<th>Database</th>
+<th>The record</th>
+<th>The file that must match it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Main database, <code>meta.db</code></td>
+<td>The image name, and one downloaded-file record per blob</td>
+<td>The blob, at <code>blobs/sha256/&lt;digest&gt;</code></td>
+</tr>
+<tr>
+<td>Layer database, <code>metadata.db</code></td>
+<td>One layer record per unpacked layer, with a folder number</td>
+<td>The snapshot folder, at <code>snapshots/&lt;number&gt;/fs</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Counts to give root, before any fix.</strong> The 14 TB numbers are the inventory of 15 Oct. The old-store numbers are from the read-only check of 16 Oct.</p>
+<table>
+<thead>
+<tr>
+<th>Piece</th>
+<th style="text-align:right">14 TB store, in use now</th>
+<th style="text-align:right">Of which the record remains and the file is gone</th>
+<th>Old store, system disk, hidden under the mount</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Image names</td>
+<td style="text-align:right">7,750</td>
+<td style="text-align:right">6,593 of 6,847 tested images fail to start</td>
+<td>Records only. Docker is not using this store</td>
+</tr>
+<tr>
+<td>Downloaded-file records</td>
+<td style="text-align:right">46,179</td>
+<td style="text-align:right">42,915 have no blob (481 GB of recorded sizes)</td>
+<td>The main database names them. 180,168 digest strings are in the file, including old copies</td>
+</tr>
+<tr>
+<td>Blob files on disk</td>
+<td style="text-align:right">3,361</td>
+<td style="text-align:right">97 of these have no record in the current database</td>
+<td>No blob folder</td>
+</tr>
+<tr>
+<td>Layer records</td>
+<td style="text-align:right">19,581</td>
+<td style="text-align:right">9,417 have no snapshot folder</td>
+<td>The layer database is 256 KB</td>
+</tr>
+<tr>
+<td>Snapshot folders</td>
+<td style="text-align:right">10,164</td>
+<td style="text-align:right"></td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Why the 14 TB disk is still full.</strong> The cleanup deleted files. It did not empty the disk. On 16 Oct at 09:14 the login banner said <code>/data</code> was 92.7% of 13.49 TB, about 1.0 TB free, so about 12.5 TB was in use. On 15 Oct the same disk was 88% used, with 1.7 TB free. Usage went up, so new data was still being written.</p>
+<p>The 42,915 missing blobs add up to 481 GB of recorded sizes. That is the size of what is gone, about 4% of 13.49 TB. Deleting it leaves a disk that is still mostly full. The 7,750 image names and the 19,581 layer records are rows inside the two database files. They are not a separate pile of bytes.</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Still on the 14 TB disk?</th>
+<th>Size</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The whole <code>/data</code> filesystem</td>
+<td>Yes</td>
+<td>13.49 TB. About 12.5 TB used and about 1.0 TB free on 16 Oct 09:14</td>
+</tr>
+<tr>
+<td>Blob files that a record still names</td>
+<td>Yes. 3,264 files</td>
+<td><strong>405 GB</strong>, summed from the size recorded for each file</td>
+</tr>
+<tr>
+<td>Blob files on disk with no record</td>
+<td>Yes. 97 files</td>
+<td>Not in the size list</td>
+</tr>
+<tr>
+<td>Main database and layer database</td>
+<td>Yes</td>
+<td>655 MB and 64 MB</td>
+</tr>
+<tr>
+<td>Missing blob files</td>
+<td>No. The record remains, the file is gone</td>
+<td><strong>481 GB</strong> recorded. This is not part of the 12.5 TB in use</td>
+</tr>
+<tr>
+<td>The 10,164 snapshot folders</td>
+<td>Yes. The folders are there</td>
+<td>Not measured. The listing shows each folder's own entry, 4 KB, not the unpacked files inside</td>
+</tr>
+<tr>
+<td>Anything else on <code>/data</code>, including <code>/data/docker</code></td>
+<td>On this disk if it lives under <code>/data</code></td>
+<td>Not measured</td>
+</tr>
+</tbody>
+</table>
+<p>The measured image bytes still on the disk are the 405 GB of blobs plus about 0.7 GB of databases. Subtracting that from the 12.5 TB in use leaves about 12.1 TB. That remainder is the unpacked snapshot folders plus whatever else is stored on <code>/data</code>. It was not added up file by file, so it is not a size for the snapshots alone.</p>
+<p>Files recorded after containerd opened the 14 TB database on 12 Oct at 13:07 are all still on disk: 634 files, none missing.</p>
+<p><strong>The 12 Oct split brain.</strong> A running containerd keeps the databases it opened at start. It does not switch databases when a disk is mounted later.</p>
+<p>On 12 Oct the boot at 10:38 did not mount the 14 TB disk. containerd started at 10:40 and opened the old store's main database and the old store's layer database, on the system disk. At 10:54 the 14 TB disk was mounted on <code>/data</code> while containerd was still running. New files written to that path landed on the 14 TB disk. The records stayed in the old databases, which containerd already had open. Those two files were last written at 11:48:43, eight seconds before containerd stopped.</p>
+<p>containerd's own garbage collection then ran against those open databases. Its job is to delete blobs and snapshot folders that the open records do not name, so leftovers do not fill the disk. The blobs and snapshot folders on the 14 TB disk were not named by the old records, so the cleanup treated them as leftovers and deleted them. The records in the 14 TB databases were left in place. They still name the missing blobs and the missing snapshot folders.</p>
+<p>Step 9.4 measured the downloaded files. Of 2,626 files from before 2 Oct still on the 14 TB disk, 2,624 are named in the old main database. Of 37,124 missing from that period, 36,969 are not named. Of 5,791 missing from 2 to 12 Oct, none are named. The old layer database has 0 snapshot folders, and 9,417 layer records on the 14 TB disk name a folder that is gone. The published DeepSWE images are this case: their blobs are still on the 14 TB disk, and every snapshot folder is gone.</p>
+<p>The same mismatch ran from the 4 Aug 20:44 boot until 10 Sep: only the old database received new records. On 10 Sep the 14 TB database was in use again. That is the date of the oldest snapshot folder still on the 14 TB disk.</p>
+<h3 id="9-0-what-has-to-work-and-in-which-order">9.0 What has to work, and in which order</h3>
+<p><strong>All images on 15 Oct.</strong> Docker lists 7,750 names. The start test tried the 6,847 named images and skipped 903 leftover <code>moby-dangling@sha256:</code> build tags. Usable means the start test returned <code>ok</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th style="text-align:right">Images</th>
+<th style="text-align:right">Usable</th>
+<th style="text-align:right">Not usable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Every name Docker lists</td>
+<td style="text-align:right">7,750</td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+</tr>
+<tr>
+<td>Named images the start test tried</td>
+<td style="text-align:right">6,847</td>
+<td style="text-align:right">254</td>
+<td style="text-align:right">6,593</td>
+</tr>
+<tr>
+<td>Not in the start test (leftover build tags)</td>
+<td style="text-align:right">903</td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+</tr>
+</tbody>
+</table>
+<p><strong>What the 7,750 names are.</strong> Official base images are 26 of them: <code>alpine</code>, <code>ubuntu</code>, <code>debian</code>, <code>busybox</code>, <code>python</code>, <code>maven</code>, <code>eclipse-temurin</code> and <code>mambaforge</code>. The names beside the named benchmarks are task images built on this server, those 26 base images, 7 tool images, and 903 leftover build tags.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>What the names are</th>
+<th style="text-align:right">Images</th>
+<th style="text-align:right">All four present</th>
+<th style="text-align:right">Record yes, blob file no</th>
+<th style="text-align:right">Blob yes, snapshot folder no</th>
+<th style="text-align:right">Layer record stale</th>
+<th style="text-align:right">Not in the start test</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Named benchmarks</td>
+<td>The 10 benchmark rows below</td>
+<td style="text-align:right">2,660</td>
+<td style="text-align:right">241</td>
+<td style="text-align:right">2,155</td>
+<td style="text-align:right">240</td>
+<td style="text-align:right">24</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Official base images</td>
+<td><code>alpine</code>, <code>ubuntu</code>, <code>debian</code>, <code>busybox</code>, <code>python</code>, <code>maven</code>, <code>eclipse-temurin</code>, <code>mambaforge</code></td>
+<td style="text-align:right">26</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">18</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Task images built here</td>
+<td>One image per task, plus its verifier and egress copies</td>
+<td style="text-align:right">4,154</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">4,134</td>
+<td style="text-align:right">13</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Harbor and buildkit</td>
+<td><code>harborframework/terminal-bench</code> (4), <code>harbor-prebuilt</code> egress sidecars (2), <code>moby/buildkit</code> (1)</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Leftover build tags</td>
+<td><code>moby-dangling@sha256:…</code>. No tag a job would pull</td>
+<td style="text-align:right">903</td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+<td style="text-align:right">903</td>
+</tr>
+<tr>
+<td><strong>Every name Docker lists</strong></td>
+<td></td>
+<td style="text-align:right"><strong>7,750</strong></td>
+<td style="text-align:right"><strong>254</strong></td>
+<td style="text-align:right"><strong>6,313</strong></td>
+<td style="text-align:right"><strong>253</strong></td>
+<td style="text-align:right"><strong>27</strong></td>
+<td style="text-align:right"><strong>903</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The columns are the same four pieces as the benchmark table. The Harbor row's stale record is <code>harbor-prebuilt:harbor-docker-egress-control-sidecar--b67f71411fe7d8f5</code>.</p>
+<p><strong>The 4,154 task images.</strong> These are evaluation tasks built on this server. A typical name is <code>library/&lt;task&gt;__&lt;id&gt;-main</code>, plus a verifier and a <code>pier-egress-proxy</code> copy of the same task.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>What it is</th>
+<th style="text-align:right">Images</th>
+<th style="text-align:right">All four present</th>
+<th style="text-align:right">Record yes, blob file no</th>
+<th style="text-align:right">Blob yes, snapshot folder no</th>
+<th style="text-align:right">Layer record stale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Per-task copies</td>
+<td><code>main</code>, verifier, and egress, one set per task</td>
+<td style="text-align:right">3,552</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">3,552</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>clarify</td>
+<td><code>clarify-*</code> rebuilds</td>
+<td style="text-align:right">422</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">410</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>tdd</td>
+<td><code>tdd-*</code></td>
+<td style="text-align:right">146</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">146</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>dgm</td>
+<td><code>dgm-knowledge-*</code></td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>swe-marathon</td>
+<td><code>swe-marathon-cpu</code> and one dind probe</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>p3-replication</td>
+<td><code>p3-replication-xin</code></td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>chrys recovery</td>
+<td><code>chrys-recovery</code></td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Other local builds</td>
+<td><code>contextgraph-kit</code>, <code>e2e-formal-agent-runtime</code>, <code>proofke-evolving</code>, <code>remain178-dind-probe</code>, and similar</td>
+<td style="text-align:right">19</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">16</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><strong>Task images</strong></td>
+<td></td>
+<td style="text-align:right"><strong>4,154</strong></td>
+<td style="text-align:right"><strong>7</strong></td>
+<td style="text-align:right"><strong>4,134</strong></td>
+<td style="text-align:right"><strong>13</strong></td>
+<td style="text-align:right"><strong>0</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The 7 task images that start are <code>dgm-knowledge-k3-v2</code>, <code>dgm-knowledge-k3-v3</code>, <code>dgm-knowledge-k3-v4</code>, both <code>swe-marathon-cpu/daemon-bootstrap</code> tags, <code>proofke-evolving:lean428-20261015</code> and <code>remain178-dind-probe:29.6.2-flat</code>.</p>
+<p><strong>The 26 official base images inside the 7,750.</strong> Six start. The 12 tags in the next table are the ones mac-k3d evaluations ask for. Three of those 12, <code>debian:bookworm-slim</code>, <code>alpine:3.23.4</code> and the <code>uv</code> image, are not names in this list of 7,750. A job tried them and they failed. They are not an extra 3 on top of the 26.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Names in the 7,750</th>
+<th style="text-align:right">All four present</th>
+<th style="text-align:right">Record yes, blob file no</th>
+<th style="text-align:right">Blob yes, snapshot folder no</th>
+<th style="text-align:right">Layer record stale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alpine</code></td>
+<td>5: <code>3.19</code>, <code>3.20</code>, <code>3.21</code>, <code>3.22</code>, <code>latest</code></td>
+<td style="text-align:right">2 (<code>3.21</code>, <code>3.22</code>)</td>
+<td style="text-align:right">1 (<code>3.19</code>)</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">2 (<code>3.20</code>, <code>latest</code>)</td>
+</tr>
+<tr>
+<td><code>ubuntu</code></td>
+<td>5: <code>22.04</code>, the same tag by digest, <code>24.04</code>, <code>ubuntu</code> with no tag, <code>public.ecr.aws/ubuntu/ubuntu:24.04</code></td>
+<td style="text-align:right">1 (the <code>public.ecr.aws</code> tag)</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><code>python</code></td>
+<td>7 lines: <code>3.10-slim</code> by name and by digest, <code>3.11-slim</code>, <code>3.12-slim</code>, <code>3.6-slim-bullseye</code>, <code>3.9-slim-bullseye</code>, <code>3.10-slim-bookworm</code></td>
+<td style="text-align:right">1 (<code>3.10-slim-bookworm</code>)</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><code>debian:bookworm</code></td>
+<td>1</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><code>busybox:1.36</code></td>
+<td>1</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><code>eclipse-temurin</code></td>
+<td>3, each by digest: 8, 11, 17</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><code>maven</code></td>
+<td>3, each by digest</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><code>condaforge/mambaforge</code></td>
+<td>1</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><strong>Official bases</strong></td>
+<td><strong>26</strong></td>
+<td style="text-align:right"><strong>6</strong></td>
+<td style="text-align:right"><strong>18</strong></td>
+<td style="text-align:right"><strong>0</strong></td>
+<td style="text-align:right"><strong>2</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Base images the mac-k3d evaluations ask for.</strong> These 12 are shared tags. Four start. Eight do not. The four that start were pulled on 14 Oct. Today's repair does these 12. The other official tags in the table above, including the five failing <code>python</code> tags, are not in that 8 hours.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Usable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alpine:3.21</code>, <code>alpine:3.22</code>, <code>busybox:1.36</code>, <code>debian:bookworm</code></td>
+<td>Yes. 4 images</td>
+</tr>
+<tr>
+<td><code>ubuntu:22.04</code>, <code>ubuntu:24.04</code>, <code>debian:bookworm-slim</code>, <code>alpine:3.19</code></td>
+<td>No. The downloaded file is gone. 4 images</td>
+</tr>
+<tr>
+<td><code>alpine:3.20</code>, <code>alpine:latest</code>, <code>alpine:3.23.4</code>, <code>ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm</code></td>
+<td>No. The record is stale. 4 images</td>
+</tr>
+<tr>
+<td><strong>These 12</strong></td>
+<td><strong>4 usable, 8 not usable</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>The four pieces, for every base tag we have checked.</strong> &quot;Not reached&quot; means the start stopped at an earlier missing piece, so the later piece was not tested. <code>debian:bookworm-slim</code>, <code>alpine:3.23.4</code> and the <code>uv</code> image were seen in job failures, not in the 6,847-image start test.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Usable</th>
+<th>Download-file record</th>
+<th>Blob file</th>
+<th>Layer record</th>
+<th>Snapshot folder</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alpine:3.21</code>, <code>alpine:3.22</code>, <code>busybox:1.36</code>, <code>debian:bookworm</code></td>
+<td>Yes. 4</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>python:3.10-slim-bookworm</code></td>
+<td>Yes. 1</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>public.ecr.aws/ubuntu/ubuntu:24.04</code></td>
+<td>Yes. 1</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>alpine:3.19</code></td>
+<td>No</td>
+<td>Yes</td>
+<td>No</td>
+<td>Not reached</td>
+<td>Not reached</td>
+</tr>
+<tr>
+<td><code>ubuntu:22.04</code> (the name, and the same image by digest)</td>
+<td>No</td>
+<td>Yes</td>
+<td>No</td>
+<td>Not reached</td>
+<td>Not reached</td>
+</tr>
+<tr>
+<td><code>ubuntu:24.04</code>, and <code>ubuntu</code> with no tag</td>
+<td>No</td>
+<td>Yes</td>
+<td>No</td>
+<td>Not reached</td>
+<td>Not reached</td>
+</tr>
+<tr>
+<td><code>debian:bookworm-slim</code></td>
+<td>No</td>
+<td>Yes</td>
+<td>No</td>
+<td>Not reached</td>
+<td>Not reached</td>
+</tr>
+<tr>
+<td><code>python:3.10-slim</code>, <code>3.11-slim</code>, <code>3.12-slim</code>, <code>3.6-slim-bullseye</code>, <code>3.9-slim-bullseye</code></td>
+<td>No. 5 tags. <code>3.10-slim</code> is listed twice</td>
+<td>Yes</td>
+<td>No</td>
+<td>Not reached</td>
+<td>Not reached</td>
+</tr>
+<tr>
+<td><code>alpine:3.20</code>, <code>alpine:latest</code></td>
+<td>No</td>
+<td>Yes</td>
+<td>The start got past the blob check</td>
+<td>Parent record is missing</td>
+<td>Not created</td>
+</tr>
+<tr>
+<td><code>alpine:3.23.4</code>, <code>ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm</code></td>
+<td>No</td>
+<td>Yes</td>
+<td>Not reported missing</td>
+<td>The record already exists</td>
+<td>Not created</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Benchmarks, from the same start test.</strong> Each image is in one row, so the rows add up to the 6,847. An earlier table counted a few names in two rows; this is the table to use for the totals.</p>
+<table>
+<thead>
+<tr>
+<th>Benchmark</th>
+<th style="text-align:right">Images</th>
+<th style="text-align:right">All four present, usable</th>
+<th style="text-align:right">Record yes, blob file no</th>
+<th style="text-align:right">Blob yes, snapshot folder no</th>
+<th style="text-align:right">Layer record stale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DeepSWE published</td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Local images whose name contains <code>deepswe</code></td>
+<td style="text-align:right">611</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">491</td>
+<td style="text-align:right">120</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>deepswe-ab-verifier</td>
+<td style="text-align:right">108</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">108</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>jiuwenswarm</td>
+<td style="text-align:right">418</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">416</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>chrys-bench</td>
+<td style="text-align:right">426</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">421</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>lolbench</td>
+<td style="text-align:right">335</td>
+<td style="text-align:right">235</td>
+<td style="text-align:right">92</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">8</td>
+</tr>
+<tr>
+<td>capbench</td>
+<td style="text-align:right">67</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">63</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>SWE-bench Pro, <code>swebench-pro-opencode</code></td>
+<td style="text-align:right">424</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">424</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>SWE-bench, <code>jefzda/sweap-images</code></td>
+<td style="text-align:right">42</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">24</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">16</td>
+</tr>
+<tr>
+<td>SWE-bench, <code>sweb.*</code></td>
+<td style="text-align:right">116</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">116</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Not one of the benchmarks above</td>
+<td style="text-align:right">4,187</td>
+<td style="text-align:right">13</td>
+<td style="text-align:right">4,158</td>
+<td style="text-align:right">13</td>
+<td style="text-align:right">3</td>
+</tr>
+<tr>
+<td><strong>Tested, total</strong></td>
+<td style="text-align:right"><strong>6,847</strong></td>
+<td style="text-align:right"><strong>254</strong></td>
+<td style="text-align:right"><strong>6,313</strong></td>
+<td style="text-align:right"><strong>253</strong></td>
+<td style="text-align:right"><strong>27</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The last benchmark row, 4,187, is the 26 official bases, the 4,154 task images and the 7 Harbor and buildkit images in the tables above. Reading a row: the image name is still in the database in every column. <strong>All four present</strong> means the download-file record, the blob, the layer record and the snapshot folder match, and the image starts. <strong>Record yes, blob file no</strong> means the start stopped because the blob is gone, so the layer record and the snapshot were not reached. <strong>Blob yes, snapshot folder no</strong> means the blob is on disk and the layer record still names a folder that is gone. <strong>Layer record stale</strong> means the start got past the blob and failed because the layer record is wrong (<code>already exists</code> or <code>missing parent</code>). The four capbench images that start are <code>jdk-1</code>, <code>jdk-2</code>, <code>jdk-3</code> and <code>jdk-5</code>.</p>
+<p>158 containers were created from broken images (85 Created, 67 Exited, 6 Dead). They are not running.</p>
+<h3 id="today-s-plan-and-how-long-the-server-is-empty">Today's plan, and how long the server is empty</h3>
+<p>Planning estimates, not a timed run. <code>live_restore</code> is false, so stopping Docker stops every container. Today's list is the mount, the base images (including the ones that broke the earlier mac-k3d evaluation runs), the 113 published DeepSWE images, and the 418 jiuwenswarm images. Local <code>deepswe*</code> (611), deepswe-ab-verifier (108), chrys-bench, lolbench, capbench and SWE-bench are not in this day.</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Work</th>
+<th style="text-align:right">Hours to reserve</th>
+<th>What is true at the end</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>One store. Stop Docker and containerd, archive the old store, make empty <code>/data</code> immutable, mount the 14 TB disk, start containerd</td>
+<td style="text-align:right">1</td>
+<td>containerd is running on the 14 TB database only. Image records are still the broken ones</td>
+</tr>
+<tr>
+<td>2</td>
+<td>The 12 base images, including the mac-k3d evaluation failures: <code>alpine:3.23.4</code> (build #53), <code>alpine:3.20</code> (build #61), <code>alpine:3.19</code> (egress fallback), <code>alpine:latest</code>, <code>ubuntu:22.04</code>, <code>ubuntu:24.04</code>, <code>debian:bookworm-slim</code>, and <code>ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm</code>. Confirm the four that already start</td>
+<td style="text-align:right">1</td>
+<td>All 12 start. Eight are a remove-and-pull. The four already usable are only checked</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Published DeepSWE, 113 images. The downloaded files are already on disk, about 120 GB. The work is unpacking layer folders</td>
+<td style="text-align:right">2</td>
+<td>Those 113 start</td>
+</tr>
+<tr>
+<td>4</td>
+<td>jiuwenswarm, 418 images. The downloaded files are gone, so this is a pull or a rebuild, then a start check</td>
+<td style="text-align:right">4</td>
+<td>Those 418 start. This is the part that can run longer if the registry is slow. The server stays empty until the check passes</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Today, total</strong></td>
+<td style="text-align:right"><strong>8</strong></td>
+<td>Mount is the one 14 TB disk, containerd is up, the 12 bases start, published DeepSWE starts, jiuwenswarm starts</td>
+</tr>
+</tbody>
+</table>
+<ol>
+<li>Reserve <strong>8 hours</strong> with nobody using the server.</li>
+<li>The first <strong>4 hours</strong> are the mount, the 12 base images, and the 113 published DeepSWE images.</li>
+<li>The next <strong>4 hours</strong> are the 418 jiuwenswarm images.</li>
+<li>If a jiuwenswarm pull is still running when those 4 hours end, the server stays empty until that image's start check has passed.</li>
+</ol>
+<p><strong>Dates of the two stores</strong> (16 Oct). The file counts are in the table under &quot;What broke, and why&quot;.</p>
+<ul>
+<li>Old main database: born 4 Aug 20:44:35, last written 12 Oct 11:48:43, 907 MB. Old layer database: born 27 Aug 20:26:32, last written at that same 11:48:43, 0 snapshot folders.</li>
+<li>14 TB main database file: born 14 Oct 20:08:59, 655 MB, open. Its layer database file is the one from 24 Jul 17:14.</li>
+<li>14 TB filesystem: created 24 Jul 15:54:51, mounted 4 times, last mount 12 Oct 10:54:05. It has not been mounted since.</li>
+</ul>
+<p><strong>Order of the repair.</strong> Each step has one purpose. The host steps are done once, by the host owner. Image steps start only after the store structure is one database on the 14 TB disk.</p>
+<ol>
+<li><strong>Make one store, and make the old store unreachable.</strong> Purpose: containerd can open only the 14 TB database, so a later mount cannot hide a second database under <code>/data</code> again. With <code>docker.socket</code>, <code>docker</code> and <code>containerd</code> stopped, unmount <code>/data</code>, move the hidden store (database only, no downloaded files) from the system-disk mount point into an archive, and make the empty mount point immutable (<code>chattr +i /data</code>). Mount the 14 TB disk on <code>/data</code> again and check it with <code>findmnt</code>. Keep the UUID line and the settings that refuse to start containerd unless <code>/data</code> is a mount. A written rule refuses to mount <code>/data</code> while containerd or Docker is running. The archive stays until the review is closed. After this step the records and the files are still the broken pairs in the table above. What changed is that there is no second store left at the mount point.</li>
+</ol>
+<p><strong>Which records this step uses.</strong> It does not rebuild a correct store from either database. It chooses the 14 TB store as the only store containerd will open.</p>
+<table>
+<thead>
+<tr>
+<th>Store</th>
+<th>Used as the correct records?</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Old store, system disk</td>
+<td>No. It is moved to an archive and not opened again</td>
+<td>It has records and no blobs and no snapshot folders. Treating its records as the keep-list is what the 12 Oct cleanup did, and that deleted the 14 TB files</td>
+</tr>
+<tr>
+<td>14 TB store</td>
+<td>Yes, this is the one store that remains</td>
+<td>Its databases stay in place. They are the records containerd opens. They are not correct yet: 42,915 downloaded-file records and 9,417 layer records still name a file or folder that is gone. The 3,361 blobs and 10,164 snapshot folders that are still on this disk stay too</td>
+</tr>
+</tbody>
+</table>
+<p>The correct records are written in steps 2 to 5, into the 14 TB databases. How one image is changed is section 9.1. The old database is not copied in.</p>
+<ol start="2">
+<li><strong>Repair the 12 base images, and check them.</strong> Purpose: every later benchmark is built on these. Confirm the 4 that already start. Remove and pull the 8 that do not. One person does this, because the images are shared. The names are in the base-image table above, including <code>alpine:3.23.4</code> (build #53) and <code>alpine:3.20</code> (build #61).</li>
+<li><strong>Repair published DeepSWE (113), then the local <code>deepswe*</code> images (611) and deepswe-ab-verifier (108).</strong> Purpose: DeepSWE runs on the bases from step 2. The 113 already have their downloaded files on the 14 TB disk (about 120 GB), so the pull unpacks new layer folders. The 611 and the 108 are missing the file or the folder, so the pull downloads what is gone. Today's plan does the 113 only. The 611 and the 108 are a later day.</li>
+<li><strong>Repair the 418 jiuwenswarm images.</strong> Purpose: that benchmark runs on the corrected bases, including the <code>uv</code> image from step 2. All 418 fail. Remove the record and pull or rebuild.</li>
+<li><strong>Split the remaining benchmarks, one owner each.</strong> Purpose: the store is one database and the bases are correct, so each owner repairs only that benchmark's images. SWE-bench <code>sweb.*</code> and sweap, SWE-bench Pro, the lolbench images that do not start (leave the 235 that do), capbench (leave the four <code>jdk</code> images), and chrys-bench. They use <code>docker</code> only. They do not mount a disk, and they do not get the root key.</li>
+<li><strong>Check after each group.</strong> Purpose: the next group starts from records that match the disk. Each repaired image starts, its downloaded-file record has its blob, and its layer record has its snapshot folder.</li>
+</ol>
+<p><strong>Why the empty <code>/data</code> is made immutable.</strong> Four pieces, together:</p>
+<ol>
+<li><code>chattr +i</code> on the empty system-disk folder, after the old store is archived. The kernel then refuses to create a file there, so containerd cannot make a second database on the system disk.</li>
+<li>Mounting the 14 TB disk covers that folder. Writes go to the 14 TB disk. The flag stays on the hidden folder underneath. The flag does not choose which disk is mounted.</li>
+<li>The <code>UUID=</code> line mounts this 14 TB disk. <code>RequiresMountsFor=/data</code> and <code>AssertPathIsMountPoint=/data</code> stop containerd from starting while <code>/data</code> is only the system-disk folder. Those lines are written and have not been tested by a reboot. Section 9.2 is the check.</li>
+<li>A rule that <code>/data</code> is never mounted while containerd is already running. That is the act that caused 12 Oct.</li>
+</ol>
+<h3 id="9-1-how-one-image-goes-from-the-current-records-to-a-correct-image">9.1 How one image goes from the current records to a correct image</h3>
+<p><strong>How a record is changed.</strong> Do not edit <code>meta.db</code> or the layer <code>metadata.db</code> by hand. They are database files, not lists you can rewrite, and they can hold other users' settings.</p>
+<p>For one image, the change is remove, then pull. A pull while the old record remains does nothing: containerd treats the image as already present.</p>
+<table>
+<thead>
+<tr>
+<th>Piece</th>
+<th>Before, on an image that fails</th>
+<th>After <code>docker rmi</code>, then <code>docker pull</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Image record in <code>meta.db</code></td>
+<td>The name is listed, and it points at missing data</td>
+<td>A new record for that name</td>
+</tr>
+<tr>
+<td>Downloaded-file record</td>
+<td>The row remains</td>
+<td>A new row for each blob of this image</td>
+</tr>
+<tr>
+<td>Blob on the 14 TB disk</td>
+<td>Present for the 113 published DeepSWE images. Gone for the bases and benchmarks in step 3 and step 4 of section 9.0</td>
+<td>Kept when it was present, so the pull does not download it again. Downloaded when it was gone</td>
+</tr>
+<tr>
+<td>Layer record</td>
+<td>Present, and it names a missing folder, or it is a stale record</td>
+<td>A new record, written by the unpack</td>
+</tr>
+<tr>
+<td>Snapshot folder</td>
+<td>Missing, or not the folder the record names</td>
+<td>A new folder, written by the same unpack</td>
+</tr>
+</tbody>
+</table>
+<p>Before any removal, tell the owners of the two containers created during the 12 Oct split brain, and of the 158 containers created from broken images. Shared bases are repaired in step 2, by one person, before anyone repairs a benchmark.</p>
+<h3 id="9-2-prevent-a-repeat-on-this-server">9.2 Prevent a repeat on this server</h3>
+<p><strong>The fstab fix has to be checked before it counts as protection.</strong> Root rewrote the line on 12 Oct and said on 16 Oct that it has not been tested, because there has been no reboot. On this server the last bad line also looked like a mount instruction, and the boot skipped it. So a written line is not evidence that the next boot will mount the 14 TB disk.</p>
+<p>Ask root to do two things, both recorded:</p>
+<ol>
+<li><strong>Now, read-only, no reboot.</strong> Done on 16 Oct as <code>toby</code> (guide step 9.8): <code>0 parse errors, 0 errors</code>. The three warnings are permission denied, because <code>toby</code> cannot read the disk's own type. <code>/data</code> is <code>/dev/nvme1n1p1</code>. This proves the line is valid today. It does not prove the next boot.</li>
+<li><strong>Later, in an announced window, one reboot.</strong> After the boot, <code>/data</code> must already be mounted before containerd starts, and containerd must be using the database on the 14 TB disk. Until that reboot has been watched, the fstab change stays an untested fix. Do not reboot to find out during this investigation.</li>
+</ol>
+<p>Each row below is one step of the 12 Oct failure, and the guard that stops that step. None of these is done by the investigation. They wait for approval. The UUID line and the &quot;refuse to start without <code>/data</code>&quot; settings were written on 12 Oct and are in row 1 and row 2. They are not marked done, because no reboot has tested them.</p>
+<table>
+<thead>
+<tr>
+<th>What went wrong on this server</th>
+<th>Guard</th>
+<th>How it stops that step</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A broken fstab line meant that every boot needed a manual mount, for weeks</td>
+<td>Keep the <code>UUID=</code> line (written 12 Oct, not tested: no reboot since). Run <code>findmnt --verify</code> now, and again after any fstab edit. Prove it with one announced reboot before calling it protection. Don't paste system commands copied from escaped text, such as JSON or a chat message: the one-liner's <code>\&quot;</code> became literal quotes</td>
+<td>A bad line is caught the day it is written. The reboot is what shows the boot actually mounts <code>/data</code></td>
+<td>Now, then one planned reboot</td>
+</tr>
+<tr>
+<td>containerd started without <code>/data</code></td>
+<td>Keep <code>RequiresMountsFor=/data</code> and <code>AssertPathIsMountPoint=/data</code> (written 12 Oct, also untested until a reboot). Empty the mount point and make it immutable (<code>chattr +i</code>), so nothing can be written to the system disk's <code>/data</code></td>
+<td>containerd refuses to start, and there is no second store it could open</td>
+<td>The settings exist; the immutable mount point is before the repair</td>
+</tr>
+<tr>
+<td><code>/data</code> was mounted under a running containerd, on 12 Oct and, if the earlier loss is a split brain, by hand during the uptime that began on 27 Aug 21:35</td>
+<td>A written procedure, and a small root script: refuse to mount <code>/data</code> while <code>containerd</code> or <code>docker</code> is active; stop <code>docker.socket</code>, <code>docker</code> and <code>containerd</code> first</td>
+<td>The split brain needs both a running containerd and a second store. Both are now blocked</td>
+<td>Before the repair</td>
+</tr>
+<tr>
+<td>The host ran out of memory for 19 hours and was force-restarted</td>
+<td>A memory ceiling for all containers (Docker's <code>cgroup-parent</code> set to a slice with <code>MemoryMax</code>) and for <code>user.slice</code>. Turn on <code>systemd-oomd</code>, so the job that uses too much memory is killed early, not the host</td>
+<td>The host stays responsive, with no forced restart and no unclean boot</td>
+<td>Before the repair</td>
+</tr>
+<tr>
+<td>The damage went unnoticed for a month (<code>blob not found</code> since 13 Sep; stale records failing since at least 29 Sep)</td>
+<td>A daily read-only store check, run as a root timer: records against files and folders, <code>ctr images check</code>, and a few canary images started. It writes a status file that everyone can read, and alerts the team</td>
+<td>Damage is seen within a day, and its date is known</td>
+<td>With the repair</td>
+</tr>
+<tr>
+<td><code>/data</code> was grown by hand twice (21 Sep, 5 Oct), and nothing reports free space</td>
+<td>The daily check also reports free space on <code>/data</code> and <code>/</code>, and warns the team at 85%</td>
+<td>Space is added before writes fail, and nobody needs an emergency clean-up under running jobs</td>
+<td>With the repair</td>
+</tr>
+<tr>
+<td>Images built here can't be restored</td>
+<td>A private registry as the source of truth: push every image an evaluation needs, name images by digest, and use a pull-through cache for public images</td>
+<td>A damaged store becomes a refill from the registry, not weeks of rebuilds</td>
+<td>With the repair</td>
+</tr>
+<tr>
+<td>Root actions can't be traced</td>
+<td>Personal admin accounts with sudo; retire the shared root key; <code>HISTTIMEFORMAT</code> and <code>history -a</code> for root; <code>auditd</code> rules on <code>/etc/fstab</code>, <code>/etc/containerd</code>, <code>/etc/docker</code>, <code>/etc/systemd</code>, and on deletions in <code>/data/containerd</code> by anything other than containerd; one change log for host changes</td>
+<td>Next time, who did what and when is known within minutes</td>
+<td>Now</td>
+</tr>
+<tr>
+<td>The logs were too short (the journal is capped at 3.9 GB, and containerd's entries start on 10 Oct)</td>
+<td>Keep containerd's and Docker's logs for at least 30 days. Rate-limit or fix the noisy Docker messages</td>
+<td>The evidence of the next incident survives</td>
+<td>Now</td>
+</tr>
+</tbody>
+</table>
+<h3 id="9-3-while-several-people-still-use-the-worker-directly">9.3 While several people still use the worker directly</h3>
+<p>mac-k3d does not yet run every harness and benchmark, so direct use continues for a while. These rules keep the shared store consistent while many people pull and run the same images:</p>
+<ol>
+<li><strong>One host owner.</strong> Only the host owner mounts, edits fstab, reboots, or restarts Docker or containerd, and only after announcing it in the team channel. Everyone else asks.</li>
+<li><strong>No global clean-up.</strong> No <code>docker system prune</code>, <code>docker image prune -a</code> or <code>docker builder prune</code> on the shared daemon. Nobody deletes anything under <code>/data/containerd</code> or <code>/data/docker</code>. Disk space is freed by one agreed clean-up job, which removes images by owner label and last use, never images that a benchmark pins.</li>
+<li><strong>Label and pin.</strong> Build with <code>--label owner=&lt;name&gt;</code>. Name shared base images (<code>alpine</code>, <code>ubuntu</code>, <code>python</code>, DeepSWE bases) by digest, and treat them as the platform's, not removable by one user.</li>
+<li><strong>Concurrent use is safe; deleting under others is not.</strong> containerd writes a file once per digest, so many people pulling the same image at the same time is fine. The danger is deleting, or a host change, while others use the store. Rules 1 and 2 cover both.</li>
+<li><strong>Check before a run.</strong> Start the image once with no network (<code>docker run --rm --network none &lt;image&gt; true</code>). If it fails with <code>blob not found</code> or <code>failed to stat parent</code>, report a store problem instead of retrying. Retrying fills the logs: the 22 million Docker lines of 4 to 11 Oct.</li>
+<li><strong>Memory.</strong> Run long jobs with a memory limit (<code>docker run --memory</code>, or <code>systemd-run --scope -p MemoryMax=</code>), and say in the team channel when a run needs more than about 64 GB.</li>
+</ol>
+<h3 id="9-4-when-jenkins-and-mac-k3d-run-the-evaluations">9.4 When Jenkins and mac-k3d run the evaluations</h3>
+<p class="legend"><span class="fixed">source of truth or guard</span><span class="store">pipeline step</span><span class="disk">worker store</span><span class="people">evaluation jobs</span></p>
+<div class="flow">
+<div class="node fixed"><b class="t">Registry: the source of truth for every image an evaluation uses</b>Public images come through a pull-through cache. Images built here are pushed after the build. Configs name images by digest</div>
+<div class="arrow">pull by digest</div>
+<div class="node store"><b class="t">Prepare and verify on the worker</b>mac-k3d's prepare stage (<code>pipeline/tools/prewarm_task_images.sh</code>), extended to x86-64 workers: pull, then start once with no network. A failure is reported as "store damaged", not as a task failure</div>
+<div class="arrow"></div>
+<div class="node disk"><b class="t">The worker's image store is a cache</b>It can be emptied and refilled from the registry at any time. Only the clean-up job removes images</div>
+<div class="arrow"></div>
+<div class="node people"><b class="t">Evaluation jobs through Jenkins</b>CPU locks (already in mac-k3d), plus memory as a limit when a job is admitted. During the transition, also by hand under the rules of 9.3</div>
+<div class="arrow">checked every day</div>
+<div class="row">
+<div class="node fixed"><b class="t">Daily store check</b>A read-only root timer writes a status file: records against files and folders, canary images, and free space</div>
+<div class="node fixed"><b class="t">Health gate</b>Jenkins takes the node offline and alerts the team when the check fails. After a repair it clears <code>$MAC_K3D_SHARE/env-check/</code> for that worker, so images are proven again</div>
+</div>
+<div class="row gap">
+<div class="node fixed"><b class="t">Host guards</b><code>UUID=</code> fstab line; containerd and Docker require <code>/data</code>; empty, immutable mount point; mount only with the services stopped</div>
+<div class="node fixed"><b class="t">Memory guards</b>A memory ceiling for containers and users; <code>systemd-oomd</code> acts early, so the host never hangs</div>
+</div>
+</div>
+<p>What this adds to mac-k3d, and why:</p>
+<ul>
+<li><strong>An image check on Linux workers too.</strong> Today <code>prepare</code> does nothing for DeepSWE on x86-64: Harbor uses whatever image is in the shared store, broken or not. Builds #53 (6 Oct) and #61 (7 Oct) met the damage that way, and failed inside the run instead of before it.</li>
+<li><strong>Memory as an admission limit.</strong> It is not one today (&quot;RAM is not an admission limit&quot; in the integration log). The 11 Oct crisis started with memory, not CPU.</li>
+<li><strong>Fewer writers.</strong> Once most benchmarks run through Jenkins, the <code>docker</code> group can shrink to the Jenkins agent user and the host owner, and the store gets one writer instead of twelve.</li>
+<li><strong>Results stay trustworthy.</strong> The health gate keeps evaluations off a damaged store. Clearing env-check results stops a cached &quot;pass&quot; from hiding a store that broke later.</li>
+</ul>
+<h2 id="10-decisions-needed">10. Decisions needed</h2>
+<p>The read-only investigation is finished. Guide steps 0 to 9.5, 9.7 and 9.8 are done. Steps 9.3 and 9.4 were run on 16 Oct with <code>root.pem</code>, read-only, and the view of the system disk was removed. Nothing in the store has been repaired. These decisions are for the mentor and root. The repair in section 9 does not wait for the unanswered questions.</p>
+<ol>
+<li>Approve the repair order in section 9.0, or change it. The plan to reserve is 8 hours with nobody using the server: one store, the 12 base images, the 113 published DeepSWE images, then the 418 jiuwenswarm images. Name the host owner for step 1, and the date.</li>
+<li>mac-k3d jobs stay on <code>AGENT_LABEL=linux-Michael-Ubuntu</code> until that repair is approved and the start checks in section 9 pass.</li>
+<li>Where the registry lives (on this host's <code>/data</code>, another host, or Alibaba Cloud's container registry), and who looks after it.</li>
+<li>Who is the host owner, and whether the team agrees to the rules in 9.3 while people still use the worker directly.</li>
+<li>A watched reboot that proves the UUID fstab line is a later announced step (section 9.2). Step 9.8 showed the line parses today (<code>0 parse errors, 0 errors</code>). No reboot has tested it. Do not reboot in order to approve this report.</li>
+<li>The questions in guide step 9.6 stay open and do not block the repair: who mounted <code>/data</code> on 10 Sep, who restarted the host and mounted <code>/data</code> on 12 Oct, who rewrote fstab, who restarted containerd on 14 Oct, what xu's <code>--apply</code> scripts changed, and who owns the two split-brain containers.</li>
+<li>Root removes the investigation access (guide step 8.3). The timer removes the sudo rule on 18 Oct at about 12:03 in any case. Whether the shared root key is retired is a separate decision.</li>
+<li>Reading containerd 2.2's source (section 8, check 8) does not block the repair. It was never a command on the worker.</li>
+</ol>
+
+</main>
+<script>
+document.querySelectorAll('.copy').forEach(function (button) {
+  button.addEventListener('click', function () {
+    var text = button.parentElement.querySelector('code').textContent;
+    function done() {
+      button.textContent = 'Copied';
+      button.classList.add('done');
+      setTimeout(function () { button.textContent = 'Copy'; button.classList.remove('done'); }, 1500);
+    }
+    function fallback() {
+      var area = document.createElement('textarea');
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(area);
+      if (ok) { done(); } else { button.textContent = 'Copy failed: select the text'; }
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+  });
+});
+</script>
+</body>
+</html>

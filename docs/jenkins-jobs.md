@@ -22,7 +22,7 @@ A DeepSWE page has iCode's fields (`ICODE_*`) and JiuwenSwarm's (`JIUWENSWARM_*`
 
 A field left out of a remote trigger (`buildWithParameters`) or a dispatcher's call keeps the job's default through an `environment` block. LoLBench and SWE-bench Pro keep `ICODE_*` only.
 
-The redraw runs a short Groovy script outside the sandbox, which Jenkins runs only once approved. `config` pre-approves exactly these scripts and prints a warning when it cannot. An administrator can then approve them on **Manage Jenkins > In-process Script Approval**; until then those fields read `Could not draw this field. The build uses its default.` On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields, each with the `only (HARNESS=…)` label.
+The redraw runs a short Groovy script outside the sandbox, which Jenkins runs only once approved. `config` writes those approvals to disk (Manage Jenkins > In-process Script Approval) and prints a warning when it cannot. Until that `config` has run on this controller, or an administrator approves them there, those fields read `Could not draw this field. The build uses its default.` On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields, each with the `only (HARNESS=…)` label.
 
 ```mermaid
 flowchart LR

@@ -14,7 +14,7 @@ The LoLBench and SWE-bench Pro jobs offer iCode only. `mac-k3d config` deletes `
 
 ## The job page
 
-The DeepSWE pages carry both harnesses' named fields, and show only the ones of the `HARNESS` you pick. With `HARNESS=jiuwenswarm`, the `JIUWENSWARM_*` text and choice fields are drawn with their help, and each `ICODE_*` row (name included) is hidden; picking `icode` swaps them. The Active Choices plugin (`uno-choice`) redraws them. `mac-k3d start` installs it, and `mac-k3d config` pre-approves the fields' scripts on **Manage Jenkins > In-process Script Approval**. When `config` cannot pre-approve them it prints a warning. Until an administrator approves them there, those fields show `Could not draw this field. The build uses its default.`
+The DeepSWE pages carry both harnesses' named fields, and show only the ones of the `HARNESS` you pick. With `HARNESS=jiuwenswarm`, the `JIUWENSWARM_*` text and choice fields are drawn with their help, and each `ICODE_*` row (name included) is hidden; picking `icode` swaps them. The Active Choices plugin (`uno-choice`) redraws them. `mac-k3d start` installs it, and `mac-k3d config` writes the fields' script approvals to disk (Manage Jenkins > In-process Script Approval). When `config` cannot save them it prints a warning. Until that `config` has run on this controller, or an administrator approves them there, those fields show `Could not draw this field. The build uses its default.`
 
 Jenkins cannot redraw a file field, so `ICODE_RELEASE_FILE` and `JIUWENSWARM_RELEASE_FILE` stay as uploads; the visible `ICODE_MODE` or `JIUWENSWARM_MODE` row emits CSS that hides the other upload. On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields, each labelled `only (HARNESS=…)`.
 

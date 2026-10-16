@@ -9,7 +9,7 @@ from pathlib import Path
 
 from markdown_it import MarkdownIt
 
-DOCS = ["CLOUD_WORKER_INVESTIGATION_STEPS.md", "CLOUD_WORKER_DOCKER_REPORT.md"]
+DOCS = ["CLOUD_WORKER_INVESTIGATION_STEPS.md", "CLOUD_WORKER_DOCKER_REPORT.md", "CLOUD_WORKER_MENTOR_REPORT.md"]
 HERE = Path(__file__).resolve().parent
 
 PAGE = """<!doctype html>
@@ -40,6 +40,36 @@ PAGE = """<!doctype html>
   nav ul {{ margin: 4px 0; padding-left: 20px; }}
   nav li.h3 {{ margin-left: 20px; font-size: 14px; }}
   .note {{ color: #59636e; font-size: 13px; }}
+  .flow {{ display: flex; flex-direction: column; align-items: center; margin: 12px 0 24px; }}
+  .flow .node {{ box-sizing: border-box; width: 100%; max-width: 820px; border: 2px solid #d1d9e0; border-radius: 8px;
+                padding: 8px 12px; background: #fff; font-size: 14px; line-height: 1.45; }}
+  .flow .node b.t {{ display: block; margin-bottom: 2px; }}
+  .flow .node .ev {{ display: block; margin-top: 4px; color: #59636e; font-size: 12.5px; }}
+  .flow .node code {{ font-size: 12px; word-break: break-word; }}
+  .flow .row {{ display: flex; gap: 12px; width: 100%; max-width: 820px; }}
+  .flow .row > * {{ flex: 1; }}
+  .flow .row.gap {{ margin-top: 12px; }}
+  .flow .arrow {{ color: #59636e; font-size: 12.5px; text-align: center; padding: 2px 0 4px; }}
+  .flow .arrow::before {{ content: "\\2193"; display: block; font-size: 20px; line-height: 1.1; }}
+  .flow .node.trigger, .legend .trigger {{ border-color: #bf8700; background: #fff8c5; }}
+  .flow .node.fault, .legend .fault {{ border-color: #cf222e; background: #ffebe9; }}
+  .flow .node.store, .legend .store {{ border-color: #0969da; background: #ddf4ff; }}
+  .flow .node.disk, .legend .disk {{ border-color: #57606a; background: #f6f8fa; }}
+  .flow .node.fixed, .legend .fixed {{ border-color: #1a7f37; background: #dafbe1; }}
+  .flow .node.people, .legend .people {{ border-color: #1b7c83; background: #e0f4f5; }}
+  .flow .node.unknown, .legend .unknown {{ border-color: #8250df; border-style: dashed; background: #fbefff; }}
+  .legend span {{ display: inline-block; border-width: 2px; border-style: solid; border-radius: 6px; padding: 0 8px;
+                 margin: 2px 6px 2px 0; font-size: 12.5px; }}
+  .tag {{ display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }}
+  .tag.confirmed {{ background: #dafbe1; color: #116329; }}
+  .tag.likely {{ background: #fff8c5; color: #7d4e00; }}
+  .tag.unknown {{ background: #fbefff; color: #6639ba; }}
+  @media print {{
+    .copy, nav, .note {{ display: none; }}
+    main {{ max-width: none; padding: 0; }}
+    .flow, .flow .node, tr {{ break-inside: avoid; }}
+    * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  }}
 </style>
 </head>
 <body>
@@ -102,8 +132,9 @@ def render(md_path):
         if tok.type == "inline":
             for child in tok.children or []:
                 href = child.attrGet("href") if child.type == "link_open" else None
-                if href and href.endswith(".md") and href in DOCS:
-                    child.attrSet("href", href[:-3] + ".html")
+                doc, hash_, frag = (href or "").partition("#")
+                if doc in DOCS:
+                    child.attrSet("href", doc[:-3] + ".html" + hash_ + frag)
     body = md.renderer.render(tokens, md.options, {})
     body = body.replace("</h1>", f"</h1>\n<nav><ul>{''.join(toc)}</ul></nav>", 1)
     title = next((tokens[i + 1].content for i, t in enumerate(tokens) if t.tag == "h1"), md_path.stem)

@@ -681,6 +681,44 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Unsandboxed Active Choices scripts in a job config.xml. The sandboxed
+/// fallback (`Could not draw this field`) is not one of them.
+fn unsandboxed_scripts(xml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<secureScript") {
+        rest = &rest[start..];
+        let Some(end_rel) = rest.find("</secureScript>") else {
+            break;
+        };
+        let block = &rest[..end_rel];
+        rest = &rest[end_rel + "</secureScript>".len()..];
+        if !block.contains("<sandbox>false</sandbox>") {
+            continue;
+        }
+        let Some(open) = block.find("<script>") else {
+            continue;
+        };
+        let inner = &block[open + "<script>".len()..];
+        let Some(close) = inner.find("</script>") else {
+            continue;
+        };
+        let script = xml_unescape(&inner[..close]);
+        if !script.is_empty() && !out.contains(&script) {
+            out.push(script);
+        }
+    }
+    out
+}
+
 fn question_defaults_for_job(opts: &JobOpts, job_benchmark: &str) -> (String, u32, String) {
     let _ = job_benchmark;
     let tasks = opts.default_tasks.join(",");
@@ -2309,9 +2347,7 @@ pub fn ensure_eval_jobs(
     let session = Session::open(base, api_user, api_token_or_password)?;
     let mut opts = opts.clone();
     opts.active_choices = opts.active_choices && plugin_active(&session, ACTIVE_CHOICES_PLUGIN);
-    if opts.active_choices {
-        preapprove_reactive_scripts(&session, &opts);
-    } else {
+    if !opts.active_choices {
         println!(
             "Note: Jenkins has no active '{ACTIVE_CHOICES_PLUGIN}' plugin, so the DeepSWE pages show the inputs of \
              every harness, each labelled with its harness. Run `mac-k3d start` on the controller to install it."
@@ -2321,6 +2357,11 @@ pub fn ensure_eval_jobs(
         let name = eval_job_name(bench, shape);
         let xml = eval_job_xml(bench, shape, &shape_description(bench, shape), &opts);
         ensure_named_one_task_xml(&name, &xml, jenkins_url, api_user, api_token_or_password)?;
+    }
+    if opts.active_choices {
+        // After the write: approve the scripts Jenkins stored, then save. preapprove
+        // alone keeps the hashes in memory, and a controller restart drops them.
+        preapprove_reactive_scripts(&session, &opts);
     }
     for name in RETIRED_JOBS {
         delete_job_if_present(name, jenkins_url, api_user, api_token_or_password)?;
@@ -2364,8 +2405,30 @@ fn reactive_scripts(opts: &JobOpts) -> Vec<String> {
     scripts
 }
 
-/// Groovy for `/scriptText` that approves `scripts` ahead of use, so the
-/// harness fields draw without an administrator approving them by hand.
+/// Scripts to approve: the ones this process renders, plus any unsandboxed
+/// script Jenkins stored for a DeepSWE job (the text the page actually runs).
+/// A missing config.xml still leaves the rendered scripts.
+fn scripts_to_approve(session: &Session, opts: &JobOpts) -> Vec<String> {
+    let mut scripts = reactive_scripts(opts);
+    for (bench, shape) in eval_jobs() {
+        if bench != "deepswe" {
+            continue;
+        }
+        let name = eval_job_name(bench, shape);
+        let Some(xml) = session.get(&format!("/job/{name}/config.xml")) else {
+            continue;
+        };
+        for script in unsandboxed_scripts(&xml) {
+            if !scripts.contains(&script) {
+                scripts.push(script);
+            }
+        }
+    }
+    scripts
+}
+
+/// Groovy for `/scriptText` that approves `scripts` and writes scriptApproval.xml.
+/// `preapprove` alone is in memory; `save` is what survives a controller restart.
 fn preapprove_groovy(scripts: &[String]) -> String {
     let encoded = scripts
         .iter()
@@ -2382,7 +2445,8 @@ for (String b64 : [{encoded}]) {{
   approval.preapprove(new String(Base64.decoder.decode(b64), 'UTF-8'), GroovyLanguage.get())
   n++
 }}
-println("preapproved " + n)
+approval.save()
+println("preapproved " + n + " saved")
 "#
     )
 }
@@ -2390,14 +2454,17 @@ println("preapproved " + n)
 /// A failure only warns: the jobs still work once an administrator approves
 /// the scripts on Manage Jenkins > In-process Script Approval.
 fn preapprove_reactive_scripts(session: &Session, opts: &JobOpts) {
-    let scripts = reactive_scripts(opts);
+    let scripts = scripts_to_approve(session, opts);
     if scripts.is_empty() {
         return;
     }
-    let want = format!("preapproved {}", scripts.len());
+    let want = format!("preapproved {} saved", scripts.len());
     match session.script_text(&preapprove_groovy(&scripts)) {
         Ok(out) if out.status.success() && String::from_utf8_lossy(&out.stdout).contains(&want) => {
-            println!("Approved the {} harness field scripts of the DeepSWE jobs.", scripts.len());
+            println!(
+                "Saved approval for the {} harness field scripts of the DeepSWE jobs.",
+                scripts.len()
+            );
         }
         Ok(out) => println!(
             "Warning: could not approve the harness field scripts ({}). Approve them on \
@@ -3732,7 +3799,8 @@ mod tests {
         let groovy = preapprove_groovy(&scripts);
         assert!(groovy.contains("ScriptApproval.get()"));
         assert!(groovy.contains("preapprove(new String(Base64.decoder.decode(b64), 'UTF-8'), GroovyLanguage.get())"));
-        assert!(groovy.contains("println(\"preapproved \" + n)"), "{groovy}");
+        assert!(groovy.contains("approval.save()"), "{groovy}");
+        assert!(groovy.contains("println(\"preapproved \" + n + \" saved\")"), "{groovy}");
         for script in &scripts {
             assert!(groovy.contains(&format!("'{}'", base64_encode(script.as_bytes()))));
         }
@@ -3743,6 +3811,30 @@ mod tests {
         assert!(!plugin_listed_active(r#"{"plugins":[{"shortName":"uno-choice","active":false}]}"#, "uno-choice"));
         assert!(!plugin_listed_active(r#"{"plugins":[]}"#, "uno-choice"));
         assert!(!plugin_listed_active("<html>Sign in</html>", "uno-choice"));
+    }
+
+    #[test]
+    fn stored_job_xml_round_trips_the_unsandboxed_draw_scripts() {
+        let opts = deepswe_opts(Vec::new());
+        for shape in EVAL_SHAPES {
+            let xml = eval_job_xml("deepswe", *shape, "d", &opts);
+            let stored = unsandboxed_scripts(&xml);
+            let mut want = Vec::new();
+            for spec in eval_params("deepswe", *shape, &opts) {
+                if !spec.is_reactive(opts.ui_profile) {
+                    continue;
+                }
+                want.push(reactive_script(&spec));
+            }
+            assert_eq!(stored, want, "{shape:?}");
+            assert!(stored.iter().all(|s| s != REACTIVE_FALLBACK_SCRIPT));
+        }
+        for bench in ["lolbench", "swebenchpro"] {
+            for shape in EVAL_SHAPES {
+                let xml = eval_job_xml(bench, *shape, "d", &opts);
+                assert!(unsandboxed_scripts(&xml).is_empty(), "{bench} {shape:?}");
+            }
+        }
     }
 
     #[test]
