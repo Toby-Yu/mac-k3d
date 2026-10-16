@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::ConfigArgs;
-use crate::config::MacK3dConfig;
+use crate::config::{AgentLauncher, MacK3dConfig};
 use crate::error::Result;
 use crate::prepare::{
     discovery, docker_checks, docker_plugins, eval_assets, jenkins_agent, resources, toolchain, wizard,
@@ -24,7 +24,11 @@ pub fn run(args: &ConfigArgs, config: &MacK3dConfig, config_path: &Path) -> Resu
         }
     }
     let mut config = config.clone();
-    if let Some(old) = jenkins_agent::legacy_mac_name(&config) {
+    let legacy = match config.jenkins_agent.launcher {
+        AgentLauncher::Inbound => jenkins_agent::legacy_mac_name(&config),
+        AgentLauncher::Existing => None,
+    };
+    if let Some(old) = legacy {
         let new_name = jenkins_agent::default_agent_name();
         println!("Renaming Jenkins agent '{old}' to '{new_name}'…");
         let _ = crate::prepare::agent_service::stop_and_uninstall();

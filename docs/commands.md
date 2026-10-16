@@ -20,6 +20,7 @@ mac-k3d                 # TTY only: same as setup
 mac-k3d setup
 mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 mac-k3d setup --disk-min-gb 20
+mac-k3d setup --non-interactive -c ~/.config/mac-k3d/worker.yaml   # no TTY: a provisioning job
 ```
 
 ### Flags
@@ -27,8 +28,31 @@ mac-k3d setup --disk-min-gb 20
 | Flag | Description |
 |------|-------------|
 | `--disk-min-gb N` | Override minimum free disk (GB) for prepare |
+| `--non-interactive` | Worker only. Apply an existing `-c` YAML and register its agent with no wizard and no prompt: the same installs as **Use existing config**, then `config`. With `jenkins_agent.launcher: existing` it updates that node in place instead of registering one. Needs root or passwordless `sudo` for apt. Refuses a missing file and any role other than `worker` |
 
 Global `-c / --config` is honored.
+
+### Non-interactive worker
+
+For a machine provisioned by a job (for example the ECS controller's `ecs-env-init`), write `worker.yaml` first, then run one command as the user that will run the agent:
+
+```bash
+mac-k3d setup --non-interactive -c ~/.config/mac-k3d/worker.yaml
+```
+
+The YAML needs `role: worker`, `jenkins_agent.controller_url`, `api_user`, `api_token`, `name`, `labels`, `remote_fs` and `cpu_cores`, plus `storage.base_dir`. Mark `docker`, `git`, `java` and `harbor` as `source: install`; a tool already on the host is recorded instead of installed. When Docker is installed in this run, the new `docker` group is not active in this shell yet, so the command stops after the install; run it again from a new login and it carries on. Run as root and there is no group step: root can use Docker immediately, and `uv` / Harbor install into `/root/.local/bin`.
+
+#### `launcher: existing`
+
+Omit `launcher` (or set `inbound`) and this command registers an inbound agent and starts `mac-k3d-jenkins-agent.service`. Set `launcher: existing` when the machine is already a Jenkins node whose launcher must stay as it is, such as the SSH slave from `ecs-register-node`:
+
+```yaml
+jenkins_agent:
+  launcher: existing
+  name: pomegranate-20261016-071200   # the node that is already online
+```
+
+The node named in the YAML must already exist. The command installs the toolchain, then sets that node's labels and executor count through the Jenkins script console and creates `<name>-core-1..N` locks. It does not download `agent.jar`, write a launch script, or start a service, and it does not change the launcher, mode, or remote root. `api_user` and `api_token` are required. `teardown --deregister-agent` removes the `<name>-core-N` locks and leaves the node registered.
 
 ### Behavior
 

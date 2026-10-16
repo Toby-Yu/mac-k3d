@@ -378,11 +378,11 @@ println("done")
     )
 }
 
-fn groovy_escape(s: &str) -> String {
+pub(crate) fn groovy_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
-fn run_script_text(base_url: &str, user: &str, token: &str, script: &str) -> Result<String> {
+pub(crate) fn run_script_text(base_url: &str, user: &str, token: &str, script: &str) -> Result<String> {
     let output = crate::jenkins_curl::Session::open(base_url, user, token)?.script_text(script)?;
     let body = String::from_utf8_lossy(&output.stdout).to_string();
     if !output.status.success() {
@@ -405,7 +405,7 @@ fn run_script_text(base_url: &str, user: &str, token: &str, script: &str) -> Res
     Ok(body)
 }
 
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     let t: String = s.chars().take(max).collect();
     if s.chars().count() > max {
         format!("{t}…")

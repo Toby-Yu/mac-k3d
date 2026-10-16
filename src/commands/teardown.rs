@@ -51,6 +51,10 @@ pub async fn run(args: TeardownArgs, config: &MacK3dConfig) -> Result<()> {
         } else {
             println!("--deregister-agent applies to worker role only; ignoring.");
         }
+    } else if matches!(config.role, NodeRole::Worker)
+        && config.jenkins_agent.launcher == crate::config::AgentLauncher::Existing
+    {
+        println!("launcher: existing; the Jenkins node's own launcher runs the agent, so there is nothing to stop.");
     } else if matches!(config.role, NodeRole::Worker) {
         // Stop local agent process; leave Jenkins node registered for later reconnect.
         jenkins_agent::stop_worker_agent_process()?;

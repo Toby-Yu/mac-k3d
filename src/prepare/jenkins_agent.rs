@@ -459,6 +459,9 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         .name
         .clone()
         .unwrap_or_else(default_agent_name);
+    if config.jenkins_agent.launcher == crate::config::AgentLauncher::Existing {
+        return update_existing_agent(config, &url, &name);
+    }
     let jar = config.jenkins_agent.agent_jar.clone().unwrap_or_else(|| {
         config
             .storage
@@ -553,6 +556,80 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
     Ok(())
 }
 
+/// `launcher: existing`: the node is already registered and connected by its
+/// own launcher. Only its labels, executors and `<name>-core-N` locks follow
+/// this config; agent.jar, the launch script and the service are not used.
+fn update_existing_agent(config: &crate::config::MacK3dConfig, url: &str, name: &str) -> Result<()> {
+    use crate::prepare::resources;
+
+    let Some((user, token)) = config.jenkins_agent.api_credentials() else {
+        return Err(Error::Validation(format!(
+            "jenkins_agent.launcher: existing needs api_user and api_token to update node '{name}'"
+        )));
+    };
+    let agent = &config.jenkins_agent;
+    let executors = executor_count(agent.cpu_cores, agent.cpus_per_executor);
+    let labels = node_labels(&agent.labels, agent.cpu_cores, agent.cpus_per_executor);
+    println!("Updating existing Jenkins node '{name}' on {url}; its launcher is left as it is…");
+    let script = groovy_update_existing_node(name, &labels, executors);
+    let output = resources::run_script_text(url, user, token, &script)?;
+    existing_node_result(&output, name, url)?;
+    for line in output.lines().filter(|l| l.starts_with("labels ") || l.starts_with("executors ")) {
+        println!("  {line}");
+    }
+    resources::register_agent_cpu_cores(
+        url,
+        name,
+        &config.resources.cpu_cores_label,
+        agent.cpu_cores,
+        Some(user),
+        Some(token),
+    )
+}
+
+/// Replacing the node with itself is what saving its configure page does:
+/// the computer, its connection and a running build stay, and the executor
+/// count is applied. `updateNode` alone saves it without resizing executors.
+fn groovy_update_existing_node(name: &str, labels: &[String], executors: u32) -> String {
+    let name = crate::prepare::resources::groovy_escape(name);
+    let want = crate::prepare::resources::groovy_escape(&labels.join(" "));
+    format!(
+        r#"
+import jenkins.model.Jenkins
+def j = Jenkins.get()
+def node = j.getNode('{name}')
+if (node == null) {{
+  println("missing-node")
+  return
+}}
+def managed = {{ String l -> l.startsWith('executors-') || l.startsWith('fits-') }}
+def kept = (node.labelString ?: '').tokenize().findAll {{ !managed(it) }}
+def labels = (kept + '{want}'.tokenize()).unique()
+node.setLabelString(labels.join(' '))
+node.setNumExecutors({executors})
+j.getNodesObject().replaceNode(node, node)
+println("labels " + node.labelString)
+println("executors " + node.numExecutors)
+println("done")
+"#
+    )
+}
+
+fn existing_node_result(output: &str, name: &str, url: &str) -> Result<()> {
+    if output.lines().any(|l| l.trim() == "missing-node") {
+        return Err(Error::Validation(format!(
+            "Jenkins node '{name}' is not registered on {url}; launcher: existing only updates a node that is already there"
+        )));
+    }
+    if !output.lines().any(|l| l.trim() == "done") {
+        return Err(Error::Config(format!(
+            "could not update Jenkins node '{name}': {}",
+            crate::prepare::resources::truncate(output.trim(), 400)
+        )));
+    }
+    Ok(())
+}
+
 /// Stop LaunchAgent, then remove Jenkins node + CPU_CORES lockable resources.
 pub fn remove_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
     use crate::config::NodeRole;
@@ -561,9 +638,12 @@ pub fn remove_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
     if !matches!(config.role, NodeRole::Worker) {
         return Ok(());
     }
+    let existing = config.jenkins_agent.launcher == crate::config::AgentLauncher::Existing;
 
     // Always stop local agent process first.
-    let _ = crate::prepare::agent_service::stop_and_uninstall();
+    if !existing {
+        let _ = crate::prepare::agent_service::stop_and_uninstall();
+    }
 
     let Some(url) = config.jenkins_agent.controller_url.as_deref() else {
         return Ok(());
@@ -577,7 +657,11 @@ pub fn remove_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
     let user = config.jenkins_agent.api_user();
     let token = config.jenkins_agent.api_token();
 
-    delete_node(url, &name, user, token)?;
+    if existing {
+        println!("launcher: existing; leaving Jenkins node '{name}' registered and removing only its core locks.");
+    } else {
+        delete_node(url, &name, user, token)?;
+    }
     resources::remove_agent_cpu_cores(
         url,
         &name,
@@ -763,6 +847,49 @@ mod tests {
                 "fits-deepswe".into(),
             ]
         );
+    }
+
+    #[test]
+    fn existing_node_update_keeps_its_launcher_and_swaps_capacity_labels() {
+        let labels = node_labels(&["linux".into(), "lolbench".into()], 16, 2);
+        let g = groovy_update_existing_node("pomegranate-1", &labels, 8);
+        assert!(g.contains("j.getNode('pomegranate-1')"), "{g}");
+        assert!(g.contains("println(\"missing-node\")"), "{g}");
+        assert!(g.contains("l.startsWith('executors-') || l.startsWith('fits-')"), "{g}");
+        assert!(
+            g.contains("'linux lolbench executors-8 fits-deepswe fits-lolbench fits-swebenchpro'.tokenize()"),
+            "{g}"
+        );
+        assert!(g.contains("node.setNumExecutors(8)"), "{g}");
+        assert!(g.contains("replaceNode(node, node)"), "{g}");
+        assert!(!g.to_lowercase().contains("launcher"), "never touches the launcher: {g}");
+        assert!(!g.contains("removeNode") && !g.contains("addNode"), "{g}");
+
+        let quoted = groovy_update_existing_node("it's", &[], 1);
+        assert!(quoted.contains("j.getNode('it\\'s')"), "{quoted}");
+    }
+
+    #[test]
+    fn existing_node_result_needs_the_node_and_a_finished_script() {
+        let url = "http://c:8080";
+        let missing = existing_node_result("missing-node\n", "n", url).unwrap_err().to_string();
+        assert!(missing.contains("'n' is not registered on http://c:8080"), "{missing}");
+        let broken = existing_node_result("groovy.lang.MissingMethodException: replaceNode\n", "n", url)
+            .unwrap_err()
+            .to_string();
+        assert!(broken.contains("MissingMethodException"), "{broken}");
+        assert!(existing_node_result("labels a b\nexecutors 8\ndone\n", "n", url).is_ok());
+    }
+
+    #[test]
+    fn existing_launcher_needs_api_credentials_before_any_call() {
+        let mut config = crate::config::MacK3dConfig::default();
+        config.role = crate::config::NodeRole::Worker;
+        config.jenkins_agent.controller_url = Some("http://127.0.0.1:9".into());
+        config.jenkins_agent.name = Some("pomegranate-1".into());
+        config.jenkins_agent.launcher = crate::config::AgentLauncher::Existing;
+        let err = ensure_worker_agent(&config).unwrap_err().to_string();
+        assert!(err.contains("needs api_user and api_token"), "{err}");
     }
 
     #[test]

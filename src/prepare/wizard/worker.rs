@@ -127,6 +127,7 @@ fn prompt_agent(base_dir: &Path, cpu_cores: u32) -> Result<JenkinsAgentConfig> {
 
     Ok(JenkinsAgentConfig {
         controller_url: Some(controller_url.trim().to_string()),
+        launcher: crate::config::AgentLauncher::Inbound,
         name: Some(agent_name.trim().to_string()),
         labels,
         remote_fs: Some(PathBuf::from(remote_fs.trim())),

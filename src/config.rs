@@ -165,12 +165,32 @@ pub enum LolbenchSource {
     Release,
 }
 
+/// How this worker's Jenkins node connects to the controller.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentLauncher {
+    /// mac-k3d registers an inbound (WebSocket) node and runs agent.jar as a service.
+    #[default]
+    Inbound,
+    /// The node is already registered and connected by something else (an SSH
+    /// launcher, say). mac-k3d only sets its labels, executors and core locks.
+    Existing,
+}
+
+impl AgentLauncher {
+    fn is_inbound(&self) -> bool {
+        *self == AgentLauncher::Inbound
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JenkinsAgentConfig {
     /// Worker only: Jenkins controller base URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_url: Option<String>,
+    #[serde(default, skip_serializing_if = "AgentLauncher::is_inbound")]
+    pub launcher: AgentLauncher,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub labels: Vec<String>,
@@ -431,6 +451,7 @@ impl Default for MacK3dConfig {
             },
             jenkins_agent: JenkinsAgentConfig {
                 controller_url: None,
+                launcher: AgentLauncher::Inbound,
                 name: None,
                 labels: crate::platform::default_agent_labels(),
                 remote_fs: None,
@@ -878,6 +899,25 @@ mod tests {
         assert!(!text.contains("api_user"), "{text}");
         assert!(!text.contains("api_token"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn launcher_defaults_to_inbound_and_round_trips_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worker.yaml");
+        let mut worker = sample_worker();
+        worker.save(Some(&path)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("launcher"), "the default is not written: {text}");
+        let loaded = MacK3dConfig::load_file(&path).unwrap();
+        assert_eq!(loaded.jenkins_agent.launcher, AgentLauncher::Inbound);
+
+        worker.jenkins_agent.launcher = AgentLauncher::Existing;
+        worker.save(Some(&path)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("launcher: existing"), "{text}");
+        let loaded = MacK3dConfig::load_file(&path).unwrap();
+        assert_eq!(loaded.jenkins_agent.launcher, AgentLauncher::Existing);
     }
 
     #[cfg(unix)]

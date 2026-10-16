@@ -86,7 +86,7 @@ pub async fn run(
     }
 }
 
-fn apply_and_validate(mut config: MacK3dConfig, config_path: &Path) -> Result<()> {
+pub(super) fn apply_and_validate(mut config: MacK3dConfig, config_path: &Path) -> Result<()> {
     let applied = prepare::apply(&mut config, config_path);
     // Record whatever did get installed, even when apply stopped for root.
     config.save(Some(config_path))?;
