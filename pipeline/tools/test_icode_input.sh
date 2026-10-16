@@ -129,6 +129,69 @@ if grep -qE 'fetch origin .*\+refs/heads' "$KIND_TMP/missing.err"; then
   fail "missing commit must not fetch every branch"
 fi
 ok "commit via merge-request tip; missing tip fails fast"
+
+# A first fetch of the GitCode merge-request ref that dies with 124 is retried.
+# The second attempt checks out. A token must not be blamed or printed.
+REAL_GIT="$(command -v git)"
+SLOW_BIN="$KIND_TMP/slow-git"
+SLOW_COUNT="$KIND_TMP/slow-fetch-count"
+mkdir -p "$SLOW_BIN"
+cat >"$SLOW_BIN/git" <<EOF
+#!/bin/bash
+fetch=0
+mr=0
+for a in "\$@"; do
+  [ "\$a" = fetch ] && fetch=1
+  [ "\$a" = refs/merge-requests/2/head ] && mr=1
+done
+if [ "\$fetch" = 1 ] && [ "\$mr" = 1 ]; then
+  n=0
+  [ -f "$SLOW_COUNT" ] && n=\$(cat "$SLOW_COUNT")
+  n=\$((n + 1))
+  printf '%s\n' "\$n" >"$SLOW_COUNT"
+  [ "\$n" -gt 1 ] || exit 124
+fi
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$SLOW_BIN/git"
+SLOW_ERR="$KIND_TMP/slow-pr.err"
+if ! (
+  export PATH="$SLOW_BIN:$PATH"
+  export HGIT_TIMEOUT=1
+  export GITCODE_TOKEN=gc-secret-value
+  hgit_checkout "$KIND_TMP/c-slow-pr" "$BARE" 2 pr
+) >"$SLOW_ERR" 2>&1; then
+  fail "slow merge-request fetch should succeed on retry (got: $(tr '\n' ' ' <"$SLOW_ERR"))"
+fi
+[ "$(git -C "$KIND_TMP/c-slow-pr" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "slow pr checkout sha"
+[ "$(cat "$SLOW_COUNT")" = 2 ] || fail "slow pr fetch should be tried twice (got $(cat "$SLOW_COUNT"))"
+grep -q 'no PAT' "$SLOW_ERR" && fail "slow pr timeout must not blame a missing PAT"
+grep -q 'gc-secret-value' "$SLOW_ERR" && fail "slow pr timeout printed the token"
+grep -q 'timed out after 1s (attempt 1 of 2)' "$SLOW_ERR" || fail "slow pr should report the first timeout"
+ok "slow merge-request fetch retried"
+
+ALWAYS_BIN="$KIND_TMP/always-timeout"
+mkdir -p "$ALWAYS_BIN"
+cat >"$ALWAYS_BIN/git" <<EOF
+#!/bin/bash
+exit 124
+EOF
+chmod +x "$ALWAYS_BIN/git"
+ALWAYS_ERR="$KIND_TMP/always-timeout.err"
+if (
+  export PATH="$ALWAYS_BIN:$PATH"
+  export HGIT_TIMEOUT=1
+  export GITCODE_TOKEN=gc-secret-value
+  hgit_git git version
+) >"$ALWAYS_ERR" 2>&1; then
+  fail "a fetch that keeps timing out should fail"
+fi
+grep -q 'attempt 1 of 2' "$ALWAYS_ERR" || fail "double timeout should report attempt 1"
+grep -q 'attempt 2 of 2' "$ALWAYS_ERR" || fail "double timeout should report attempt 2"
+grep -q 'The remote answered too slowly' "$ALWAYS_ERR" || fail "double timeout should name a slow remote"
+grep -q 'no PAT' "$ALWAYS_ERR" && fail "double timeout with a token must not say no PAT"
+grep -q 'gc-secret-value' "$ALWAYS_ERR" && fail "double timeout printed the token"
+ok "double timeout keeps the token and does not say no PAT"
 icode_record_git_meta "$KIND_TMP/c-commit" "https://github.com/org/icode.git" commit "$FEAT_SHA"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["kind"]=="commit" and d["sha"]==sys.argv[2]' "$WORKDIR/icode_git.json" "$FEAT_SHA" || fail "icode_git.json"
 ok "checkout branch/tag/commit + icode_git.json"

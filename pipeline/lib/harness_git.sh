@@ -325,20 +325,36 @@ hgit_username_for_host() {
 
 # Fail-fast: no credential helper prompt, abort stalled HTTPS instead of hanging.
 # macOS has no timeout(1); perl's alarm outlives its exec, and SIGALRM exits 142.
-hgit_git() {
-  local rc=0 secs="${HGIT_TIMEOUT:-90}"
-  if have timeout; then
-    timeout "$secs" "$@" || rc=$?
-  elif have perl; then
-    perl -e 'alarm shift @ARGV; exec { $ARGV[0] } @ARGV or exit 127' "$secs" "$@" || rc=$?
-    [ "$rc" -ne 142 ] || rc=124
+# A slow remote (exit 124) is retried once. HGIT_TIMEOUT overrides the 300s default.
+# A missing ref fails immediately and is not retried.
+hgit_git_timeout_msg() {
+  local secs="$1" attempt="$2"
+  if [ -n "${MAC_K3D_GIT_TOKEN:-}${GITCODE_TOKEN:-}${GITHUB_TOKEN:-}${MAC_K3D_GITCODE_PAT:-}${MAC_K3D_GITHUB_PAT:-}" ]; then
+    echo "ERROR: git timed out after ${secs}s (attempt ${attempt} of 2). The remote answered too slowly." >&2
   else
-    "$@" || rc=$?
+    echo "ERROR: git timed out after ${secs}s (attempt ${attempt} of 2). The remote answered too slowly. If the repo is private, store GITCODE_TOKEN (gitcode.com) or GITHUB_TOKEN (github.com) in gitignored .env (chmod 600), or Jenkins credential gitcode-pat / github-pat. Token not printed." >&2
   fi
-  if [ "$rc" -eq 124 ]; then
-    echo "ERROR: git timed out after ${secs}s (often a private repo with no PAT)" >&2
-  fi
-  return "$rc"
+}
+
+hgit_git() {
+  local rc=0 secs="${HGIT_TIMEOUT:-300}" attempt=1
+  while [ "$attempt" -le 2 ]; do
+    rc=0
+    if have timeout; then
+      timeout "$secs" "$@" || rc=$?
+    elif have perl; then
+      perl -e 'alarm shift @ARGV; exec { $ARGV[0] } @ARGV or exit 127' "$secs" "$@" || rc=$?
+      [ "$rc" -ne 142 ] || rc=124
+    else
+      "$@" || rc=$?
+    fi
+    if [ "$rc" -ne 124 ]; then
+      return "$rc"
+    fi
+    hgit_git_timeout_msg "$secs" "$attempt"
+    attempt=$((attempt + 1))
+  done
+  return 124
 }
 
 hgit_clone_fail() {
