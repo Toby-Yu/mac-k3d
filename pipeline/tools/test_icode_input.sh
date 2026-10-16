@@ -192,6 +192,49 @@ grep -q 'The remote answered too slowly' "$ALWAYS_ERR" || fail "double timeout s
 grep -q 'no PAT' "$ALWAYS_ERR" && fail "double timeout with a token must not say no PAT"
 grep -q 'gc-secret-value' "$ALWAYS_ERR" && fail "double timeout printed the token"
 ok "double timeout keeps the token and does not say no PAT"
+
+# A dropped docker pull of the harness build image is tried once more, then docker run.
+PULL_BIN="$KIND_TMP/pull-docker"
+PULL_LOG="$KIND_TMP/pull-docker.log"
+PULL_COUNT="$KIND_TMP/pull-count"
+mkdir -p "$PULL_BIN" "$KIND_TMP/pull-dest" "$KIND_TMP/pull-share"
+cat >"$PULL_BIN/docker" <<EOF
+#!/bin/bash
+printf '%s\n' "\$1" >>"$PULL_LOG"
+if [ "\$1" = pull ]; then
+  n=0
+  [ -f "$PULL_COUNT" ] && n=\$(cat "$PULL_COUNT")
+  n=\$((n + 1))
+  printf '%s\n' "\$n" >"$PULL_COUNT"
+  if [ "\$n" -eq 1 ]; then
+    echo "docker: failed to copy: failed to send write: EOF" >&2
+    exit 1
+  fi
+  exit 0
+fi
+if [ "\$1" = info ]; then
+  exit 1
+fi
+exit 0
+EOF
+chmod +x "$PULL_BIN/docker"
+PULL_ERR="$KIND_TMP/pull.err"
+if ! (
+  export PATH="$PULL_BIN:$PATH"
+  export MAC_K3D_SHARE="$KIND_TMP/pull-share"
+  unset HGIT_LINUX_EXTRA || true
+  hgit_linux_run "$KIND_TMP/pull-dest" true
+) >"$PULL_ERR" 2>&1; then
+  fail "docker pull EOF should succeed on retry (got: $(tr '\n' ' ' <"$PULL_ERR"))"
+fi
+[ "$(cat "$PULL_COUNT")" = 2 ] || fail "docker pull should be tried twice (got $(cat "$PULL_COUNT"))"
+grep -q 'failed to send write: EOF' "$PULL_ERR" || fail "first docker pull should report EOF"
+grep -q 'attempt 1 of 2' "$PULL_ERR" || fail "first docker pull should be attempt 1"
+pulls="$(grep -c '^pull$' "$PULL_LOG" || true)"
+runs="$(grep -c '^run$' "$PULL_LOG" || true)"
+[ "$pulls" = 2 ] || fail "expected 2 docker pulls (got ${pulls})"
+[ "$runs" = 1 ] || fail "docker run should follow the retried pull (got ${runs})"
+ok "docker pull EOF retried"
 icode_record_git_meta "$KIND_TMP/c-commit" "https://github.com/org/icode.git" commit "$FEAT_SHA"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["kind"]=="commit" and d["sha"]==sys.argv[2]' "$WORKDIR/icode_git.json" "$FEAT_SHA" || fail "icode_git.json"
 ok "checkout branch/tag/commit + icode_git.json"
@@ -472,22 +515,23 @@ run_container_sync() {
 argv() { printf '%s\n' "$FAKE_DOCKER_DIR/argv.$1"; }
 run_container_sync "" "$SENTINEL" || fail "container uv sync with a PAT should pass"
 [ ! -s "$FAKE_DOCKER_DIR/out" ] || fail "container uv sync stdout must stay empty"
-[ "$(cat "$FAKE_DOCKER_DIR/calls")" = 1 ] || fail "container PAT success: one docker run"
-grep -qxF -- '--platform' "$(argv 1)" && grep -qx 'linux/arm64' "$(argv 1)" || fail "container build runs on the task platform"
-grep -qx "$(sed -n 's/^ICODE_LINUX_BUILD_IMAGE=//p' "$LIB/../config/toolchain.env")" "$(argv 1)" || fail "container build uses the pinned image"
-grep -qx "$UV_TREE:$UV_TREE" "$(argv 1)" || fail "tree mounted at its own path"
-grep -qx "$ARCH_TMP/share/uv-cache-linux-arm64:/mac-k3d-uv" "$(argv 1)" || fail "uv cache per platform"
-grep -qx 'MAC_K3D_GIT_TOKEN' "$(argv 1)" || fail "token passed by name"
-grep -qx 'GIT_CONFIG_VALUE_0' "$(argv 1)" || fail "insteadOf rules passed by name"
-grep -qF "$SENTINEL" "$(argv 1)" && fail "token on docker argv"
-grep -qx 'token_set=1' "$FAKE_DOCKER_DIR/env.1" || fail "token reaches docker's environment"
-tail -n 3 "$(argv 1)" | tr '\n' ' ' | grep -q '^uv sync --no-editable $' || fail "container runs uv sync --no-editable"
+[ "$(cat "$FAKE_DOCKER_DIR/calls")" = 2 ] || fail "container PAT success: pull then docker run"
+grep -qx pull "$(argv 1)" || fail "container build pulls the image before running it"
+grep -qxF -- '--platform' "$(argv 2)" && grep -qx 'linux/arm64' "$(argv 2)" || fail "container build runs on the task platform"
+grep -qx "$(sed -n 's/^ICODE_LINUX_BUILD_IMAGE=//p' "$LIB/../config/toolchain.env")" "$(argv 2)" || fail "container build uses the pinned image"
+grep -qx "$UV_TREE:$UV_TREE" "$(argv 2)" || fail "tree mounted at its own path"
+grep -qx "$ARCH_TMP/share/uv-cache-linux-arm64:/mac-k3d-uv" "$(argv 2)" || fail "uv cache per platform"
+grep -qx 'MAC_K3D_GIT_TOKEN' "$(argv 2)" || fail "token passed by name"
+grep -qx 'GIT_CONFIG_VALUE_0' "$(argv 2)" || fail "insteadOf rules passed by name"
+grep -qF "$SENTINEL" "$(argv 2)" && fail "token on docker argv"
+grep -qx 'token_set=1' "$FAKE_DOCKER_DIR/env.2" || fail "token reaches docker's environment"
+tail -n 3 "$(argv 2)" | tr '\n' ' ' | grep -q '^uv sync --no-editable $' || fail "container runs uv sync --no-editable"
 grep -q 'building the git-mode runtime in' "$FAKE_DOCKER_DIR/err" || fail "container build is announced"
 grep -qF "$SENTINEL" "$FAKE_DOCKER_DIR/out" "$FAKE_DOCKER_DIR/err" && fail "PAT printed by the container build"
-run_container_sync "1" "$SENTINEL" || fail "container SSH retry should pass"
-[ "$(cat "$FAKE_DOCKER_DIR/calls")" = 2 ] || fail "container PAT failure: SSH retry"
-grep -qx 'GIT_SSH_COMMAND' "$(argv 2)" || fail "container SSH retry passes GIT_SSH_COMMAND"
-grep -qx 'MAC_K3D_GIT_TOKEN' "$(argv 2)" && fail "container SSH retry must not carry the PAT"
+run_container_sync "2" "$SENTINEL" || fail "container SSH retry should pass"
+[ "$(cat "$FAKE_DOCKER_DIR/calls")" = 4 ] || fail "container PAT failure: SSH retry"
+grep -qx 'GIT_SSH_COMMAND' "$(argv 4)" || fail "container SSH retry passes GIT_SSH_COMMAND"
+grep -qx 'MAC_K3D_GIT_TOKEN' "$(argv 4)" && fail "container SSH retry must not carry the PAT"
 ok "git mode builds in the Linux image of the task platform; the PAT never reaches argv"
 
 VENV_TREE="$ARCH_TMP/venv-tree"

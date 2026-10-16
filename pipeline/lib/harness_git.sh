@@ -190,6 +190,23 @@ hgit_uv_cache() {
   printf '%s\n' "$cache"
 }
 
+# A dropped download (docker: failed to send write: EOF) is not a timeout.
+# Pull the build image first and try the same pull once more before giving up.
+hgit_docker_pull() {
+  local img="$1" plat="$2" attempt=1
+  while [ "$attempt" -le 2 ]; do
+    if docker pull --platform "$plat" "$img"; then
+      return 0
+    fi
+    echo "ERROR: docker pull ${img} failed (attempt ${attempt} of 2)." >&2
+    if [ "$attempt" -eq 1 ]; then
+      sleep 5
+    fi
+    attempt=$((attempt + 1))
+  done
+  die "docker pull ${img} failed"
+}
+
 # Run a command in the Linux build image on the task platform, as this user.
 # $1 and pipeline/lib are mounted at their own paths, so venv links, .pth files
 # and the sanitizer manifest name the same paths as a host-built tree. uv's
@@ -239,6 +256,7 @@ hgit_linux_run() {
     printf 'root:x:0:0:root:/root:/bin/sh\nmac-k3d:x:%s:%s:mac-k3d:/tmp:/bin/sh\n' "$(id -u)" "$(id -g)" >"$passwd"
     args+=(-v "$passwd:/etc/passwd:ro" -v "$HOME/.ssh:/tmp/.ssh:ro")
   fi
+  hgit_docker_pull "$(hgit_linux_image)" "$plat"
   docker "${args[@]}" "$(hgit_linux_image)" "$@"
 }
 
