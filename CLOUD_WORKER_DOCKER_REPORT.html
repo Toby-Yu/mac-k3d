@@ -62,7 +62,7 @@
 <main>
 <p class="note">Generated from <code>CLOUD_WORKER_DOCKER_REPORT.md</code>. Edit the .md, then run <code>python3 cloud_worker_docs_html.py</code>.</p>
 <h1>Cloud worker Docker store: investigation record</h1>
-<nav><ul><li class="h2"><a href="#summary">Summary</a></li><li class="h2"><a href="#1-what-was-checked">1. What was checked</a></li><li class="h2"><a href="#2-findings">2. Findings</a></li><li class="h3"><a href="#2-1-deepswe-none-of-the-113-images-starts">2.1 DeepSWE: none of the 113 images starts</a></li><li class="h3"><a href="#2-2-common-images-7-of-11-fail">2.2 Common images: 7 of 11 fail</a></li><li class="h3"><a href="#2-3-listing-images-fails">2.3 Listing images fails</a></li><li class="h3"><a href="#2-4-what-happened-on-11-and-12-oct">2.4 What happened on 11 and 12 Oct</a></li><li class="h3"><a href="#2-5-ruled-out">2.5 Ruled out</a></li><li class="h2"><a href="#3-cause-as-far-as-known">3. Cause, as far as known</a></li><li class="h3"><a href="#3-1-the-12-oct-event-explains-the-missing-layer-folders">3.1 The 12 Oct event (explains the missing layer folders)</a></li><li class="h3"><a href="#3-2-not-explained-yet">3.2 Not explained yet</a></li><li class="h3"><a href="#3-3-what-it-means-on-a-shared-host">3.3 What it means on a shared host</a></li><li class="h2"><a href="#4-access-for-the-investigation">4. Access for the investigation</a></li><li class="h3"><a href="#4-1-risk-levels">4.1 Risk levels</a></li><li class="h3"><a href="#4-2-the-investigation-only-sudo-rule">4.2 The investigation-only sudo rule</a></li><li class="h3"><a href="#4-3-root-pem">4.3 root.pem</a></li><li class="h3"><a href="#4-4-rules-toby-follows">4.4 Rules Toby follows</a></li><li class="h3"><a href="#4-5-how-root-can-follow">4.5 How root can follow</a></li><li class="h2"><a href="#5-what-the-investigation-must-answer">5. What the investigation must answer</a></li><li class="h3"><a href="#5-1-the-questions">5.1 The questions</a></li><li class="h3"><a href="#5-2-ask-first-the-fastest-answers">5.2 Ask first: the fastest answers</a></li><li class="h2"><a href="#6-investigation-log">6. Investigation log</a></li><li class="h2"><a href="#7-investigation-result">7. Investigation result</a></li><li class="h3"><a href="#7-1-answers">7.1 Answers</a></li><li class="h3"><a href="#7-2-how-to-decide-the-cause-of-the-missing-downloaded-files-and-the-stale-records">7.2 How to decide the cause of the missing downloaded files and the stale records</a></li><li class="h3"><a href="#7-3-conclusions">7.3 Conclusions</a></li><li class="h3"><a href="#7-4-still-unknown">7.4 Still unknown</a></li><li class="h2"><a href="#appendix-a-checks-already-run-as-toby-no-sudo">Appendix A: checks already run as toby (no sudo)</a></li><li class="h2"><a href="#appendix-b-where-the-evidence-is">Appendix B: where the evidence is</a></li></ul></nav>
+<nav><ul><li class="h2"><a href="#summary">Summary</a></li><li class="h2"><a href="#1-what-was-checked">1. What was checked</a></li><li class="h2"><a href="#2-findings">2. Findings</a></li><li class="h3"><a href="#2-1-deepswe-none-of-the-113-images-starts">2.1 DeepSWE: none of the 113 images starts</a></li><li class="h3"><a href="#2-2-common-images-7-of-11-fail">2.2 Common images: 7 of 11 fail</a></li><li class="h3"><a href="#2-3-listing-images-fails">2.3 Listing images fails</a></li><li class="h3"><a href="#2-4-what-happened-on-11-and-12-oct">2.4 What happened on 11 and 12 Oct</a></li><li class="h3"><a href="#2-5-ruled-out">2.5 Ruled out</a></li><li class="h2"><a href="#3-cause-as-far-as-known">3. Cause, as far as known</a></li><li class="h3"><a href="#3-1-the-12-oct-event-explains-the-missing-layer-folders">3.1 The 12 Oct event (explains the missing layer folders)</a></li><li class="h3"><a href="#3-2-not-explained-yet">3.2 Not explained yet</a></li><li class="h3"><a href="#3-3-what-it-means-on-a-shared-host">3.3 What it means on a shared host</a></li><li class="h2"><a href="#4-access-for-the-investigation">4. Access for the investigation</a></li><li class="h3"><a href="#4-1-risk-levels">4.1 Risk levels</a></li><li class="h3"><a href="#4-2-the-investigation-only-sudo-rule">4.2 The investigation-only sudo rule</a></li><li class="h3"><a href="#4-3-root-pem">4.3 root.pem</a></li><li class="h3"><a href="#4-4-rules-toby-follows">4.4 Rules Toby follows</a></li><li class="h3"><a href="#4-5-how-root-can-follow">4.5 How root can follow</a></li><li class="h2"><a href="#5-what-the-investigation-must-answer">5. What the investigation must answer</a></li><li class="h3"><a href="#5-1-the-questions">5.1 The questions</a></li><li class="h3"><a href="#5-2-ask-first-the-fastest-answers">5.2 Ask first: the fastest answers</a></li><li class="h2"><a href="#6-investigation-log">6. Investigation log</a></li><li class="h2"><a href="#7-investigation-result">7. Investigation result</a></li><li class="h3"><a href="#7-1-answers">7.1 Answers</a></li><li class="h3"><a href="#7-2-how-to-decide-the-cause-of-the-missing-downloaded-files-and-the-stale-records">7.2 How to decide the cause of the missing downloaded files and the stale records</a></li><li class="h3"><a href="#7-3-conclusions">7.3 Conclusions</a></li><li class="h3"><a href="#7-4-still-unknown">7.4 Still unknown</a></li><li class="h2"><a href="#appendix-a-checks-already-run-as-toby-no-sudo">Appendix A: checks already run as toby (no sudo)</a></li><li class="h2"><a href="#appendix-b-where-the-evidence-is">Appendix B: where the evidence is</a></li><li class="h2"><a href="#appendix-c-which-missing-images-toby-can-pull">Appendix C. Which missing images Toby can pull</a></li><li class="h3"><a href="#already-on-the-server">Already on the server</a></li><li class="h3"><a href="#published-images-still-missing-which-toby-can-pull">Published images still missing, which Toby can pull</a></li><li class="h3"><a href="#names-that-look-public-and-are-not-a-sure-pull">Names that look public and are not a sure pull</a></li><li class="h3"><a href="#local-builds-toby-cannot-pull-or-rebuild">Local builds Toby cannot pull or rebuild</a></li></ul></nav>
 <ul>
 <li><strong>Host:</strong> cloud worker <code>iZt4ndd2dff7gqjta7mppaZ</code> (Jenkins node <code>linux-iZt4ndd2dff7gqjta7mppaZ</code>)</li>
 <li><strong>Prepared by:</strong> Toby. Findings from 14 and 15 Oct 2026; investigation on 15 and 16 Oct 2026.</li>
@@ -80,7 +80,7 @@
 </li>
 <li><strong>The commands are in a separate guide:</strong> <a href="CLOUD_WORKER_INVESTIGATION_STEPS.html"><code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code></a>. It has every step, with its purpose, risk, copy-paste command and expected result.</li>
 <li><strong>The summary for the mentor</strong> is <a href="CLOUD_WORKER_MENTOR_REPORT.html"><code>CLOUD_WORKER_MENTOR_REPORT.md</code></a>: cause, flowcharts, evidence map, open questions and the proposed solution.</li>
-<li><strong>Status (16 Oct):</strong> the read-only investigation is finished. Nothing in the store has been repaired.
+<li><strong>Status (16 Oct):</strong> the read-only investigation is finished. Nothing in the store had been repaired when this record was written. Appendix C, added 20 Oct after the repair, lists which missing images are published and which ones Toby can pull.
 <ul>
 <li>Guide steps 0 to 9.5, 9.7 and 9.8 are done. Steps 9.3 and 9.4 were run with <code>root.pem</code>, read-only, and the view was removed.</li>
 <li>The PC copy is in <code>~/cloud-worker-evidence/</code>: <code>logcopy/</code> 3.3 GB, <code>logs/</code> 1.4 GB, <code>inventory/</code> 50 MB, <code>sessions/</code> 164 KB.</li>
@@ -1903,6 +1903,226 @@ for f in /var/log/syslog.4.gz /var/log/auth.log.4.gz /var/log/kern.log.4.gz; do 
 </tbody>
 </table>
 <p>The mentor's summary of all of this is <a href="CLOUD_WORKER_MENTOR_REPORT.html"><code>CLOUD_WORKER_MENTOR_REPORT.md</code></a>, section 7.</p>
+<h2 id="appendix-c-which-missing-images-toby-can-pull">Appendix C. Which missing images Toby can pull</h2>
+<p>Added 20 Oct 2026, after the repair. The sections above are the 15 and 16 Oct investigation and do not change. This appendix uses the 16 Oct removal list and the image list from 20 Oct 16:39. A name in the &quot;pull&quot; table is a published image: Docker Official Image, or an image under a public registry account. The old record for each of these names was deleted, so a pull downloads the file instead of skipping it. Toby can run those pulls. He does not have the build scripts for the local benchmarks, so he cannot rebuild those.</p>
+<h3 id="already-on-the-server">Already on the server</h3>
+<p>These were the published images the repair put back. They do not need another pull.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Where it was published</th>
+<th>Now</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The 12 evaluation bases, including <code>alpine:3.23.4</code> and <code>ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm</code></td>
+<td>Docker Hub and ghcr.io</td>
+<td>Present, and they started</td>
+</tr>
+<tr>
+<td><code>python:3.10-slim-bookworm</code>, <code>public.ecr.aws/ubuntu/ubuntu:24.04</code></td>
+<td>Docker Hub and public ECR</td>
+<td>Kept. They already started on 16 Oct</td>
+</tr>
+<tr>
+<td><code>python:3.10-slim</code>, <code>python:3.10-slim@sha256:c1e4e6c0…</code>, <code>python:3.12-slim</code>, <code>python:3.6-slim-bullseye@sha256:2cfebc27…</code>, <code>python:3.9-slim-bullseye@sha256:b9e06687…</code></td>
+<td>Docker Official Images</td>
+<td>Pulled 21 Oct 09:03. <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>eclipse-temurin:8-jdk</code>, <code>11-jdk</code>, <code>17-jdk</code></td>
+<td>Docker Official Images</td>
+<td>Pulled 21 Oct 09:08. All three printed <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>maven:3-eclipse-temurin-17</code>, <code>maven:3-eclipse-temurin-8</code>, <code>maven:3.9-eclipse-temurin-11</code></td>
+<td>Docker Official Images</td>
+<td>Pulled 21 Oct 09:08. All three printed <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>python:3.11-slim@sha256:db3ff2e1…</code></td>
+<td>Docker Official Images</td>
+<td>Pulled 21 Oct 09:22, after 1,623 leftover snapshot names were removed. <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>moby/buildkit:v0.24.0</code></td>
+<td>Docker Hub account <code>moby</code></td>
+<td>Pulled 21 Oct 09:13</td>
+</tr>
+<tr>
+<td><code>condaforge/mambaforge:24.7.1-2</code></td>
+<td>Docker Hub account <code>condaforge</code></td>
+<td>Pulled 21 Oct 09:13</td>
+</tr>
+<tr>
+<td><code>mirror.gcr.io/curlimages/curl:8.17.0</code></td>
+<td>Public mirror</td>
+<td>Pulled 21 Oct 09:03</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench-linux:TypeScript_2-1.0.0</code>, <code>aspnetcore_1-1.0.0</code>, <code>cargo_1-1.0.0</code>, <code>rust_1-1.0.0</code></td>
+<td>Docker Hub account <code>smartdub26</code></td>
+<td>Pulled 21 Oct 09:27. <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench-linux:arrow_2-1.0.0</code> and <code>smartdub26/lolbench:cpython_5-1.0.0</code></td>
+<td>Docker Hub account <code>smartdub26</code></td>
+<td>Pulled 21 Oct 09:38. <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td>Published DeepSWE, 113 names under <code>public.ecr.aws/d3j8x8q7/swe-bench-202605</code></td>
+<td>Public ECR</td>
+<td>Loaded back. All 113 started</td>
+</tr>
+<tr>
+<td>expressvpn</td>
+<td><code>docker.io/misioslav/expressvpn</code></td>
+<td>The image is present by id <code>sha256:60c4d5da…</code> and starts. The old name was not restored</td>
+</tr>
+</tbody>
+</table>
+<p><code>ubuntu:22.04</code> and its digest <code>sha256:0e0a0fc6…</code> are present. The longer name <code>ubuntu:22.04@sha256:0e0a0fc6…</code> is not a second image.</p>
+<h3 id="published-images-still-missing-which-toby-can-pull">Published images still missing, which Toby can pull</h3>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th style="text-align:right">Names still missing</th>
+<th>Where to pull</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>smartdub26/lolbench-linux</code> digests</td>
+<td style="text-align:right">0. All 15 downloaded. <code>sha256:cec9f7d0…</code> came back at 11:23 after a <code>503</code></td>
+<td>Docker Hub account <code>smartdub26</code>. Done</td>
+</tr>
+<tr>
+<td><code>harborframework/terminal-bench</code></td>
+<td style="text-align:right">4 digests. No tag was stored, only the digest</td>
+<td>Docker Hub account <code>harborframework</code>, if those digests are still published. Root decides, then Toby pulls</td>
+</tr>
+<tr>
+<td><code>jefzda/sweap-images</code></td>
+<td style="text-align:right">40 tags. 2 other tags of this repository already start</td>
+<td>Docker Hub account <code>jefzda</code></td>
+</tr>
+<tr>
+<td><code>swebench/sweb.eval.x86_64.django_1776_django-10999</code> and <code>…django-15930</code></td>
+<td style="text-align:right">2, tag <code>latest</code></td>
+<td>Docker Hub account <code>swebench</code></td>
+</tr>
+<tr>
+<td><code>library/sweb.eval.x86_64.*</code></td>
+<td style="text-align:right">40</td>
+<td>Same published family, stored on this host under <code>library/</code>. Pull <code>swebench/sweb.eval.x86_64.&lt;id&gt;:latest</code>. A pull of the <code>library/sweb.eval…</code> name looks for a Docker Official Image and will not find one</td>
+</tr>
+<tr>
+<td><code>ghcr.io/principled-systems/verus</code></td>
+<td style="text-align:right">1, tag <code>latest</code></td>
+<td>GitHub Container Registry</td>
+</tr>
+<tr>
+<td><code>xtrm0/dafny</code></td>
+<td style="text-align:right">1, tag <code>latest</code></td>
+<td>Docker Hub account <code>xtrm0</code></td>
+</tr>
+<tr>
+<td><code>xinzhou1997/spec-agent-v17-clarify:0.135.0-py311</code> and <code>xinzhou1997/swe_rpg_java:mockito__mockito-3335_linux</code></td>
+<td style="text-align:right">2</td>
+<td>Docker Hub account <code>xinzhou1997</code>, if those tags were pushed</td>
+</tr>
+</tbody>
+</table>
+<h3 id="names-that-look-public-and-are-not-a-sure-pull">Names that look public and are not a sure pull</h3>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th style="text-align:right">Names</th>
+<th>Why Toby does not pull these as official images</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>swebench-pro-opencode/…</code></td>
+<td style="text-align:right">424</td>
+<td>The path is a Docker Hub organization, and the tags are per-run agent images. They are not Docker Official Images. A pull works only if that account still publishes the tag. The build belongs to that benchmark's owner</td>
+</tr>
+<tr>
+<td><code>library/sweb.openlux.*</code>, <code>library/sweb.env.*</code>, <code>library/sweb.base.py.x86_64</code></td>
+<td style="text-align:right">74</td>
+<td>Stored as local names. <code>openlux</code> is not the published <code>swebench/sweb.eval</code> family</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:TypeScript_2-1.0.0</code>, <code>aspnetcore_1-1.0.0</code>, <code>cargo_1-1.0.0</code>, <code>rust_1-1.0.0</code></td>
+<td style="text-align:right">4</td>
+<td>Hub publishes these four as <code>linux/arm64</code> only. At 21 Oct 10:53 they were retagged from the amd64 <code>lolbench-linux</code> images already on the server</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:jdk_1-1.0.0</code>, <code>jdk_2-1.0.0</code>, <code>jdk_3-1.0.0</code>, <code>jdk_5-1.0.0</code></td>
+<td style="text-align:right">4</td>
+<td>Hub publishes these four as <code>linux/arm64</code> only. At 21 Oct 10:53 they were retagged from the amd64 <code>lolbench-linux</code> jdk images already on the server</td>
+</tr>
+<tr>
+<td><code>xinzhou1997/requirement-clarifier:local</code></td>
+<td style="text-align:right">1</td>
+<td>The tag <code>local</code> is a local build. Docker Hub will not have it</td>
+</tr>
+<tr>
+<td><code>misioslav/expressvpn@sha256:60c4d5da…</code></td>
+<td style="text-align:right">1</td>
+<td>The image is already on the host by that digest. Pulling the name would only restore the repository name</td>
+</tr>
+</tbody>
+</table>
+<h3 id="local-builds-toby-cannot-pull-or-rebuild">Local builds Toby cannot pull or rebuild</h3>
+<p>These were built on this host. The name <code>docker.io/library/&lt;something&gt;</code> here is a local tag, not a Docker Official Image. <code>docker pull</code> of that name does not find a published image. The owner rebuilds it, which writes a new record and new files together. Toby does not have those build commands.</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th style="text-align:right">Names removed and not restored</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>jiuwenswarm</td>
+<td style="text-align:right">416. Two tags are already back</td>
+</tr>
+<tr>
+<td>chrys-bench, including the local <code>chrys-bench-harbor</code> tags</td>
+<td style="text-align:right">534. Five <code>chrys-bench-base</code> tags are already back</td>
+</tr>
+<tr>
+<td>Local <code>deepswe*</code></td>
+<td style="text-align:right">486. 120 are already back</td>
+</tr>
+<tr>
+<td>deepswe-ab-verifier and <code>deepswe-ab-grading-recovery1</code></td>
+<td style="text-align:right">113</td>
+</tr>
+<tr>
+<td>capbench, other than the four <code>jdk</code> images that were kept</td>
+<td style="text-align:right">63</td>
+</tr>
+<tr>
+<td>clarify, tdd, dgm, p3-replication, and the other per-task images</td>
+<td style="text-align:right">The removed counts are in the repair report</td>
+</tr>
+<tr>
+<td><code>lolbench-rebuild</code>, <code>lolbench-recovery</code>, and <code>lolbench/jdk_*-reference-hardened</code></td>
+<td style="text-align:right">Local lolbench names. The published <code>smartdub26</code> tags are in the pull table above</td>
+</tr>
+<tr>
+<td>Harbor sidecars tagged <code>library/harbor-prebuilt</code></td>
+<td style="text-align:right">2</td>
+</tr>
+</tbody>
+</table>
+<p>The repair report, <a href="CLOUD_WORKER_REPAIR_REPORT.html">Images, before the repair and after it</a>, is the full before-and-after table. This appendix is only the published subset Toby can pull himself.</p>
 
 </main>
 <script>
@@ -1929,6 +2149,16 @@ document.querySelectorAll('.copy').forEach(function (button) {
       fallback();
     }
   });
+});
+document.querySelectorAll('td').forEach(function (cell) {
+  if (cell.textContent.trim() !== '☐') { return; }
+  var key = 'tick:' + location.pathname + ':' + cell.parentElement.cells[0].textContent.trim() + ':' + cell.cellIndex;
+  var box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = localStorage.getItem(key) === '1';
+  box.addEventListener('change', function () { localStorage.setItem(key, box.checked ? '1' : '0'); });
+  cell.textContent = '';
+  cell.appendChild(box);
 });
 </script>
 </body>

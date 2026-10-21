@@ -1857,6 +1857,16 @@ document.querySelectorAll('.copy').forEach(function (button) {
     }
   });
 });
+document.querySelectorAll('td').forEach(function (cell) {
+  if (cell.textContent.trim() !== '☐') { return; }
+  var key = 'tick:' + location.pathname + ':' + cell.parentElement.cells[0].textContent.trim() + ':' + cell.cellIndex;
+  var box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = localStorage.getItem(key) === '1';
+  box.addEventListener('change', function () { localStorage.setItem(key, box.checked ? '1' : '0'); });
+  cell.textContent = '';
+  cell.appendChild(box);
+});
 </script>
 </body>
 </html>

@@ -9,7 +9,8 @@ from pathlib import Path
 
 from markdown_it import MarkdownIt
 
-DOCS = ["CLOUD_WORKER_INVESTIGATION_STEPS.md", "CLOUD_WORKER_DOCKER_REPORT.md", "CLOUD_WORKER_MENTOR_REPORT.md"]
+DOCS = ["CLOUD_WORKER_INVESTIGATION_STEPS.md", "CLOUD_WORKER_DOCKER_REPORT.md", "CLOUD_WORKER_MENTOR_REPORT.md",
+        "CLOUD_WORKER_REPAIR_STEPS.md", "CLOUD_WORKER_REPAIR_REPORT.md"]
 HERE = Path(__file__).resolve().parent
 
 PAGE = """<!doctype html>
@@ -101,6 +102,16 @@ document.querySelectorAll('.copy').forEach(function (button) {{
       fallback();
     }}
   }});
+}});
+document.querySelectorAll('td').forEach(function (cell) {{
+  if (cell.textContent.trim() !== '\u2610') {{ return; }}
+  var key = 'tick:' + location.pathname + ':' + cell.parentElement.cells[0].textContent.trim() + ':' + cell.cellIndex;
+  var box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = localStorage.getItem(key) === '1';
+  box.addEventListener('change', function () {{ localStorage.setItem(key, box.checked ? '1' : '0'); }});
+  cell.textContent = '';
+  cell.appendChild(box);
 }});
 </script>
 </body>

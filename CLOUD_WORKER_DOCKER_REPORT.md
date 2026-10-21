@@ -13,7 +13,7 @@
   - where each piece of evidence is (Appendix B).
 - **The commands are in a separate guide:** [`CLOUD_WORKER_INVESTIGATION_STEPS.md`](CLOUD_WORKER_INVESTIGATION_STEPS.md). It has every step, with its purpose, risk, copy-paste command and expected result.
 - **The summary for the mentor** is [`CLOUD_WORKER_MENTOR_REPORT.md`](CLOUD_WORKER_MENTOR_REPORT.md): cause, flowcharts, evidence map, open questions and the proposed solution.
-- **Status (16 Oct):** the read-only investigation is finished. Nothing in the store has been repaired.
+- **Status (16 Oct):** the read-only investigation is finished. Nothing in the store had been repaired when this record was written. Appendix C, added 20 Oct after the repair, lists which missing images are published and which ones Toby can pull.
   - Guide steps 0 to 9.5, 9.7 and 9.8 are done. Steps 9.3 and 9.4 were run with `root.pem`, read-only, and the view was removed.
   - The PC copy is in `~/cloud-worker-evidence/`: `logcopy/` 3.3 GB, `logs/` 1.4 GB, `inventory/` 50 MB, `sessions/` 164 KB.
   - Step 9.6 is the written questions. No answer is recorded, and the repair does not wait.
@@ -657,3 +657,70 @@ On the worker, in `/home/toby/snapshot-audit/`. A copy goes to `~/cloud-worker-e
 | `logcopy/`, `sessions/` | Copied to the PC | 9.7 | Evidence kept before any repair |
 
 The mentor's summary of all of this is [`CLOUD_WORKER_MENTOR_REPORT.md`](CLOUD_WORKER_MENTOR_REPORT.md), section 7.
+
+## Appendix C. Which missing images Toby can pull
+
+Added 20 Oct 2026, after the repair. The sections above are the 15 and 16 Oct investigation and do not change. This appendix uses the 16 Oct removal list and the image list from 20 Oct 16:39. A name in the "pull" table is a published image: Docker Official Image, or an image under a public registry account. The old record for each of these names was deleted, so a pull downloads the file instead of skipping it. Toby can run those pulls. He does not have the build scripts for the local benchmarks, so he cannot rebuild those.
+
+### Already on the server
+
+These were the published images the repair put back. They do not need another pull.
+
+| Image | Where it was published | Now |
+|---|---|---|
+| The 12 evaluation bases, including `alpine:3.23.4` and `ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm` | Docker Hub and ghcr.io | Present, and they started |
+| `python:3.10-slim-bookworm`, `public.ecr.aws/ubuntu/ubuntu:24.04` | Docker Hub and public ECR | Kept. They already started on 16 Oct |
+| `python:3.10-slim`, `python:3.10-slim@sha256:c1e4e6c0…`, `python:3.12-slim`, `python:3.6-slim-bullseye@sha256:2cfebc27…`, `python:3.9-slim-bullseye@sha256:b9e06687…` | Docker Official Images | Pulled 21 Oct 09:03. `Status: Downloaded newer image` |
+| `eclipse-temurin:8-jdk`, `11-jdk`, `17-jdk` | Docker Official Images | Pulled 21 Oct 09:08. All three printed `Status: Downloaded newer image` |
+| `maven:3-eclipse-temurin-17`, `maven:3-eclipse-temurin-8`, `maven:3.9-eclipse-temurin-11` | Docker Official Images | Pulled 21 Oct 09:08. All three printed `Status: Downloaded newer image` |
+| `python:3.11-slim@sha256:db3ff2e1…` | Docker Official Images | Pulled 21 Oct 09:22, after 1,623 leftover snapshot names were removed. `Status: Downloaded newer image` |
+| `moby/buildkit:v0.24.0` | Docker Hub account `moby` | Pulled 21 Oct 09:13 |
+| `condaforge/mambaforge:24.7.1-2` | Docker Hub account `condaforge` | Pulled 21 Oct 09:13 |
+| `mirror.gcr.io/curlimages/curl:8.17.0` | Public mirror | Pulled 21 Oct 09:03 |
+| `smartdub26/lolbench-linux:TypeScript_2-1.0.0`, `aspnetcore_1-1.0.0`, `cargo_1-1.0.0`, `rust_1-1.0.0` | Docker Hub account `smartdub26` | Pulled 21 Oct 09:27. `Status: Downloaded newer image` |
+| `smartdub26/lolbench-linux:arrow_2-1.0.0` and `smartdub26/lolbench:cpython_5-1.0.0` | Docker Hub account `smartdub26` | Pulled 21 Oct 09:38. `Status: Downloaded newer image` |
+| Published DeepSWE, 113 names under `public.ecr.aws/d3j8x8q7/swe-bench-202605` | Public ECR | Loaded back. All 113 started |
+| expressvpn | `docker.io/misioslav/expressvpn` | The image is present by id `sha256:60c4d5da…` and starts. The old name was not restored |
+
+`ubuntu:22.04` and its digest `sha256:0e0a0fc6…` are present. The longer name `ubuntu:22.04@sha256:0e0a0fc6…` is not a second image.
+
+### Published images still missing, which Toby can pull
+
+| Image | Names still missing | Where to pull |
+|---|---:|---|
+| `smartdub26/lolbench-linux` digests | 0. All 15 downloaded. `sha256:cec9f7d0…` came back at 11:23 after a `503` | Docker Hub account `smartdub26`. Done |
+| `harborframework/terminal-bench` | 4 digests. No tag was stored, only the digest | Docker Hub account `harborframework`, if those digests are still published. Root decides, then Toby pulls |
+| `jefzda/sweap-images` | 40 tags. 2 other tags of this repository already start | Docker Hub account `jefzda` |
+| `swebench/sweb.eval.x86_64.django_1776_django-10999` and `…django-15930` | 2, tag `latest` | Docker Hub account `swebench` |
+| `library/sweb.eval.x86_64.*` | 40 | Same published family, stored on this host under `library/`. Pull `swebench/sweb.eval.x86_64.<id>:latest`. A pull of the `library/sweb.eval…` name looks for a Docker Official Image and will not find one |
+| `ghcr.io/principled-systems/verus` | 1, tag `latest` | GitHub Container Registry |
+| `xtrm0/dafny` | 1, tag `latest` | Docker Hub account `xtrm0` |
+| `xinzhou1997/spec-agent-v17-clarify:0.135.0-py311` and `xinzhou1997/swe_rpg_java:mockito__mockito-3335_linux` | 2 | Docker Hub account `xinzhou1997`, if those tags were pushed |
+
+### Names that look public and are not a sure pull
+
+| Image | Names | Why Toby does not pull these as official images |
+|---|---:|---|
+| `swebench-pro-opencode/…` | 424 | The path is a Docker Hub organization, and the tags are per-run agent images. They are not Docker Official Images. A pull works only if that account still publishes the tag. The build belongs to that benchmark's owner |
+| `library/sweb.openlux.*`, `library/sweb.env.*`, `library/sweb.base.py.x86_64` | 74 | Stored as local names. `openlux` is not the published `swebench/sweb.eval` family |
+| `smartdub26/lolbench:TypeScript_2-1.0.0`, `aspnetcore_1-1.0.0`, `cargo_1-1.0.0`, `rust_1-1.0.0` | 4 | Hub publishes these four as `linux/arm64` only. At 21 Oct 10:53 they were retagged from the amd64 `lolbench-linux` images already on the server |
+| `smartdub26/lolbench:jdk_1-1.0.0`, `jdk_2-1.0.0`, `jdk_3-1.0.0`, `jdk_5-1.0.0` | 4 | Hub publishes these four as `linux/arm64` only. At 21 Oct 10:53 they were retagged from the amd64 `lolbench-linux` jdk images already on the server |
+| `xinzhou1997/requirement-clarifier:local` | 1 | The tag `local` is a local build. Docker Hub will not have it |
+| `misioslav/expressvpn@sha256:60c4d5da…` | 1 | The image is already on the host by that digest. Pulling the name would only restore the repository name |
+
+### Local builds Toby cannot pull or rebuild
+
+These were built on this host. The name `docker.io/library/<something>` here is a local tag, not a Docker Official Image. `docker pull` of that name does not find a published image. The owner rebuilds it, which writes a new record and new files together. Toby does not have those build commands.
+
+| Family | Names removed and not restored |
+|---|---:|
+| jiuwenswarm | 416. Two tags are already back |
+| chrys-bench, including the local `chrys-bench-harbor` tags | 534. Five `chrys-bench-base` tags are already back |
+| Local `deepswe*` | 486. 120 are already back |
+| deepswe-ab-verifier and `deepswe-ab-grading-recovery1` | 113 |
+| capbench, other than the four `jdk` images that were kept | 63 |
+| clarify, tdd, dgm, p3-replication, and the other per-task images | The removed counts are in the repair report |
+| `lolbench-rebuild`, `lolbench-recovery`, and `lolbench/jdk_*-reference-hardened` | Local lolbench names. The published `smartdub26` tags are in the pull table above |
+| Harbor sidecars tagged `library/harbor-prebuilt` | 2 |
+
+The repair report, [Images, before the repair and after it](CLOUD_WORKER_REPAIR_REPORT.md), is the full before-and-after table. This appendix is only the published subset Toby can pull himself.

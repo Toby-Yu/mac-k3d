@@ -1,0 +1,1058 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cloud worker repair: what was fixed</title>
+<style>
+  body { font: 15px/1.55 -apple-system, "Segoe UI", Ubuntu, sans-serif; color: #1f2328; margin: 0; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 32px 80px; }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.6em 0 0.6em; }
+  h1 { font-size: 2em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h3 { font-size: 1.2em; }
+  a { color: #0969da; }
+  code { font: 13px/1.45 ui-monospace, "DejaVu Sans Mono", monospace; background: #eff1f3; padding: .15em .35em; border-radius: 4px; }
+  .code { position: relative; margin: 12px 0 16px; }
+  .code pre { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 14px 16px; padding-right: 90px; overflow-x: auto; margin: 0; }
+  .code pre code { background: none; padding: 0; white-space: pre; }
+  .copy { position: absolute; top: 8px; right: 8px; font: 13px sans-serif; padding: 4px 12px; border: 1px solid #d1d9e0;
+           border-radius: 6px; background: #fff; cursor: pointer; }
+  .copy:hover { background: #f3f4f6; }
+  .copy.done { background: #dafbe1; border-color: #4ac26b; }
+  table { border-collapse: collapse; margin: 12px 0 16px; display: block; overflow-x: auto; }
+  th, td { border: 1px solid #d1d9e0; padding: 6px 12px; vertical-align: top; }
+  th { background: #f6f8fa; }
+  nav { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 8px 20px; margin: 16px 0; }
+  nav ul { margin: 4px 0; padding-left: 20px; }
+  nav li.h3 { margin-left: 20px; font-size: 14px; }
+  .note { color: #59636e; font-size: 13px; }
+  .flow { display: flex; flex-direction: column; align-items: center; margin: 12px 0 24px; }
+  .flow .node { box-sizing: border-box; width: 100%; max-width: 820px; border: 2px solid #d1d9e0; border-radius: 8px;
+                padding: 8px 12px; background: #fff; font-size: 14px; line-height: 1.45; }
+  .flow .node b.t { display: block; margin-bottom: 2px; }
+  .flow .node .ev { display: block; margin-top: 4px; color: #59636e; font-size: 12.5px; }
+  .flow .node code { font-size: 12px; word-break: break-word; }
+  .flow .row { display: flex; gap: 12px; width: 100%; max-width: 820px; }
+  .flow .row > * { flex: 1; }
+  .flow .row.gap { margin-top: 12px; }
+  .flow .arrow { color: #59636e; font-size: 12.5px; text-align: center; padding: 2px 0 4px; }
+  .flow .arrow::before { content: "\2193"; display: block; font-size: 20px; line-height: 1.1; }
+  .flow .node.trigger, .legend .trigger { border-color: #bf8700; background: #fff8c5; }
+  .flow .node.fault, .legend .fault { border-color: #cf222e; background: #ffebe9; }
+  .flow .node.store, .legend .store { border-color: #0969da; background: #ddf4ff; }
+  .flow .node.disk, .legend .disk { border-color: #57606a; background: #f6f8fa; }
+  .flow .node.fixed, .legend .fixed { border-color: #1a7f37; background: #dafbe1; }
+  .flow .node.people, .legend .people { border-color: #1b7c83; background: #e0f4f5; }
+  .flow .node.unknown, .legend .unknown { border-color: #8250df; border-style: dashed; background: #fbefff; }
+  .legend span { display: inline-block; border-width: 2px; border-style: solid; border-radius: 6px; padding: 0 8px;
+                 margin: 2px 6px 2px 0; font-size: 12.5px; }
+  .tag { display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .tag.confirmed { background: #dafbe1; color: #116329; }
+  .tag.likely { background: #fff8c5; color: #7d4e00; }
+  .tag.unknown { background: #fbefff; color: #6639ba; }
+  @media print {
+    .copy, nav, .note { display: none; }
+    main { max-width: none; padding: 0; }
+    .flow, .flow .node, tr { break-inside: avoid; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<main>
+<p class="note">Generated from <code>CLOUD_WORKER_REPAIR_REPORT.md</code>. Edit the .md, then run <code>python3 cloud_worker_docs_html.py</code>.</p>
+<h1>Cloud worker repair: what was fixed</h1>
+<nav><ul><li class="h2"><a href="#what-the-repair-had-to-make-true">What the repair had to make true</a></li><li class="h2"><a href="#before-and-after">Before and after</a></li><li class="h2"><a href="#docker-counted-on-its-own">Docker, counted on its own</a></li><li class="h2"><a href="#moby-history">moby_history</a></li><li class="h2"><a href="#what-was-fixed-on-the-server">What was fixed on the server</a></li><li class="h2"><a href="#images-before-the-repair-and-after-it">Images, before the repair and after it</a></li><li class="h3"><a href="#the-12-base-images-the-evaluations-ask-for">The 12 base images the evaluations ask for</a></li><li class="h3"><a href="#official-images-that-are-not-those-12">Official images that are not those 12</a></li><li class="h3"><a href="#build-cache">Build cache</a></li><li class="h3"><a href="#benchmarks-that-are-not-back">Benchmarks that are not back</a></li><li class="h3"><a href="#what-the-jiuwenswarm-owner-rebuilds-means">What &quot;the jiuwenswarm owner rebuilds&quot; means</a></li><li class="h3"><a href="#can-people-use-docker-on-this-server">Can people use Docker on this server?</a></li><li class="h2"><a href="#what-is-back">What is back</a></li><li class="h3"><a href="#lolbench-tags-pulled-at-09-27">Lolbench tags pulled at 09:27</a></li><li class="h3"><a href="#lolbench-tags-from-09-38">Lolbench tags from 09:38</a></li><li class="h3"><a href="#official-python-and-curl-image-by-image">Official python and curl, image by image</a></li><li class="h3"><a href="#official-eclipse-temurin-and-maven-image-by-image">Official eclipse-temurin and maven, image by image</a></li><li class="h3"><a href="#why-these-six-could-not-be-pulled-before-this-morning">Why these six could not be pulled before this morning</a></li><li class="h3"><a href="#why-the-leftover-snapshot-records-were-still-there-and-what-was-removed">Why the leftover snapshot records were still there, and what was removed</a></li><li class="h2"><a href="#what-toby-can-pull">What Toby can pull</a></li><li class="h2"><a href="#what-still-waits-and-what-does-not">What still waits, and what does not</a></li><li class="h2"><a href="#the-documents">The documents</a></li></ul></nav>
+<ul>
+<li><strong>Host:</strong> <code>iZt4ndd2dff7gqjta7mppaZ</code> (<code>47.84.16.18</code>).</li>
+<li><strong>Window:</strong> 20 Oct 2026. The damage was found on 12 Oct and investigated on 15 and 16 Oct.</li>
+<li><strong>For:</strong> Toby, root, and the mentor. The team message in repair step 14.3 is written and not sent.</li>
+<li><strong>This page:</strong> the before-and-after record of the repair. The commands are in <a href="CLOUD_WORKER_REPAIR_STEPS.html"><code>CLOUD_WORKER_REPAIR_STEPS.md</code></a>. The investigation that came first is listed at the bottom.</li>
+<li><strong>Status, 21 Oct 11:23 CST:</strong> Docker is open. The prompt is back. Lolbench is 264 of 335 names back. All 15 <code>lolbench-linux</code> digests are on the server. <code>sha256:cec9f7d0…</code> printed <code>Status: Downloaded newer image</code> on the retry at 11:23. About 71 lolbench names are local builds and stay with the owner. capbench is 4 of 67. Those 63 names are local builds. Toby and root cannot pull or rebuild them.</li>
+</ul>
+<h2 id="what-the-repair-had-to-make-true">What the repair had to make true</h2>
+<p>A Docker image is consistent when three things hold in the <code>moby</code> namespace:</p>
+<ol>
+<li>Every download record has its blob file.</li>
+<li>Every blob file has a download record.</li>
+<li>Every snapshot folder has a snapshot record, and no snapshot record that a current image uses is missing its folder.</li>
+</ol>
+<p><code>moby</code> is the only namespace Docker reads. A pull or a start does not look at <code>moby_history</code> or the recovery namespaces.</p>
+<h2 id="before-and-after">Before and after</h2>
+<p>Before is the store check at the start of the repair window (16 Oct, step 2.3). After is the store check at 16:42 on 20 Oct (step 12.2), then the removal of 53 unused snapshot records at 17:16 (step 14.2c). A live recount at 17:22 is in the next section, because Docker was already open and the host had gained a few images.</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th style="text-align:right">16 Oct, before</th>
+<th style="text-align:right">20 Oct 16:42, after the loads</th>
+<th>What changed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Download records, all namespaces</td>
+<td style="text-align:right">82,010</td>
+<td style="text-align:right">56,736</td>
+<td>Broken image names and their records were removed</td>
+</tr>
+<tr>
+<td>Blob files on disk</td>
+<td style="text-align:right">4,278</td>
+<td style="text-align:right">4,151</td>
+<td>Files with no Docker image were not kept</td>
+</tr>
+<tr>
+<td>Download records with no file</td>
+<td style="text-align:right">77,732</td>
+<td style="text-align:right">52,585</td>
+<td>The drop is the removed Docker damage. The rest is <code>moby_history</code> and old recovery namespaces</td>
+</tr>
+<tr>
+<td>Blob files with no record</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+<td>Unchanged. No file is sitting on disk without a record</td>
+</tr>
+<tr>
+<td>Snapshot records, all namespaces</td>
+<td style="text-align:right">21,183</td>
+<td style="text-align:right">3,923</td>
+<td>Leftover layer records were removed</td>
+</tr>
+<tr>
+<td>Snapshot folders</td>
+<td style="text-align:right">10,409</td>
+<td style="text-align:right">2,710</td>
+<td>Folders for removed layers went with those records</td>
+</tr>
+<tr>
+<td>Docker images (<code>moby</code>)</td>
+<td style="text-align:right">8,057</td>
+<td style="text-align:right">932</td>
+<td>932 images start. The names that could not start were removed</td>
+</tr>
+<tr>
+<td>Leases in <code>moby</code></td>
+<td style="text-align:right">20,944</td>
+<td style="text-align:right">10,570</td>
+<td>Build-cache leases that held broken records were cleared</td>
+</tr>
+<tr>
+<td><code>/</code> used</td>
+<td style="text-align:right">66%</td>
+<td style="text-align:right">65%</td>
+<td></td>
+</tr>
+<tr>
+<td><code>/data</code> used</td>
+<td style="text-align:right">98%</td>
+<td style="text-align:right">96%</td>
+<td>Still above the daily check's 85% warning</td>
+</tr>
+</tbody>
+</table>
+<p>At 17:16, step 14.2c removed 53 more snapshot records: the last 45 Docker records that had no folder, and 8 unused records sitting on them. No current image and no live container used them. The image count stayed 932.</p>
+<h2 id="docker-counted-on-its-own">Docker, counted on its own</h2>
+<p>Recount at 20 Oct 17:22 CST, after Docker had been open for about half an hour. The image count is 941, nine more than at 17:16, so the host is taking new images again. The match still holds.</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th style="text-align:right"><code>moby</code> (Docker)</th>
+<th style="text-align:right"><code>moby_history</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Images</td>
+<td style="text-align:right">941</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>Download records</td>
+<td style="text-align:right">4,119</td>
+<td style="text-align:right">52,626</td>
+</tr>
+<tr>
+<td>Download records with no file</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">52,340</td>
+</tr>
+<tr>
+<td>Snapshot records listed by <code>ctr</code></td>
+<td style="text-align:right">2,581</td>
+<td style="text-align:right">0</td>
+</tr>
+</tbody>
+</table>
+<p>Blob files on disk: 4,291. Every one has a record in some namespace. Snapshot folders: 2,770. Every one has a record.</p>
+<h2 id="moby-history"><code>moby_history</code></h2>
+<p><code>moby_history</code> is a second containerd namespace. It is not a Docker image list.</p>
+<ul>
+<li>It has <strong>0 images</strong> and <strong>0 snapshot records</strong>.</li>
+<li>It has about <strong>52,340 download records whose files are gone</strong>. Those files were deleted in the 12 Oct split: containerd's cleanup removed files that the database it had open did not name. The records stayed behind in this namespace.</li>
+<li>Docker pull and <code>docker run</code> read <code>moby</code> only. They do not download, skip, or mount anything because of <code>moby_history</code>.</li>
+<li>There is nothing to re-download. A record here is a name of a file that belonged to an old store, not an image someone can pull back.</li>
+</ul>
+<p>On 21 Oct Toby asked for these records to be removed. They are not images, and nothing in Docker reads them.</p>
+<p>That decision was made on 21 Oct. At 09:21 CST the <code>moby_history</code> namespace was deleted: 52,677 download records and 7,256 leases, 0 images, 0 snapshots. Docker was stopped for the edit and started again. The running container <code>jiuwen-deepseek-paired15-dind-20261015</code> was stopped by that and started again. It is up. <code>moby_history</code> is not the hidden store from 12 Oct. That hidden store was already empty. This namespace was only the leftover download records.</p>
+<p>The old <code>lolbench-recovery-*</code> and <code>capbench-recovery-*</code> namespaces are still there. They are not Docker. Together they hold images of their own (205 names) and 228 download records whose files are gone. One <code>capbench-recovery-*</code> namespace still has 1,357 snapshot records, and those have folders. They were not deleted, because those images and folders are real data outside Docker.</p>
+<p>The daily check still prints <code>RESULT WARN</code> because of those 228 recovery records and because <code>/data</code> is past 85% full. It is not a Docker image whose file is missing.</p>
+<h2 id="what-was-fixed-on-the-server">What was fixed on the server</h2>
+<ul>
+<li>One store, on the 14 TB disk. The hidden store on the system disk is empty, and the folder is immutable.</li>
+<li><code>/etc/fstab</code> mounts that disk by UUID. containerd and Docker refuse to start unless <code>/data</code> is already mounted.</li>
+<li><code>/usr/local/sbin/mount-data</code> refuses to mount <code>/data</code> while Docker or containerd is running.</li>
+<li>A read-only store check runs every day at 07:30 and writes <code>/var/lib/store-check/last.txt</code>.</li>
+<li>The Docker socket is <code>root:docker</code> mode <code>660</code> again. Toby's canary crontab is restored.</li>
+<li>The 12 base images start, including <code>alpine:3.23.4</code>.</li>
+<li>The 113 published DeepSWE images were saved, the stale layer records that blocked unpack were removed, and they were loaded again. All 113 start.</li>
+<li>178 other saved images were loaded. 177 start by name. The expressvpn image had no repository name after the load; it starts by its image id.</li>
+<li>932 images started in the full test at 16:39. The 53 leftover snapshot records were removed after that, at 17:16.</li>
+</ul>
+<h2 id="images-before-the-repair-and-after-it">Images, before the repair and after it</h2>
+<p>The counts below are from the repair log, not from a fresh listing. Before is the start test at 16 Oct 17:22, which listed every Docker name then on the host: <strong>8,057</strong>. After is the start test at 20 Oct 16:39: <strong>932 names, and all 932 started</strong>. At 17:22, after the socket was given back, a recount showed <strong>941</strong> images and still <strong>0</strong> Docker download records without a file. Those extra nine arrived because the host was in use again. Their names are not in the sealed list.</p>
+<p>The <a href="CLOUD_WORKER_MENTOR_REPORT.html">mentor report</a>, section 9.0, is the 15 Oct inventory (7,750 names). The store grew before 16 Oct, so a few family totals differ. The repair removed from the 16 Oct list.</p>
+<p>A row that says <strong>removed</strong> means the name is gone. The broken record went with the name. There is nothing left for that name that a later pull would skip.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th style="text-align:right">16 Oct, before</th>
+<th style="text-align:right">20 Oct 16:39, after</th>
+<th>What the repair did</th>
+<th>Records now</th>
+<th>If root wants them back</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Published DeepSWE</td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">113</td>
+<td>Saved, the stale snapshot records removed, then loaded again</td>
+<td>Present. All 113 started</td>
+<td>Already back</td>
+</tr>
+<tr>
+<td>Local images whose name contains <code>deepswe</code></td>
+<td style="text-align:right">606</td>
+<td style="text-align:right">120</td>
+<td>120 still had their blob and were saved and loaded. 486 had no blob and were removed</td>
+<td>The 120 started. The 486 names are gone</td>
+<td>Pull the published ones. Rebuild the ones that were only built here</td>
+</tr>
+<tr>
+<td>deepswe-ab-verifier, including 5 <code>deepswe-ab-grading-recovery1</code></td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">0</td>
+<td>Removed. The blob was already gone</td>
+<td>No name and no broken record left</td>
+<td>The owner rebuilds or pulls, if these tags exist on a registry</td>
+</tr>
+<tr>
+<td>jiuwenswarm</td>
+<td style="text-align:right">418</td>
+<td style="text-align:right">2</td>
+<td>416 had no blob and were removed. 2 still had a blob (<code>jiuwenswarm-bench-base</code> and <code>jiuwenswarm-probe-base</code>) and were loaded back</td>
+<td>Those 2 started. The other 416 names are gone</td>
+<td>The owner rebuilds. These are local builds, so <code>docker pull</code> cannot recreate them</td>
+</tr>
+<tr>
+<td>chrys-bench</td>
+<td style="text-align:right">539</td>
+<td style="text-align:right">5</td>
+<td>534 had no blob and were removed. 5 <code>chrys-bench-base</code> tags still had a blob and were loaded back</td>
+<td>Those 5 started. The other names are gone</td>
+<td>The owner rebuilds the local tags, or pulls any tag that is on a registry</td>
+</tr>
+<tr>
+<td>lolbench</td>
+<td style="text-align:right">335</td>
+<td style="text-align:right">235</td>
+<td>235 already started, so they were kept. 92 had no blob and were removed. 8 had a stale layer record and were removed</td>
+<td>The 235 started. The 100 removed names are gone</td>
+<td>Pull or rebuild the 100. Leave the 235</td>
+</tr>
+<tr>
+<td>capbench</td>
+<td style="text-align:right">67</td>
+<td style="text-align:right">4</td>
+<td>The four <code>capbench-linux-sync/jdk-1</code>, <code>jdk-2</code>, <code>jdk-3</code> and <code>jdk-5</code> already started and were kept. 63 had no blob and were removed</td>
+<td>Those 4 started. The 63 names are gone</td>
+<td>The owner pulls or rebuilds the 63</td>
+</tr>
+<tr>
+<td>SWE-bench Pro</td>
+<td style="text-align:right">426</td>
+<td style="text-align:right">0</td>
+<td>Removed. The blob was already gone</td>
+<td>No name and no broken record left</td>
+<td>Pull, if the registry still has the tags</td>
+</tr>
+<tr>
+<td>SWE-bench, <code>jefzda/sweap-images</code></td>
+<td style="text-align:right">42</td>
+<td style="text-align:right">2</td>
+<td>2 already started and were kept. 24 had no blob. 16 had a stale layer record. Those 40 were removed</td>
+<td>The 2 started. The 40 names are gone</td>
+<td>Pull the 40</td>
+</tr>
+<tr>
+<td>SWE-bench, <code>sweb.*</code></td>
+<td style="text-align:right">114</td>
+<td style="text-align:right">0</td>
+<td>Removed. The blob was already gone</td>
+<td>No name and no broken record left</td>
+<td>Pull</td>
+</tr>
+<tr>
+<td>Official base images</td>
+<td style="text-align:right">26</td>
+<td style="text-align:right">18</td>
+<td>The 12 tags evaluations ask for are back and started. See the next table. 14 other official tags had no blob and were removed</td>
+<td>The 18 started. The removed tags have no broken record left</td>
+<td><code>docker pull</code> for any official tag that is still missing</td>
+</tr>
+<tr>
+<td>Harbor and buildkit</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">0</td>
+<td>6 had no blob. 1 had a stale layer record. All 7 were removed</td>
+<td>No name and no broken record left</td>
+<td>Pull <code>harborframework/terminal-bench</code>, the egress sidecars, and <code>moby/buildkit</code> if a job needs them</td>
+</tr>
+<tr>
+<td>Leftover <code>moby-dangling@</code> build tags</td>
+<td style="text-align:right">903</td>
+<td style="text-align:right">0</td>
+<td>Removed. The blob was already gone. These were untagged build leftovers, not images a job pulls by name</td>
+<td>No name and no broken record left</td>
+<td>Nothing to pull. A new build creates new tags</td>
+</tr>
+<tr>
+<td>Untagged ids created by the loads on 20 Oct</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">107</td>
+<td><code>docker load</code> added these. One is expressvpn, <code>sha256:60c4d5da…</code>, which had no repository name after the load</td>
+<td>All 107 are inside the 932 that started</td>
+<td>expressvpn is back by that id. The other 106 are untagged copies from the loads, not a missing benchmark</td>
+</tr>
+<tr>
+<td>clarify task images</td>
+<td style="text-align:right">422</td>
+<td style="text-align:right">12</td>
+<td>410 had no blob and were removed. 12 still had a blob and were loaded back</td>
+<td>Those 12 started</td>
+<td>Rebuild the rest. They were built on this server</td>
+</tr>
+<tr>
+<td>tdd task images</td>
+<td style="text-align:right">452</td>
+<td style="text-align:right">306</td>
+<td>268 already started and were kept. 38 were saved and loaded. 146 had no blob and were removed</td>
+<td>The 306 started</td>
+<td>Rebuild the 146</td>
+</tr>
+<tr>
+<td>dgm task images</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">3</td>
+<td><code>dgm-knowledge-k3-v2</code>, <code>v3</code> and <code>v4</code> already started and were kept. 2 had no blob and were removed</td>
+<td>The 3 started</td>
+<td>Rebuild the 2 if that owner still wants them</td>
+</tr>
+<tr>
+<td>swe-marathon</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">2</td>
+<td>Both <code>swe-marathon-cpu/daemon-bootstrap</code> tags already started and were kept. 1 had no blob and was removed</td>
+<td>The 2 started</td>
+<td>Rebuild or pull the one that was removed, if it is still needed</td>
+</tr>
+<tr>
+<td>p3-replication</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">0</td>
+<td>Removed. The blob was already gone</td>
+<td>No name and no broken record left</td>
+<td>The owner rebuilds</td>
+</tr>
+<tr>
+<td>Other task images built on this server</td>
+<td style="text-align:right">3,462</td>
+<td style="text-align:right">3</td>
+<td>3,459 had no blob and were removed. The 3 that stayed are <code>proofke-evolving:lean428-20261015</code>, <code>proofke-evolving:recovery-20261016-a41527ebe650</code> and <code>remain178-dind-probe:29.6.2-flat</code></td>
+<td>Those 3 started</td>
+<td>Rebuild. A typical removed name was one task image plus its verifier and egress copy</td>
+</tr>
+<tr>
+<td><strong>Docker image names</strong></td>
+<td style="text-align:right"><strong>8,057</strong></td>
+<td style="text-align:right"><strong>932</strong></td>
+<td></td>
+<td>Every one of the 932 started</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>expressvpn is the one saved name that did not come back under its old name <code>docker.io/misioslav/expressvpn@sha256:60c4d5da…</code>. It is the untagged id in the row above, and <code>docker run</code> by that id returned success.</p>
+<h3 id="the-12-base-images-the-evaluations-ask-for">The 12 base images the evaluations ask for</h3>
+<p>All 12 are on the server and started on 20 Oct.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>16 Oct</th>
+<th>What the repair did</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alpine:3.21</code>, <code>alpine:3.22</code>, <code>busybox:1.36</code>, <code>debian:bookworm</code></td>
+<td>Already started</td>
+<td>Kept</td>
+</tr>
+<tr>
+<td><code>ubuntu:22.04</code>, <code>ubuntu:24.04</code>, <code>alpine:3.19</code></td>
+<td>The blob was gone</td>
+<td>Removed, then pulled</td>
+</tr>
+<tr>
+<td><code>debian:bookworm-slim</code></td>
+<td>The blob was gone. It was not in the 8,057 names; jobs had already failed it</td>
+<td>Pulled</td>
+</tr>
+<tr>
+<td><code>alpine:3.20</code>, <code>alpine:latest</code></td>
+<td>The layer record was stale</td>
+<td>Removed, then pulled</td>
+</tr>
+<tr>
+<td><code>alpine:3.23.4</code>, <code>ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm</code></td>
+<td>The layer record was stale, and the names were not in the 8,057</td>
+<td>The hidden snapshot tree was removed, then both were pulled</td>
+</tr>
+</tbody>
+</table>
+<p><code>ubuntu:22.04</code> and <code>ubuntu:24.04</code> are also present by digest. <code>alpine:3.23.4</code> is present by digest <code>sha256:5b10f432…</code>. <code>python:3.10-slim-bookworm</code> and <code>public.ecr.aws/ubuntu/ubuntu:24.04</code> already started on 16 Oct and were kept. They are outside this list of 12.</p>
+<h3 id="official-images-that-are-not-those-12">Official images that are not those 12</h3>
+<p>These were removed because the blob was already gone. A <code>docker pull</code> of the same tag writes a new record and a new file together. Nothing of the old record remains to make that pull skip the download.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Names removed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>python</code></td>
+<td><code>3.10-slim</code> by name and by digest, <code>3.11-slim</code>, <code>3.12-slim</code>, <code>3.6-slim-bullseye</code>, <code>3.9-slim-bullseye</code></td>
+</tr>
+<tr>
+<td><code>eclipse-temurin</code></td>
+<td>8, 11 and 17, each by digest</td>
+</tr>
+<tr>
+<td><code>maven</code></td>
+<td>three digest tags: <code>3-eclipse-temurin-17</code>, <code>3-eclipse-temurin-8</code>, <code>3.9-eclipse-temurin-11</code></td>
+</tr>
+<tr>
+<td><code>condaforge/mambaforge</code></td>
+<td><code>24.7.1-2</code> by digest</td>
+</tr>
+</tbody>
+</table>
+<p>Temurin and Maven were pulled on 21 Oct 09:08 and are on the server. All seven <code>python</code> names are on the server, including <code>python:3.11-slim@sha256:db3ff2e1…</code> pulled at 09:22 after the leftover snapshot was removed. <code>moby/buildkit:v0.24.0</code> and <code>condaforge/mambaforge:24.7.1-2</code> were pulled at 09:13. The current table is in &quot;What is back&quot;.</p>
+<h3 id="build-cache">Build cache</h3>
+<p>The build cache is not an image list. On 20 Oct, <code>docker builder prune -af</code> reclaimed <strong>1.738 TB</strong>, and a second prune printed <code>Total: 0B</code>. Step 8.6 then removed <strong>6,929</strong> build-cache leases. Those leases were holding snapshot records that no current image used. The cache is empty. The next build creates a new cache. There is nothing to pull.</p>
+<h3 id="benchmarks-that-are-not-back">Benchmarks that are not back</h3>
+<p>For every family whose after count is lower than its before count, the missing names were deleted. Checked at 17:22:</p>
+<ul>
+<li>In Docker's <code>moby</code> namespace, download records with no file: <strong>0</strong>.</li>
+<li>Blob files with no record: <strong>0</strong>.</li>
+<li>Every snapshot folder has a record.</li>
+<li>Every image name then on the host started at 16:39.</li>
+</ul>
+<p>So a benchmark that has not been pulled back is absent, and its old record is absent too. The record is correct because it is gone. It is not a broken record waiting in the database. Root and the owner decide whether that image comes back. A pull is enough for a published tag. A rebuild is required for an image that was only ever built on this host, which is the case for jiuwenswarm and for most of the task images.</p>
+<p><code>moby_history</code> was separate. It had 0 images. Its 52,340 records without files were not these benchmarks, and Docker did not read them. At 09:21 on 21 Oct that namespace was deleted. The section above records that deletion.</p>
+<h3 id="what-the-jiuwenswarm-owner-rebuilds-means">What &quot;the jiuwenswarm owner rebuilds&quot; means</h3>
+<p>jiuwenswarm images are benchmark images built on this host. The repair deleted the 416 broken names so they could not keep stale layer records alive. &quot;Rebuild&quot; means the person who owns that benchmark runs their own build command again. That command creates new image names, new download records, and new snapshot folders in one pass. Two jiuwenswarm tags are already back, the two whose files were still on disk.</p>
+<p>That rebuild is how those images come back, if root and that owner want them. The store is already consistent without them.</p>
+<h3 id="can-people-use-docker-on-this-server">Can people use Docker on this server?</h3>
+<p>Yes. Docker and containerd are running. They were started again on 16 Oct, after the store was made one disk, and they were left running. At 20 Oct 16:53 the socket was given back to the <code>docker</code> group: <code>root:docker</code>, mode <code>660</code>. Toby's account could see Docker 29.6.2. Anyone in the <code>docker</code> group can use Docker on this host.</p>
+<p>What is still held back:</p>
+<ul>
+<li>The Jenkins node <code>linux-iZt4ndd2dff7gqjta7mppaZ</code> is online. Toby confirmed that on 21 Oct. beacon jobs stay on <code>AGENT_LABEL=linux-Michael-Ubuntu</code> until the mentor moves them.</li>
+<li>Twelve containers that were running before the window are stopped. Four are <code>jiuwen*</code> dind containers on <code>swe-marathon-cpu/daemon-bootstrap:20261012-r3-v2</code>, plus <code>remain178-one-image-probe</code>, plus seven <code>dgm-container-20261013_*</code> containers. Their owners start them if they still need them. The image behind the swe-marathon containers is one of the two tags that were kept.</li>
+<li>A reboot has not been done. Docker does not need another restart before people use it. The watched reboot, step 18, is the later test that <code>/data</code> mounts before containerd at boot.</li>
+</ul>
+<p>Images that were removed are simply not here. Using Docker does not bring them back. Root decides, with each owner, which families to pull or rebuild.</p>
+<h2 id="what-is-back">What is back</h2>
+<p>The reference count is how many names of that family were on this server on 16 Oct, before the removal. It is the set this host had, not every tag the registry publishes. A group is fully fixed when every name in that reference set is on the server again. <strong>Yes</strong> in the table below means that. For a row that is not fully fixed, the last column says whether Toby or root can finish it. Toby can pull a published image, and he can retag an amd64 image that is already on this host. Root decides the later published images, and Toby pulls those if root asks. A local build stays with that benchmark's owner. Toby does not have the Dockerfile or the build command, and root cannot recreate the image from the name alone.</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th style="text-align:right">Reference, on this server 16 Oct</th>
+<th style="text-align:right">Back now</th>
+<th>Fully fixed</th>
+<th>Who finishes the rest</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Evaluation bases (<code>alpine</code>, <code>ubuntu</code>, <code>debian</code>, <code>busybox</code>, <code>uv</code>)</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">12</td>
+<td>Yes</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>Published DeepSWE, <code>public.ecr.aws/d3j8x8q7/swe-bench-202605</code></td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">113</td>
+<td>Yes</td>
+<td>Done. Saved and loaded on 20 Oct</td>
+</tr>
+<tr>
+<td>Official <code>python</code> tags that were on this host</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">7</td>
+<td>Yes</td>
+<td>Done. Pulled 21 Oct</td>
+</tr>
+<tr>
+<td>Official <code>eclipse-temurin</code></td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">3</td>
+<td>Yes</td>
+<td>Done. Pulled 21 Oct 09:08</td>
+</tr>
+<tr>
+<td>Official <code>maven</code></td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">3</td>
+<td>Yes</td>
+<td>Done. Pulled 21 Oct 09:08</td>
+</tr>
+<tr>
+<td><code>moby/buildkit</code></td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Yes</td>
+<td>Done. Pulled 21 Oct 09:13</td>
+</tr>
+<tr>
+<td><code>condaforge/mambaforge</code></td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Yes</td>
+<td>Done. Pulled 21 Oct 09:13</td>
+</tr>
+<tr>
+<td>lolbench, whole family</td>
+<td style="text-align:right">335</td>
+<td style="text-align:right">264</td>
+<td>No</td>
+<td>Toby's published pulls are done. At 10:53 he retagged 8 <code>smartdub26/lolbench</code> names from the amd64 <code>lolbench-linux</code> images already here. All 15 digests are on the server. <code>sha256:cec9f7d0…</code> came back at 11:23 after a <code>503</code>. About 71 local names stay with the owner: <code>lolbench-rebuild</code>, <code>lolbench-recovery</code>, local deepswe tags, and <code>jdk_*-reference-hardened</code></td>
+</tr>
+<tr>
+<td><code>jefzda/sweap-images</code></td>
+<td style="text-align:right">42</td>
+<td style="text-align:right">2</td>
+<td>No</td>
+<td>Toby, by pull, after lolbench. 40 tags. beacon's swebenchpro pipeline uses this repository</td>
+</tr>
+<tr>
+<td>Published SWE-bench <code>sweb.eval</code></td>
+<td style="text-align:right">42</td>
+<td style="text-align:right">0</td>
+<td>No</td>
+<td>Toby, by pull of <code>swebench/sweb.eval.x86_64.&lt;id&gt;:latest</code>. 40 were stored here under <code>library/</code></td>
+</tr>
+<tr>
+<td><code>swebench-pro-opencode</code></td>
+<td style="text-align:right">424</td>
+<td style="text-align:right">0</td>
+<td>No</td>
+<td>Owner. These are per-run images. Toby can pull one only if that account still publishes the tag</td>
+</tr>
+<tr>
+<td>jiuwenswarm</td>
+<td style="text-align:right">418</td>
+<td style="text-align:right">2</td>
+<td>No</td>
+<td>Owner rebuild. 416 names. Toby does not have the build command</td>
+</tr>
+<tr>
+<td>chrys-bench</td>
+<td style="text-align:right">539</td>
+<td style="text-align:right">5</td>
+<td>No</td>
+<td>Owner rebuild. 534 names. Five <code>chrys-bench-base</code> tags are back</td>
+</tr>
+<tr>
+<td>Local <code>deepswe*</code></td>
+<td style="text-align:right">606</td>
+<td style="text-align:right">120</td>
+<td>No</td>
+<td>Owner rebuild for the 486 local names. Toby pulls a tag only when it is actually published</td>
+</tr>
+<tr>
+<td>deepswe-ab-verifier</td>
+<td style="text-align:right">113</td>
+<td style="text-align:right">0</td>
+<td>No</td>
+<td>Owner rebuild</td>
+</tr>
+<tr>
+<td>capbench</td>
+<td style="text-align:right">67</td>
+<td style="text-align:right">4</td>
+<td>No</td>
+<td>Owner rebuild for the 63. They are local names (<code>capbench-r08-base</code>, <code>capbench-r08-coverage</code>, <code>capbench-r08-dind</code>, and the other <code>capbench-linux-sync/jdk</code> tags). Toby and root cannot pull them. The four kept images are <code>jdk-1</code>, <code>jdk-2</code>, <code>jdk-3</code>, and <code>jdk-5</code></td>
+</tr>
+<tr>
+<td><code>mirror.gcr.io/curlimages/curl</code></td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Yes</td>
+<td>Done. Pulled 21 Oct 09:03</td>
+</tr>
+<tr>
+<td><code>harborframework/terminal-bench</code></td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">0</td>
+<td>No</td>
+<td>Root decides. Toby pulls the 4 digests if root asks</td>
+</tr>
+<tr>
+<td><code>ghcr.io/principled-systems/verus</code>, <code>xtrm0/dafny</code>, <code>xinzhou1997</code></td>
+<td style="text-align:right">1 + 1 + 3</td>
+<td style="text-align:right">0</td>
+<td>No</td>
+<td>Root decides. Toby pulls them if root asks</td>
+</tr>
+</tbody>
+</table>
+<h3 id="lolbench-tags-pulled-at-09-27">Lolbench tags pulled at 09:27</h3>
+<p>Eight names. Four are on the server. Four are published only for <code>linux/arm64</code>. This host is <code>x86_64</code>. The registry index for <code>smartdub26/lolbench:TypeScript_2-1.0.0</code> lists <code>linux/arm64</code> and an attestation, and no <code>linux/amd64</code> manifest. The same platform error came back for <code>aspnetcore_1</code>, <code>cargo_1</code>, and <code>rust_1</code>. Pulling them with another platform flag would download an arm64 image that cannot run here. The <code>lolbench-linux</code> tag of each name is the image for this host, and those four downloaded.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Result, 21 Oct 09:27</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>smartdub26/lolbench-linux:TypeScript_2-1.0.0</code></td>
+<td>Done. Digest <code>sha256:d206ccf2…</code></td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench-linux:aspnetcore_1-1.0.0</code></td>
+<td>Done. Digest <code>sha256:bb95c42a…</code></td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench-linux:cargo_1-1.0.0</code></td>
+<td>Done. Digest <code>sha256:8637e8c0…</code></td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench-linux:rust_1-1.0.0</code></td>
+<td>Done. Digest <code>sha256:92260ffb…</code></td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:TypeScript_2-1.0.0</code></td>
+<td>Not pulled. Registry has <code>linux/arm64</code> only</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:aspnetcore_1-1.0.0</code></td>
+<td>Not pulled. Registry has <code>linux/arm64</code> only</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:cargo_1-1.0.0</code></td>
+<td>Not pulled. Registry has <code>linux/arm64</code> only</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:rust_1-1.0.0</code></td>
+<td>Not pulled. Registry has <code>linux/arm64</code> only</td>
+</tr>
+</tbody>
+</table>
+<h3 id="lolbench-tags-from-09-38">Lolbench tags from 09:38</h3>
+<p>Six names. Two downloaded. Four <code>smartdub26/lolbench</code> jdk tags are <code>linux/arm64</code> only, the same platform error as 09:27. <code>jdk_1</code> was inspected: the index lists <code>linux/arm64</code> and an attestation. <code>lolbench-linux:jdk_1-1.0.0</code> is <code>linux/amd64</code>, and that image, with <code>jdk_2</code>, <code>jdk_3</code>, and <code>jdk_5</code>, was already on the server. Do not pull the four <code>lolbench</code> jdk tags again.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Result, 21 Oct 09:38</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>smartdub26/lolbench-linux:arrow_2-1.0.0</code></td>
+<td>Done. <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:cpython_5-1.0.0</code></td>
+<td>Done. Digest <code>sha256:81c5d064…</code></td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:jdk_1-1.0.0</code></td>
+<td>Not pulled. Registry has <code>linux/arm64</code> only. <code>lolbench-linux:jdk_1-1.0.0</code> is already on the server</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:jdk_2-1.0.0</code></td>
+<td>Not pulled. Registry has <code>linux/arm64</code> only. <code>lolbench-linux:jdk_2-1.0.0</code> is already on the server</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:jdk_3-1.0.0</code></td>
+<td>Not pulled. Registry has <code>linux/arm64</code> only. <code>lolbench-linux:jdk_3-1.0.0</code> is already on the server</td>
+</tr>
+<tr>
+<td><code>smartdub26/lolbench:jdk_5-1.0.0</code></td>
+<td>Not pulled. Registry has <code>linux/arm64</code> only. <code>lolbench-linux:jdk_5-1.0.0</code> is already on the server</td>
+</tr>
+</tbody>
+</table>
+<h3 id="official-python-and-curl-image-by-image">Official <code>python</code> and <code>curl</code>, image by image</h3>
+<p>Seven <code>python</code> names were on this host. All seven are back. <code>curl</code> was one image, and it is back.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Result, 21 Oct 09:03</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>python:3.10-slim-bookworm</code></td>
+<td>Done. It already started on 16 Oct and was kept</td>
+</tr>
+<tr>
+<td><code>python:3.10-slim</code></td>
+<td>Done. <code>Status: Downloaded newer image</code>. Current digest <code>sha256:6ff50646…</code></td>
+</tr>
+<tr>
+<td><code>python:3.10-slim@sha256:c1e4e6c0…</code></td>
+<td>Done. <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>python:3.12-slim</code></td>
+<td>Done. <code>Status: Downloaded newer image</code>. Digest <code>sha256:a6e34c59…</code></td>
+</tr>
+<tr>
+<td><code>python:3.6-slim-bullseye@sha256:2cfebc27…</code></td>
+<td>Done. <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>python:3.9-slim-bullseye@sha256:b9e06687…</code></td>
+<td>Done. <code>Status: Downloaded newer image</code></td>
+</tr>
+<tr>
+<td><code>python:3.11-slim@sha256:db3ff2e1…</code></td>
+<td>Done. Pulled 21 Oct 09:22 after the leftover snapshot was removed. <code>Status: Downloaded newer image</code>. Stored as <code>python@sha256:db3ff2e1…</code></td>
+</tr>
+<tr>
+<td><code>mirror.gcr.io/curlimages/curl:8.17.0</code></td>
+<td>Done. <code>Status: Downloaded newer image</code>. Digest <code>sha256:935d9100…</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="official-eclipse-temurin-and-maven-image-by-image">Official <code>eclipse-temurin</code> and <code>maven</code>, image by image</h3>
+<p>Three temurin tags and three maven tags were on this host. All six are back. Pulled at 21 Oct 09:08 from <code>/var/log/cloud-worker-repair/2026-10-20-pulls/out/19.1b_pull.log</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Result, 21 Oct 09:08</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>eclipse-temurin:8-jdk</code></td>
+<td>Done. Digest <code>sha256:e80636b3…</code></td>
+</tr>
+<tr>
+<td><code>eclipse-temurin:11-jdk</code></td>
+<td>Done. Digest <code>sha256:74983af8…</code></td>
+</tr>
+<tr>
+<td><code>eclipse-temurin:17-jdk</code></td>
+<td>Done. Digest <code>sha256:fe947d99…</code></td>
+</tr>
+<tr>
+<td><code>maven:3-eclipse-temurin-17</code></td>
+<td>Done. Digest <code>sha256:a6d08f0b…</code></td>
+</tr>
+<tr>
+<td><code>maven:3-eclipse-temurin-8</code></td>
+<td>Done. Digest <code>sha256:b9fac829…</code></td>
+</tr>
+<tr>
+<td><code>maven:3.9-eclipse-temurin-11</code></td>
+<td>Done. Digest <code>sha256:7bb84a45…</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="why-these-six-could-not-be-pulled-before-this-morning">Why these six could not be pulled before this morning</h3>
+<p>On 16 Oct the blob files for these six images were already gone. The download records were still in the database. <code>docker pull</code> treats an existing download record as &quot;already downloaded&quot; and skips that file. A pull while those records were still there would have skipped the missing files, and the image would still not start. The repair deleted those records because the files were already gone. After that, a pull writes a new record and a new file together.</p>
+<p>They were also not in the 20 Oct base pull. That pull was the 12 evaluation tags (<code>alpine</code>, <code>ubuntu</code>, <code>debian</code>, <code>busybox</code>, <code>uv</code>). Temurin and Maven waited until the store check was finished.</p>
+<p>This morning's pull had no old record to skip. All six printed <code>Status: Downloaded newer image</code>. None printed <code>AlreadyExists</code>. These six were not blocked by an incorrect record.</p>
+<h3 id="why-the-leftover-snapshot-records-were-still-there-and-what-was-removed">Why the leftover snapshot records were still there, and what was removed</h3>
+<p>The <code>python:3.11-slim</code> pull at 09:03 stopped with <code>AlreadyExists</code> on snapshot <code>sha256:b9b037ff…</code>. <code>ctr snapshots info</code> said that snapshot does not exist. Both were true, for two different databases.</p>
+<p><code>ctr</code> reads the overlay snapshot database. That database had no such snapshot, and the folder was gone. Docker's unpack reads containerd's own database, <code>meta.db</code>. The name was still there. A pull refuses to unpack when that name exists, even though the folder is gone. Step 14.2c on 20 Oct removed 53 overlay records that <code>ctr</code> could see. It could not remove these, because <code>ctr snapshots rm</code> returns &quot;does not exist&quot; for a name that is only in <code>meta.db</code>.</p>
+<p>They stayed because 1,344 leases in <code>moby</code> still pointed at them. Containerd's cleanup will not drop a snapshot name while a lease points at it. There were 1,623 snapshot names in <code>meta.db</code> with no overlay snapshot behind them. 504 of those names were <code>sha256:</code> layer ids, including the one that blocked <code>python:3.11</code>. None of them was the parent of a snapshot that still has a folder. None was a running container's snapshot. No current image's manifest pointed at one.</p>
+<p>At 09:21 those 1,623 names were deleted, with 1,604 child links, 1,344 lease links, and 16 stale labels. <code>moby_history</code> was deleted in the same edit. A copy of <code>meta.db</code> from just before the edit is at <code>/var/log/cloud-worker-repair/2026-10-21-clean/meta.db.before</code>. After the edit, snapshot names with no overlay snapshot: 0. Docker download records with no file: 0. Image count in <code>moby</code>: 964, which is the 963 from before this pull plus <code>python:3.11</code>.</p>
+<p><code>python:3.11-slim@sha256:db3ff2e1…</code> then printed <code>Status: Downloaded newer image</code>.</p>
+<p>What is still not a fully quiet daily check:</p>
+<ul>
+<li>20 recovery namespaces, not used by Docker, with 205 of their own images and 228 download records whose files are gone. One capbench namespace has 1,357 snapshot folders. Those were left.</li>
+<li><code>/data</code> is 97% full, about 424 GB free after the lolbench digest pulls. The daily check warns above 85%.</li>
+</ul>
+<h2 id="what-toby-can-pull">What Toby can pull</h2>
+<p>Toby's published lolbench pulls are done. The shared bases are back. At 10:53 the 8 arm64-only <code>smartdub26/lolbench</code> names were retagged from the amd64 images already here. At 11:23 all 15 <code>lolbench-linux</code> digests were on the server. <code>sha256:cec9f7d0…</code> printed <code>Status: Downloaded newer image</code> on the retry. The remaining lolbench names and all 63 missing capbench names are local builds. Toby and root cannot rebuild those. <code>jefzda/sweap-images</code> waits until that benchmark is the one to run.</p>
+<table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Need</th>
+<th>What</th>
+<th style="text-align:right">Images</th>
+<th>Who</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Must. Shared bases</td>
+<td>Official <code>python</code> 7 of 7, <code>eclipse-temurin</code> 3 of 3, <code>maven</code> 3 of 3</td>
+<td style="text-align:right">12 names</td>
+<td>Toby. Done</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Likely. <code>docker build</code> uses buildkit. mambaforge is the published conda base</td>
+<td><code>moby/buildkit:v0.24.0</code>, <code>condaforge/mambaforge:24.7.1-2</code></td>
+<td style="text-align:right">2</td>
+<td>Toby. Done. Pulled 21 Oct 09:13</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Likely. The lolbench tags the investigation named as stale</td>
+<td><code>lolbench-linux</code> <code>TypeScript_2</code>, <code>aspnetcore_1</code>, <code>cargo_1</code>, <code>rust_1</code> are back. The four <code>smartdub26/lolbench</code> tags were retagged at 10:53</td>
+<td style="text-align:right">8</td>
+<td>Toby. Done</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Likely. The rest of the published lolbench tags</td>
+<td><code>arrow_2</code> and <code>cpython_5</code> are back. Four <code>lolbench</code> jdk tags were retagged at 10:53 from the <code>lolbench-linux</code> images already here</td>
+<td style="text-align:right">6</td>
+<td>Toby. Done</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>4b</td>
+<td>lolbench, before any other benchmark</td>
+<td>15 <code>lolbench-linux</code> digests, still published as <code>linux/amd64</code></td>
+<td style="text-align:right">15</td>
+<td>Toby. Done at 11:23. <code>sha256:cec9f7d0…</code> needed one retry after a <code>503</code></td>
+<td>Done</td>
+</tr>
+<tr>
+<td>4c</td>
+<td>lolbench names Hub now publishes only as arm64</td>
+<td>Retag the amd64 <code>lolbench-linux</code> image onto <code>smartdub26/lolbench</code> for the 8 tags</td>
+<td style="text-align:right">8 names</td>
+<td>Toby. Done at 10:53. The image was already on the server</td>
+<td>Done</td>
+</tr>
+<tr>
+<td>4d</td>
+<td>lolbench local builds, and capbench</td>
+<td>About 71 lolbench names (<code>lolbench-rebuild</code>, <code>lolbench-recovery</code>, local deepswe tags, <code>jdk_*-reference-hardened</code>) and 63 capbench names (<code>capbench-r08-base</code>, <code>capbench-r08-coverage</code>, <code>capbench-r08-dind</code>, and <code>capbench-linux-sync/jdk</code> other than 1, 2, 3, 5)</td>
+<td style="text-align:right">71 + 63</td>
+<td>Owner. Toby and root cannot pull or rebuild these</td>
+<td>Local builds. The files were deleted</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Likely when swebenchpro runs. beacon's pipeline pulls <code>sweap-images</code></td>
+<td>40 tags of <code>jefzda/sweap-images</code>. Two other tags already start</td>
+<td style="text-align:right">40</td>
+<td>Toby, by pull, after lolbench</td>
+<td>2–4 h</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Likely when classic SWE-bench runs</td>
+<td>42 images, pulled as <code>swebench/sweb.eval.x86_64.&lt;id&gt;:latest</code></td>
+<td style="text-align:right">42</td>
+<td>Toby, by pull</td>
+<td>4–8 h</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Later. <code>curl:8.17.0</code> is already back. The others run only if root asks</td>
+<td><code>verus:latest</code>, <code>dafny:latest</code>, two <code>xinzhou1997</code> tags, four <code>harborframework/terminal-bench</code> digests</td>
+<td style="text-align:right">8 still open</td>
+<td>Root decides. Toby pulls if root asks</td>
+<td>30–90 min</td>
+</tr>
+</tbody>
+</table>
+<p>Orders 1 to 4 are done. Orders 5 and 6 are the long ones. Start 5 or 6 when <code>/data</code> has at least 200 GB free. After the lolbench digest pulls, about 424 GB was free. A tag the registry no longer has fails in seconds.</p>
+<p>These stay with their owners. Toby does not have the build, and a pull of the local name will not find a published image. Root cannot rebuild them either.</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th style="text-align:right">Names still missing</th>
+<th>Who brings them back</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>lolbench local names</td>
+<td style="text-align:right">About 71 (<code>lolbench-rebuild</code>, <code>lolbench-recovery</code>, local deepswe tags, <code>jdk_*-reference-hardened</code>)</td>
+<td>The owner rebuilds. The published <code>smartdub26</code> names are Toby's pulls, above</td>
+</tr>
+<tr>
+<td>jiuwenswarm</td>
+<td style="text-align:right">416. Two tags are already back</td>
+<td>The owner rebuilds</td>
+</tr>
+<tr>
+<td>chrys-bench</td>
+<td style="text-align:right">534. Five <code>chrys-bench-base</code> tags are already back</td>
+<td>The owner rebuilds</td>
+</tr>
+<tr>
+<td>Local <code>deepswe*</code></td>
+<td style="text-align:right">486. 120 are already back</td>
+<td>The owner rebuilds, or Toby pulls a tag that is actually published</td>
+</tr>
+<tr>
+<td>deepswe-ab-verifier</td>
+<td style="text-align:right">113</td>
+<td>The owner</td>
+</tr>
+<tr>
+<td>capbench, other than the four <code>jdk</code> images that were kept</td>
+<td style="text-align:right">63</td>
+<td>The owner. Toby and root cannot pull these</td>
+</tr>
+<tr>
+<td>Task images: clarify, tdd, dgm, p3-replication, and the other local builds</td>
+<td style="text-align:right">The removed counts are in the table above</td>
+<td>The owner rebuilds</td>
+</tr>
+<tr>
+<td><code>swebench-pro-opencode</code></td>
+<td style="text-align:right">424 per-run agent images</td>
+<td>The owner. Toby can pull one only if that account still publishes the tag</td>
+</tr>
+<tr>
+<td><code>library/sweb.openlux.*</code>, <code>sweb.env.*</code>, <code>sweb.base.py.x86_64</code></td>
+<td style="text-align:right">74</td>
+<td>Local names. They are not the published <code>swebench/sweb.eval</code> images Toby can pull</td>
+</tr>
+</tbody>
+</table>
+<h2 id="what-still-waits-and-what-does-not">What still waits, and what does not</h2>
+<p>Done for the consistency of Docker:</p>
+<ul>
+<li>At 20 Oct 17:22, records and files in <code>moby</code> matched, and every image then on the host started.</li>
+<li>The guards against the 12 Oct split are installed.</li>
+<li>At 21 Oct 09:21 the 1,623 snapshot names that had no overlay snapshot were removed, and <code>moby_history</code> was removed. <code>moby</code> again has 0 download records without a file and 0 snapshot names without an overlay snapshot.</li>
+</ul>
+<p>Not part of that consistency fix:</p>
+<ul>
+<li>Step 14.3, the team message. The local steps are done. Toby sends it when he is ready.</li>
+<li>Step 15, the jiuwenswarm rebuild. The owner's build, when they want those images.</li>
+<li>Step 16.4, the report to root and the mentor. Same wait as the team message.</li>
+<li>Step 17, the Jenkins node. Toby confirmed on 21 Oct that <code>linux-iZt4ndd2dff7gqjta7mppaZ</code> is already online. Moving beacon jobs onto it is still the mentor's decision.</li>
+<li>Step 18, a watched reboot. It proves the fstab line at boot. It is a later window, not a record fix.</li>
+<li>Step 19, the remaining pulls in &quot;What Toby can pull&quot;. The 8 arm64-only lolbench names were retagged at 10:53. All 15 <code>lolbench-linux</code> digests are on the server as of 11:23. The local lolbench names and the 63 capbench names stay with their owners.</li>
+</ul>
+<p>Step 16.3 passed at 17:47. The copy <code>~/cloud-worker-evidence/repair/2026-10-16.tar.gz</code> matches the server archive: <code>b629f4e14403f1f3067b3e847efc38a3039c377427c0388c39dc7d125e846373</code>. There is no further command on the server. Leave 14.3 unmarked.</p>
+<h2 id="the-documents">The documents</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="CLOUD_WORKER_INVESTIGATION_STEPS.html"><code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code></a></td>
+<td>How the read-only investigation was run. It does not change the store</td>
+</tr>
+<tr>
+<td><a href="CLOUD_WORKER_DOCKER_REPORT.html"><code>CLOUD_WORKER_DOCKER_REPORT.md</code></a></td>
+<td>What was found: the 12 Oct split, the missing files, the evidence</td>
+</tr>
+<tr>
+<td><a href="CLOUD_WORKER_MENTOR_REPORT.html"><code>CLOUD_WORKER_MENTOR_REPORT.md</code></a></td>
+<td>Cause, the proposed repair, and the decisions for the mentor and root</td>
+</tr>
+<tr>
+<td><a href="CLOUD_WORKER_REPAIR_STEPS.html"><code>CLOUD_WORKER_REPAIR_STEPS.md</code></a></td>
+<td>The commands Toby follows on the server, one step at a time</td>
+</tr>
+<tr>
+<td><a href="CLOUD_WORKER_REPAIR_REPORT.html"><code>CLOUD_WORKER_REPAIR_REPORT.md</code></a></td>
+<td>This page. Before and after, what is fixed, and what is left for owners</td>
+</tr>
+</tbody>
+</table>
+<p>Each <code>.md</code> has a <code>.html</code> next to it, made by <code>python3 cloud_worker_docs_html.py</code>.</p>
+
+</main>
+<script>
+document.querySelectorAll('.copy').forEach(function (button) {
+  button.addEventListener('click', function () {
+    var text = button.parentElement.querySelector('code').textContent;
+    function done() {
+      button.textContent = 'Copied';
+      button.classList.add('done');
+      setTimeout(function () { button.textContent = 'Copy'; button.classList.remove('done'); }, 1500);
+    }
+    function fallback() {
+      var area = document.createElement('textarea');
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(area);
+      if (ok) { done(); } else { button.textContent = 'Copy failed: select the text'; }
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+  });
+});
+document.querySelectorAll('td').forEach(function (cell) {
+  if (cell.textContent.trim() !== '☐') { return; }
+  var key = 'tick:' + location.pathname + ':' + cell.parentElement.cells[0].textContent.trim() + ':' + cell.cellIndex;
+  var box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = localStorage.getItem(key) === '1';
+  box.addEventListener('change', function () { localStorage.setItem(key, box.checked ? '1' : '0'); });
+  cell.textContent = '';
+  cell.appendChild(box);
+});
+</script>
+</body>
+</html>
